@@ -135,28 +135,36 @@ class FusionSolarAPI:
             _LOGGER.debug("Pubkey Response: %s", pubkey_data)
         except Exception as ex:
             self.connected = False
-            _LOGGER.error("Error processing Pubkey response: JSON format invalid!\r\nResponse Headers: %s\r\nResponse: %s", response.headers, response.text)
-            raise APIAuthError("Error processing Pubkey response: JSON format invalid!\r\nResponse Headers: %s\r\nResponse: %s", response.headers, response.text)
+            _LOGGER.error(
+                "Error processing Pubkey response: JSON format invalid!\r\nResponse Headers: %s\r\nResponse: %s",
+                response.headers,
+                response.text,
+            )
+            raise APIAuthError(
+                "Error processing Pubkey response: JSON format invalid!\r\nResponse Headers: %s\r\nResponse: %s",
+                response.headers,
+                response.text,
+            )
         
         
-        pub_key_pem = pubkey_data['pubKey']
-        time_stamp = pubkey_data['timeStamp']
-        enable_encrypt = pubkey_data['enableEncrypt']
-        version = pubkey_data['version']
+        pub_key_pem = pubkey_data["pubKey"]
+        time_stamp = pubkey_data["timeStamp"]
+        enable_encrypt = pubkey_data["enableEncrypt"]
+        version = pubkey_data["version"]
         
         nonce = generate_nonce()
         
         encrypted_password = encrypt_password(pub_key_pem, self.pwd) + version
-
+    
         login_url = f"https://{self.login_host}{LOGIN_VALIDATE_USER_URL}?timeStamp={time_stamp}&nonce={nonce}"
         payload = {
             "organizationName": "",
             "password": encrypted_password,
-            "username": self.user
+            "username": self.user,
         }
         
         _LOGGER.debug("captcha_input=%s", self.captcha_input)
-        if self.captcha_input is not None and self.captcha_input != '':
+        if self.captcha_input is not None and self.captcha_input != "":
             payload["verifycode"] = self.captcha_input
         
         headers = {
@@ -166,34 +174,53 @@ class FusionSolarAPI:
             "host": self.login_host,
             "origin": f"https://{self.login_host}",
             "referer": f"https://{self.login_host}{LOGIN_HEADERS_1_STEP_REFERER}",
-            "x-requested-with": "XMLHttpRequest"
+            "x-requested-with": "XMLHttpRequest",
         }
         
         _LOGGER.debug("Login Request to: %s", login_url)
         response = requests.post(login_url, json=payload, headers=headers)
-        _LOGGER.debug("Login: Request Headers: %s\r\nResponse Headers: %s\r\nResponse: %s", headers, response.headers, response.text)
+        _LOGGER.debug(
+            "Login: Request Headers: %s\r\nResponse Headers: %s\r\nResponse: %s",
+            headers,
+            response.headers,
+            response.text,
+        )
         if response.status_code == 200:
             try:
                 login_response = response.json()
                 _LOGGER.debug("Login Response: %s", login_response)
             except Exception as ex:
                 self.connected = False
-                _LOGGER.error("Error processing Login response: JSON format invalid!\r\nRequest Headers: %s\r\nResponse Headers: %s\r\nResponse: %s", headers, response.headers, response.text)
-                raise APIAuthError("Error processing Login response: JSON format invalid!\r\nRequest Headers: %s\r\nResponse Headers: %s\r\nResponse: %s", headers, response.headers, response.text)
+                _LOGGER.error(
+                    "Error processing Login response: JSON format invalid!\r\nRequest Headers: %s\r\nResponse Headers: %s\r\nResponse: %s",
+                    headers,
+                    response.headers,
+                    response.text,
+                )
+                raise APIAuthError(
+                    "Error processing Login response: JSON format invalid!\r\nRequest Headers: %s\r\nResponse Headers: %s\r\nResponse: %s",
+                    headers,
+                    response.headers,
+                    response.text,
+                )
             
             redirect_url = None
-
-            if 'respMultiRegionName' in login_response and login_response['respMultiRegionName']:
-                redirect_info = login_response['respMultiRegionName'][1]  # Extract redirect URL
+    
+            if "respMultiRegionName" in login_response and login_response["respMultiRegionName"]:
+                redirect_info = login_response["respMultiRegionName"][1]  # Extract redirect URL
                 redirect_url = f"https://{self.login_host}{redirect_info}"
-            elif 'redirectURL'in login_response and login_response['redirectURL']:
-                redirect_info = login_response['redirectURL']  # Extract redirect URL
+            elif "redirectURL" in login_response and login_response["redirectURL"]:
+                redirect_info = login_response["redirectURL"]  # Extract redirect URL
                 redirect_url = f"https://{self.login_host}{redirect_info}"
             else:
                 _LOGGER.warning("Login response did not include redirect information.")
                 self.connected = False
-
-                if 'errorCode' in login_response and login_response['errorCode'] and login_response['errorCode'] == '411':
+    
+                if (
+                    "errorCode" in login_response
+                    and login_response["errorCode"]
+                    and login_response["errorCode"] == "411"
+                ):
                     _LOGGER.warning("Captcha required.")
                     raise APIAuthCaptchaError("Login requires Captcha.")
                 else:
@@ -203,13 +230,13 @@ class FusionSolarAPI:
                     _LOGGER.debug("Login Form Response: %s", response.text)
                     _LOGGER.debug("Login Form Response headers: %s", response.headers)
                     raise APIAuthError("Login response did not include redirect information.")
-
+    
             redirect_headers = {
                 "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                 "accept-encoding": "gzip, deflate, br, zstd",
                 "connection": "keep-alive",
-                "host": "{self.login_host}",
-                "referer": f"https://{self.login_host}{LOGIN_HEADERS_2_STEP_REFERER}"
+                "host": f"{self.login_host}",
+                "referer": f"https://{self.login_host}{LOGIN_HEADERS_2_STEP_REFERER}",
             }
     
             _LOGGER.debug("Redirect to: %s", redirect_url)
@@ -218,49 +245,61 @@ class FusionSolarAPI:
             response_headers = redirect_response.headers
             location_header = response_headers.get("Location")
             _LOGGER.debug("Redirect Response headers: %s", response_headers)
-
+    
             self.data_host = urlparse(location_header).netloc
-
+    
             if redirect_response.status_code == 200 or redirect_response.status_code == 302:
-                cookies = redirect_response.headers.get('Set-Cookie')
-                if cookies:
-                    dp_session = None
-                    for cookie in cookies.split(';'):
-                        if 'dp-session=' in cookie:
-                            dp_session = cookie.split('=')[1]
+                # Requests parses Set-Cookie headers into a cookie jar for us.
+                # Do NOT attempt to split the raw Set-Cookie header, because it may
+                # contain multiple cookies and extra '=' (e.g. Path=/) which breaks
+                # naive parsing.
+                dp_session = redirect_response.cookies.get("dp-session")
+                if not dp_session:
+                    # Fallback: some deployments return a combined Set-Cookie header.
+                    # Try a minimal parse for dp-session=...; in the raw header.
+                    raw_set_cookie = redirect_response.headers.get("Set-Cookie", "")
+                    for part in raw_set_cookie.split(","):
+                        part = part.strip()
+                        if part.startswith("dp-session="):
+                            dp_session = part.split("=", 1)[1].split(";", 1)[0]
                             break
     
-                    if dp_session:
-                        _LOGGER.debug("DP Session Cookie: %s", dp_session)
-                        self.dp_session = dp_session
-                        self.connected = True
-                        self.last_session_time = datetime.now(timezone.utc)
-                        self.refresh_csrf()
-                        station_data = self.get_station_list()
-                        self.station = station_data["data"]["list"][0]["dn"]
-                        if self.battery_capacity is None or self.battery_capacity == 0.0:
-                            self.battery_capacity = station_data["data"]["list"][0]["batteryCapacity"]
-                        self._start_session_monitor()
-                        return True
-                    else:
-                        _LOGGER.error("DP Session not found in cookies.")
-                        self.connected = False
-                        raise APIAuthError("DP Session not found in cookies.")
-                else:
-                    _LOGGER.error("No cookies found in the response headers.")
+                if not dp_session:
+                    _LOGGER.error("DP Session not found in cookies.")
                     self.connected = False
-                    raise APIAuthError("No cookies found in the response headers.")
-            else:
-                _LOGGER.error("Redirect failed: %s", redirect_response.status_code)
-                _LOGGER.error("%s", redirect_response.text)
-                self.connected = False
-                raise APIAuthError("Redirect failed.")
-        else:
-            _LOGGER.warning("Login failed: %s", response.status_code)
-            _LOGGER.warning("Response headers: %s", response.headers)
-            _LOGGER.warning("Response: %s", response.text)
+                    raise APIAuthError("DP Session not found in cookies.")
+    
+                _LOGGER.debug("DP Session Cookie: %s", dp_session)
+                self.dp_session = dp_session
+                self.connected = True
+                self.last_session_time = datetime.now(timezone.utc)
+    
+                self.refresh_csrf()
+                station_data = self.get_station_list()
+    
+                if not self.station:
+                    self.station = station_data["data"]["list"][0]["dn"]
+                else:
+                    if not any(s["dn"] == self.station for s in station_data["data"]["list"]):
+                        raise APIDataStructureError(f"Station {self.station} not found.")
+    
+                if self.battery_capacity is None or self.battery_capacity == 0.0:
+                    self.battery_capacity = station_data["data"]["list"][0]["batteryCapacity"]
+    
+                self._start_session_monitor()
+                return True, self.station
+    
+            _LOGGER.error("Redirect failed: %s", redirect_response.status_code)
+            _LOGGER.error("%s", redirect_response.text)
             self.connected = False
-            raise APIAuthError("Login failed.")
+            raise APIAuthError("Redirect failed.")
+    
+        _LOGGER.warning("Login failed: %s", response.status_code)
+        _LOGGER.warning("Response headers: %s", response.headers)
+        _LOGGER.warning("Response: %s", response.text)
+        self.connected = False
+        raise APIAuthError("Login failed.")
+
 
     def set_captcha_img(self):
         timestampNow = datetime.now().timestamp() * 1000
@@ -279,58 +318,112 @@ class FusionSolarAPI:
             roarand_headers = {
                 "accept": "application/json, text/plain, */*",
                 "accept-encoding": "gzip, deflate, br, zstd",
-                "Referer": f"https://{self.data_host}{DATA_REFERER_URL}"
+                "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
             }
             roarand_cookies = {
                 "locale": "en-us",
                 "dp-session": self.dp_session,
             }
             roarand_params = {}
-            
+    
             _LOGGER.debug("Getting Roarand at: %s", roarand_url)
-            roarand_response = requests.get(roarand_url, headers=roarand_headers, cookies=roarand_cookies, params=roarand_params)
-            self.csrf = roarand_response.json()["payload"]
+            roarand_response = requests.get(
+                roarand_url,
+                headers=roarand_headers,
+                cookies=roarand_cookies,
+                params=roarand_params,
+                timeout=20,
+            )
+    
+            try:
+                roarand_json = roarand_response.json()
+            except json.JSONDecodeError as err:
+                _LOGGER.error(
+                    "Keep-alive did not return JSON. Status=%s Content-Type=%s Body=%s",
+                    roarand_response.status_code,
+                    roarand_response.headers.get("Content-Type"),
+                    roarand_response.text[:300],
+                )
+                raise APIAuthError("Keep-alive did not return JSON") from err
+    
+            csrf_value = roarand_json.get("payload")
+            if not csrf_value:
+                _LOGGER.error(
+                    "Keep-alive JSON did not contain a CSRF payload. Status=%s Body=%s",
+                    roarand_response.status_code,
+                    str(roarand_json)[:300],
+                )
+                raise APIAuthError("Could not refresh CSRF token")
+    
+            self.csrf = csrf_value
             self.csrf_time = datetime.now()
-            _LOGGER.debug(f"CSRF refreshed: {self.csrf}")
+            _LOGGER.debug("CSRF refreshed: %s", self.csrf)
+
     
     def get_station_id(self):
         return self.get_station_list()["data"]["list"][0]["dn"]
 
     def get_station_list(self):
         self.refresh_csrf()
-
+    
         station_url = f"https://{self.data_host}{STATION_LIST_URL}"
-        
+    
         station_headers = {
-                "accept": "application/json, text/javascript, /; q=0.01",
-                "accept-encoding": "gzip, deflate, br, zstd",
-                "Content-Type": "application/json",
-                "Origin": f"https://{self.data_host}",
-                "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
-                "Roarand": f"{self.csrf}",
-            }
-        
+            "accept": "application/json, text/javascript, */*; q=0.01",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "Content-Type": "application/json",
+            "Origin": f"https://{self.data_host}",
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+            "Roarand": f"{self.csrf}",
+        }
+    
         station_cookies = {
-                "locale": "en-us",
-                "dp-session": self.dp_session,
-            }
-        
+            "locale": "en-us",
+            "dp-session": self.dp_session,
+        }
+    
         station_payload = {
-                "curPage": 1,
-                "pageSize": 10,
-                "gridConnectedTime": "",
-                "queryTime": 1666044000000,
-                "timeZone": 2,
-                "sortId": "createTime",
-                "sortDir": "DESC",
-                "locale": "en_US",
-            }
-        
+            "curPage": 1,
+            "pageSize": 10,
+            "gridConnectedTime": "",
+            "queryTime": 1666044000000,
+            "timeZone": 2,
+            "sortId": "createTime",
+            "sortDir": "DESC",
+            "locale": "en_US",
+        }
+    
         _LOGGER.debug("Getting Station at: %s", station_url)
-        station_response = requests.post(station_url, json=station_payload, headers=station_headers, cookies=station_cookies)
-        json_response = station_response.json()
-        _LOGGER.debug("Station info: %s", json_response["data"])
+        station_response = requests.post(
+            station_url,
+            json=station_payload,
+            headers=station_headers,
+            cookies=station_cookies,
+            timeout=20,
+        )
+    
+        try:
+            json_response = station_response.json()
+        except json.JSONDecodeError as err:
+            _LOGGER.error(
+                "Station list did not return JSON. Status=%s Content-Type=%s Body=%s",
+                station_response.status_code,
+                station_response.headers.get("Content-Type"),
+                station_response.text[:300],
+            )
+            raise APIAuthError("Station list did not return JSON") from err
+    
+        if station_response.status_code != 200:
+            _LOGGER.error(
+                "Station list request failed. Status=%s Body=%s",
+                station_response.status_code,
+                str(json_response)[:300],
+            )
+            raise APIConnectionError("Station list request failed")
+    
+        _LOGGER.debug("Station info: %s", json_response.get("data"))
         return json_response
+
 
     def get_devices(self) -> list[Device]:
         self.refresh_csrf()
@@ -772,8 +865,20 @@ class FusionSolarAPI:
             self._session_thread.join()
 
     def get_device_unique_id(self, device_id: str, device_type: DeviceType) -> str:
-        """Return a unique device id."""
-        return f"{self.controller_name}_{device_id.lower().replace(" ", "_")}"
+
+        station_suffix = ""
+        if self.station:
+            safe = (
+                str(self.station)
+                .lower()
+                .replace(" ", "_")
+                .replace(":", "_")
+                .replace("/", "_")
+            )
+            station_suffix = f"_{safe}"
+
+        return f"{self.controller_name}{station_suffix}_{device_id.lower().replace(' ', '_')}"
+
 
     def get_device_name(self, device_id: str) -> str:
         """Return the device name."""
