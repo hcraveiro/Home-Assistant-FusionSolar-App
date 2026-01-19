@@ -22,16 +22,14 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 
 from .api import FusionSolarAPI, APIAuthError, APIConnectionError, APIAuthCaptchaError
-from .const import DEFAULT_SCAN_INTERVAL, DOMAIN, MIN_SCAN_INTERVAL, FUSION_SOLAR_HOST, CAPTCHA_INPUT
-
+from .const import DEFAULT_SCAN_INTERVAL, DOMAIN, MIN_SCAN_INTERVAL, FUSION_SOLAR_HOST, CAPTCHA_INPUT, CONF_STATION_DN
 
 _LOGGER = logging.getLogger(__name__)
 
-# TODO adjust the data schema to the data that you need
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_USERNAME, description={"suggested_value": ""}): str,
-        vol.Required(CONF_PASSWORD, description={"suggested_value": ""}): str,
+        vol.Required(CONF_USERNAME): str,
+        vol.Required(CONF_PASSWORD): str,
         vol.Required(FUSION_SOLAR_HOST, description={"suggested_value": "eu5.fusionsolar.huawei.com"}): str
     }
 )
@@ -59,6 +57,8 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         raise InvalidCaptcha from err
     except APIConnectionError as err:
         raise CannotConnect from err
+
+    # Return info that you want to store in the config entry.
     return {"title": f"Fusion Solar App Integration"}
 
 
@@ -67,6 +67,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
     _input_data: dict[str, Any]
+    _stations: list[dict[str, Any]]
 
     @staticmethod
     @callback
@@ -101,81 +102,114 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
             if "base" not in errors:
-                # Validation was successful, so create a unique id for this instance of your integration
-                # and create the config entry.
-                await self.async_set_unique_id(info.get("title"))
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(title=info["title"], data=user_input)
+                # Store validated input and fetch station list before proceeding
+                self._input_data = user_input
+                api = FusionSolarAPI(
+                    user_input[CONF_USERNAME],
+                    user_input[CONF_PASSWORD],
+                    user_input[FUSION_SOLAR_HOST],
+                    user_input.get(CAPTCHA_INPUT, None),
+                )
+                try:
+                    await self.hass.async_add_executor_job(api.login)
+                    station_data = await self.hass.async_add_executor_job(api.get_station_list)
+                    self._stations = station_data["data"]["list"]
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("Unexpected exception while fetching station list")
+                    errors["base"] = "cannot_connect"
+                else:
+                    return await self.async_step_select_station()
 
         # Show initial form.
         return self.async_show_form(
             step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
         )
 
-    async def async_step_reconfigure(
+    async def async_step_select_station(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Add reconfigure step to allow to reconfigure a config entry."""
-        # This method displays a reconfigure option in the integration and is
-        # different to options.
-        # It can be used to reconfigure any of the data submitted when first installed.
-        # This is optional and can be removed if you do not want to allow reconfiguration.
+        """Handle the station selection step."""
         errors: dict[str, str] = {}
-        config_entry = self.hass.config_entries.async_get_entry(
-            self.context["entry_id"]
-        )
 
         if user_input is not None:
+            station_dn = user_input[CONF_STATION_DN]
+            # Use username and station DN to build a unique id per plant
+            unique_id = f"{self._input_data[CONF_USERNAME]}@{station_dn}"
+            await self.async_set_unique_id(unique_id, raise_on_progress=False)
+
+            data = {**self._input_data, CONF_STATION_DN: station_dn}
+
+            title = next(
+                (
+                    station.get("stationName", "Fusion Solar App Integration")
+                    for station in self._stations
+                    if station.get("dn") == station_dn
+                ),
+                "Fusion Solar App Integration",
+            )
+
+            return self.async_create_entry(title=title, data=data)
+
+        # Build station selection form.
+        if not getattr(self, "_stations", None):
+            # Fallback to initial step if for some reason stations are not available
+            errors["base"] = "cannot_connect"
+            return self.async_show_form(
+                step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+            )
+
+        station_options = {
+            station["dn"]: station.get("stationName", station["dn"])
+            for station in self._stations
+        }
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_STATION_DN): vol.In(station_options),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="select_station",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
+    async def async_step_captcha(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle the captcha step."""
+        errors: dict[str, str] = {}
+        captcha_img = ""
+        if user_input is not None:
             try:
-                info = await validate_input(self.hass, user_input)
+                api = FusionSolarAPI(
+                    user_input[CONF_USERNAME],
+                    user_input[CONF_PASSWORD],
+                    user_input[FUSION_SOLAR_HOST],
+                    user_input.get(CAPTCHA_INPUT, None),
+                )
+                await self.hass.async_add_executor_job(api.login)
+                captcha_img = api.captcha_img if api.captcha_img else ""
+                if api.connected:
+                    # Login was successful after captcha, so save config data.
+                    unique_id = f"{user_input[CONF_USERNAME]}"
+                    await self.async_set_unique_id(unique_id, raise_on_progress=False)
+                    return self.async_create_entry(
+                        title="Fusion Solar App Integration", data=user_input
+                    )
+                else:
+                    errors["base"] = "invalid_captcha"
+            except APIAuthCaptchaError:
+                errors["base"] = "invalid_captcha"
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except InvalidCaptcha:
-                _LOGGER.exception("Captcha failed, redirecting to Captcha screen")
-                return await self.async_step_captcha(user_input)
             except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception")
+                _LOGGER.exception("Unexpected exception during captcha handling")
                 errors["base"] = "unknown"
-            else:
-                return self.async_update_reload_and_abort(
-                    config_entry,
-                    unique_id=config_entry.unique_id,
-                    data={**config_entry.data, **user_input},
-                    reason="reconfigure_successful",
-                )
-        return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_USERNAME, default=config_entry.data[CONF_USERNAME]): str,
-                    vol.Required(CONF_PASSWORD): str,
-                    vol.Required(FUSION_SOLAR_HOST, default=config_entry.data[FUSION_SOLAR_HOST]): str,
-                }
-            ),
-            errors=errors,
-        )
-    
-    async def async_step_captcha(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-    
-        api = FusionSolarAPI(user_input[CONF_USERNAME], user_input[CONF_PASSWORD], user_input[FUSION_SOLAR_HOST], user_input.get(CAPTCHA_INPUT, None))
-        _LOGGER.debug("Obtaining Captcha image...")
-        await self.hass.async_add_executor_job(api.set_captcha_img)
-        captcha_img = api.captcha_img
-        _LOGGER.debug("Got most recent Captcha image...")
 
-        if user_input is not None:
-            captcha_response = user_input.get(CAPTCHA_INPUT)
-    
-            if not captcha_response:
-                _LOGGER.warning("No  Captcha code filled.")
-                errors["base"] = "captcha_required"
-            else:
-                _LOGGER.debug("Validating Login with Captcha...")
-                return await self.async_step_user(user_input)
-    
         return self.async_show_form(
             step_id="captcha",
             data_schema=vol.Schema(
@@ -190,21 +224,88 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reconfigure(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Handle reconfiguration of Fusion Solar App Integration."""
+        errors: dict[str, str] = {}
+    
+        entry_id = self.context.get("entry_id")
+        if not entry_id:
+            return self.async_abort(reason="missing_entry_id")
+    
+        config_entry = self.hass.config_entries.async_get_entry(entry_id)
+        if config_entry is None:
+            return self.async_abort(reason="config_entry_not_found")
+    
+        if user_input is not None:
+            try:
+                # Validate the new credentials
+                await validate_input(self.hass, user_input)
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except InvalidCaptcha:
+                errors["base"] = "invalid_captcha"
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception("Unexpected exception during reconfiguration")
+                errors["base"] = "unknown"
+    
+            if "base" not in errors:
+                # Update the existing config entry with new data
+                self.hass.config_entries.async_update_entry(
+                    config_entry,
+                    data={
+                        **config_entry.data,
+                        CONF_USERNAME: user_input[CONF_USERNAME],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        FUSION_SOLAR_HOST: user_input[FUSION_SOLAR_HOST],
+                    },
+                )
+                await self.hass.config_entries.async_reload(config_entry.entry_id)
+                return self.async_abort(reason="reconfigure_successful")
+    
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_USERNAME,
+                        default=config_entry.data.get(CONF_USERNAME, ""),
+                    ): str,
+                    # Do not prefill passwords in UI
+                    vol.Required(CONF_PASSWORD): str,
+                    vol.Required(
+                        FUSION_SOLAR_HOST,
+                        default=config_entry.data.get(FUSION_SOLAR_HOST, DEFAULT_LOGIN_HOST),
+                    ): str,
+                }
+            ),
+            errors=errors,
+        )
+
+
 
 class FusionSolarOptionsFlowHandler(OptionsFlow):
     """Handles the options flow."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
+        # NOTE: In recent Home Assistant versions, OptionsFlow exposes a read-only
+        # `config_entry` property, so assigning to it raises an AttributeError.
+        # Keep our own reference instead.
+        self._config_entry = config_entry
         self.options = dict(config_entry.options)
+
 
     async def async_step_init(self, user_input=None):
         """Handle options flow."""
         if user_input is not None:
-            options = self.config_entry.options | user_input
+            options = self._config_entry.options | user_input
             return self.async_create_entry(title="", data=options)
-
+    
         # It is recommended to prepopulate options fields with default values if available.
         # These will be the same default values you use on your coordinator for setting variable values
         # if the option has not been set.
@@ -216,7 +317,7 @@ class FusionSolarOptionsFlowHandler(OptionsFlow):
                 ): (vol.All(vol.Coerce(int), vol.Clamp(min=MIN_SCAN_INTERVAL))),
             }
         )
-
+    
         return self.async_show_form(step_id="init", data_schema=data_schema)
 
 
