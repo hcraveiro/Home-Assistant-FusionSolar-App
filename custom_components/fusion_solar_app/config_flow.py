@@ -279,7 +279,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_PASSWORD): str,
                     vol.Required(
                         FUSION_SOLAR_HOST,
-                        default=config_entry.data.get(FUSION_SOLAR_HOST, DEFAULT_LOGIN_HOST),
+                        default=config_entry.data.get(FUSION_SOLAR_HOST, config_entry.data.get(CONF_LOGIN_HOST, "")),
                     ): str,
                 }
             ),
