@@ -5,6 +5,7 @@ DOMAIN = "fusion_solar_app"
 DEFAULT_SCAN_INTERVAL = 60
 MIN_SCAN_INTERVAL = 10
 FUSION_SOLAR_HOST = "fusion_solar_host"
+CONF_STATION_DN = "station_dn"
 CAPTCHA_INPUT = "captcha_input"
 PUBKEY_URL = "/unisso/pubkey"
 CAPTCHA_URL = "/unisso/verifycode"
