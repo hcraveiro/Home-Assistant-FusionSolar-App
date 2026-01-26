@@ -10,11 +10,11 @@ from homeassistant.const import (
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
 )
-from homeassistant.core import DOMAIN, HomeAssistant
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import FusionSolarAPI, APIAuthError, Device, DeviceType
-from .const import DEFAULT_SCAN_INTERVAL, FUSION_SOLAR_HOST, CAPTCHA_INPUT
+from .const import DEFAULT_SCAN_INTERVAL, FUSION_SOLAR_HOST, CAPTCHA_INPUT, CONF_STATION_DN, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
 
         # Initialise your api here
         self.api = FusionSolarAPI(user=self.user, pwd=self.pwd, login_host=self.login_host, captcha_input=self.captcha_input)
+        self.api.station = config_entry.data.get(CONF_STATION_DN)
 
     async def async_update_data(self):
         """Fetch data from API endpoint.

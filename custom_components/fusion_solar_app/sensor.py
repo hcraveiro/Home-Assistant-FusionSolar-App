@@ -83,15 +83,16 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         # Identifiers are what group entities into the same device.
         # If your device is created elsewhere, you can just specify the indentifiers parameter.
         # If your device connects via another device, add via_device parameter with the indentifiers of that device.
+        station_dn = getattr(self.coordinator.api, "station", None) or "unknown_station"
         return DeviceInfo(
-            name=f"Fusion Solar",
+            name=f"Fusion Solar ({station_dn})",
             manufacturer="Fusion Solar",
             model="Fusion Solar Model v1",
             sw_version="1.0",
             identifiers={
                 (
                     DOMAIN,
-                    f"{self.coordinator.data.controller_name}",
+                    f"{self.coordinator.data.controller_name}_{station_dn}",
                 )
             },
         )
