@@ -9,7 +9,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -41,14 +41,18 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # Perform an initial data load from api.
     # async_config_entry_first_refresh() is special in that it does not log errors if it fails.
     # ConfigEntryAuthFailed will propagate up and trigger HA's reauth flow.
-    try:
-        await coordinator.async_config_entry_first_refresh()
-    except ConfigEntryAuthFailed:
-        raise
+    await coordinator.async_config_entry_first_refresh()
 
     # Test to see if api initialised correctly, else raise ConfigNotReady to make HA retry setup
     if not coordinator.api.connected:
         raise ConfigEntryNotReady
+
+    # Session is now live in memory — clear stale token from persistent storage
+    if "dp_session" in config_entry.data:
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data={k: v for k, v in config_entry.data.items() if k not in ("dp_session", "data_host")},
+        )
 
     # Initialise a listener for config flow options changes.
     # See config_flow for defining an options setting that shows up as configure on the integration.

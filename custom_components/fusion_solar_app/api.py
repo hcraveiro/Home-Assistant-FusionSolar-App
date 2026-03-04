@@ -315,14 +315,17 @@ class FusionSolarAPI:
 
 
     def restore_session(self, dp_session: str, data_host: str) -> None:
-        """Restore an authenticated session without requiring login."""
+        """Restore an authenticated session without requiring login.
+
+        Does NOT make HTTP calls — safe to call from the event loop.
+        CSRF is refreshed lazily on the next API call that needs it.
+        """
         self.dp_session = dp_session
         self.data_host = data_host
         self.session.cookies.set("dp-session", dp_session)
         self.session.cookies.set("locale", "en-us")
         self.connected = True
         self.last_session_time = datetime.now(timezone.utc)
-        self.refresh_csrf()
         self._start_session_monitor()
 
     def reset_session(self):
@@ -352,18 +355,11 @@ class FusionSolarAPI:
                 "accept-encoding": "gzip, deflate, br, zstd",
                 "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
             }
-            roarand_cookies = {
-                "locale": "en-us",
-                "dp-session": self.dp_session,
-            }
-            roarand_params = {}
-    
+
             _LOGGER.debug("Getting Roarand at: %s", roarand_url)
             roarand_response = self.session.get(
                 roarand_url,
                 headers=roarand_headers,
-                cookies=roarand_cookies,
-                params=roarand_params,
                 timeout=20,
             )
     
@@ -408,12 +404,7 @@ class FusionSolarAPI:
             "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
             "Roarand": f"{self.csrf}",
         }
-    
-        station_cookies = {
-            "locale": "en-us",
-            "dp-session": self.dp_session,
-        }
-    
+
         station_payload = {
             "curPage": 1,
             "pageSize": 10,
@@ -424,13 +415,12 @@ class FusionSolarAPI:
             "sortDir": "DESC",
             "locale": "en_US",
         }
-    
+
         _LOGGER.debug("Getting Station at: %s", station_url)
         station_response = self.session.post(
             station_url,
             json=station_payload,
             headers=station_headers,
-            cookies=station_cookies,
             timeout=20,
         )
     
@@ -460,24 +450,19 @@ class FusionSolarAPI:
     def get_devices(self) -> list[Device]:
         self.refresh_csrf()
 
-        cookies = {
-            "locale": "en-us",
-            "dp-session": self.dp_session,
-        }
-        
         headers = {
             "Accept": "application/json",
             "Accept-Encoding": "gzip, deflate, br, zstd",
             "Accept-Language": "en-GB,en;q=0.9",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         }
-        
+
         # Fusion Solar App Station parameter
         params = {"stationDn": unquote(self.station)}
-        
+
         data_access_url = f"https://{self.data_host}{DATA_URL}"
         _LOGGER.debug("Getting Data at: %s", data_access_url)
-        response = self.session.get(data_access_url, headers=headers, cookies=cookies, params=params)
+        response = self.session.get(data_access_url, headers=headers, params=params)
 
         output = {
             "panel_production_power": 0.0,
@@ -797,11 +782,6 @@ class FusionSolarAPI:
             timestamp = first_day_of_year.timestamp() * 1000
             dateStr = first_day_of_year.strftime("%Y-%m-%d %H:%M:%S")
         
-        cookies = {
-            "locale": "en-us",
-            "dp-session": self.dp_session,
-        }
-        
         headers = {
             "application/json": "text/plain, */*",
             "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -821,10 +801,10 @@ class FusionSolarAPI:
              "dateStr": dateStr,
              "_": int(timestampNow)
         }
-         
+
         energy_balance_url = f"https://{self.data_host}{ENERGY_BALANCE_URL}?{urlencode(params)}"
         _LOGGER.debug("Getting Energy Balance at: %s", energy_balance_url)
-        energy_balance_response = self.session.get(energy_balance_url, headers=headers, cookies=cookies)
+        energy_balance_response = self.session.get(energy_balance_url, headers=headers)
         _LOGGER.debug("Energy Balance Response: %s", energy_balance_response.text)
         try:
             energy_balance_data = energy_balance_response.json()
@@ -893,6 +873,7 @@ class FusionSolarAPI:
                 self._renew_session()
                 if not self.connected:
                     _LOGGER.warning("Session monitor stopping: renewal failed")
+                    self._stop_event.set()
                     break
             self._stop_event.wait(60)
 

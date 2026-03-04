@@ -79,8 +79,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
     _stations: list[dict[str, Any]]
     _api: FusionSolarAPI | None = None
     _captcha_credentials: dict[str, Any] | None = None
-    _reauth_entry: ConfigEntry | None = None
-    _is_reauth: bool = False
+    _target_entry: ConfigEntry | None = None
 
     @staticmethod
     @callback
@@ -182,6 +181,23 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def _finish_entry_update(
+        self, entry: ConfigEntry, credentials: dict[str, Any], api: FusionSolarAPI | None = None,
+    ) -> ConfigFlowResult:
+        """Update an existing config entry with new credentials/session and reload."""
+        update_data = {
+            **entry.data,
+            CONF_USERNAME: credentials[CONF_USERNAME],
+            CONF_PASSWORD: credentials[CONF_PASSWORD],
+            FUSION_SOLAR_HOST: credentials[FUSION_SOLAR_HOST],
+        }
+        if api and api.connected:
+            update_data["dp_session"] = api.dp_session
+            update_data["data_host"] = api.data_host
+        self.hass.config_entries.async_update_entry(entry, data=update_data)
+        await self.hass.config_entries.async_reload(entry.entry_id)
+        return self.async_abort(reason="reauth_successful")
+
     async def async_step_captcha(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -194,21 +210,10 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 await self.hass.async_add_executor_job(self._api.login)
                 if self._api.connected:
-                    if self._is_reauth and self._reauth_entry:
-                        # Reauth flow: update existing config entry with session
-                        self.hass.config_entries.async_update_entry(
-                            self._reauth_entry,
-                            data={
-                                **self._reauth_entry.data,
-                                CONF_USERNAME: self._captcha_credentials[CONF_USERNAME],
-                                CONF_PASSWORD: self._captcha_credentials[CONF_PASSWORD],
-                                FUSION_SOLAR_HOST: self._captcha_credentials[FUSION_SOLAR_HOST],
-                                "dp_session": self._api.dp_session,
-                                "data_host": self._api.data_host,
-                            },
+                    if self._target_entry:
+                        return await self._finish_entry_update(
+                            self._target_entry, self._captcha_credentials, self._api,
                         )
-                        await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
-                        return self.async_abort(reason="reauth_successful")
 
                     # Normal flow: proceed to station selection
                     self._input_data = {**self._captcha_credentials}
@@ -251,7 +256,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
         self, entry_data: dict[str, Any]
     ) -> ConfigFlowResult:
         """Handle reauth when login fails at runtime."""
-        self._reauth_entry = self.hass.config_entries.async_get_entry(
+        self._target_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
         return await self.async_step_reauth_confirm()
@@ -272,30 +277,17 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             except InvalidCaptcha as exc:
                 self._api = exc.api
                 self._captcha_credentials = user_input
-                self._is_reauth = True
                 return await self.async_step_captcha()
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception during reauth")
                 errors["base"] = "unknown"
 
             if "base" not in errors:
-                update_data = {
-                    **self._reauth_entry.data,
-                    CONF_USERNAME: user_input[CONF_USERNAME],
-                    CONF_PASSWORD: user_input[CONF_PASSWORD],
-                    FUSION_SOLAR_HOST: user_input[FUSION_SOLAR_HOST],
-                }
-                if api and api.connected:
-                    update_data["dp_session"] = api.dp_session
-                    update_data["data_host"] = api.data_host
-                self.hass.config_entries.async_update_entry(
-                    self._reauth_entry,
-                    data=update_data,
+                return await self._finish_entry_update(
+                    self._target_entry, user_input, api,
                 )
-                await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
-                return self.async_abort(reason="reauth_successful")
 
-        existing_data = self._reauth_entry.data if self._reauth_entry else {}
+        existing_data = self._target_entry.data if self._target_entry else {}
         return self.async_show_form(
             step_id="reauth_confirm",
             data_schema=vol.Schema(
@@ -333,8 +325,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             except InvalidCaptcha as exc:
                 self._api = exc.api
                 self._captcha_credentials = user_input
-                self._reauth_entry = config_entry
-                self._is_reauth = True
+                self._target_entry = config_entry
                 return await self.async_step_captcha()
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception during reconfiguration")
