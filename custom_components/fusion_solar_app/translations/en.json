@@ -3,13 +3,15 @@
     "title": "Fusion Solar App Integration",
     "abort": {
       "already_configured": "Device is already configured",
-      "reconfigure_successful": "Reconfiguration successful"
+      "reconfigure_successful": "Reconfiguration successful",
+      "reauth_successful": "Re-authentication successful"
     },
     "error": {
       "cannot_connect": "Failed to connect",
       "invalid_auth": "Invalid authentication",
       "unknown": "Unexpected error",
-      "captcha_required": "Captcha required"
+      "captcha_required": "Captcha required",
+      "invalid_captcha": "Invalid captcha. Please try again."
     },
     "step": {
       "user": {
@@ -31,6 +33,15 @@
         "description": "{captcha_img}",
         "data": {
           "captcha_input": "Captcha"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Fusion Solar",
+        "description": "Your session has expired and requires re-authentication.",
+        "data": {
+          "username": "Username",
+          "password": "Password",
+          "fusion_solar_host": "Fusion Solar Login Host"
         }
       }
     }

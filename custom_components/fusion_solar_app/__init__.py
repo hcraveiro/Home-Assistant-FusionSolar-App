@@ -39,13 +39,20 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     coordinator = FusionSolarCoordinator(hass, config_entry)
 
     # Perform an initial data load from api.
-    # async_config_entry_first_refresh() is special in that it does not log errors if it fails
+    # async_config_entry_first_refresh() is special in that it does not log errors if it fails.
+    # ConfigEntryAuthFailed will propagate up and trigger HA's reauth flow.
     await coordinator.async_config_entry_first_refresh()
 
     # Test to see if api initialised correctly, else raise ConfigNotReady to make HA retry setup
-    # TODO: Change this to match how your api will know if connected or successful update
     if not coordinator.api.connected:
         raise ConfigEntryNotReady
+
+    # Session is now live in memory — clear stale token from persistent storage
+    if "dp_session" in config_entry.data:
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data={k: v for k, v in config_entry.data.items() if k not in ("dp_session", "data_host")},
+        )
 
     # Initialise a listener for config flow options changes.
     # See config_flow for defining an options setting that shows up as configure on the integration.
