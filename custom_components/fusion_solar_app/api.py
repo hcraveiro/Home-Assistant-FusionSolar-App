@@ -769,15 +769,19 @@ class FusionSolarAPI:
                             output["grid_consumption_power"] = grid_consumption_injection
                             output["grid_injection_power"] = 0.0
 
-            # Discover inverter DN from the energy-flow nodes
             if self.inverter_dn is None:
                 for node in flow_data_nodes:
-                    if node.get("name") == "neteco.pvms.devTypeLangKey.string":
-                        self.inverter_dn = node.get("devDn")
-                        if self.inverter_dn:
+                    if node.get("name") == "neteco.pvms.devTypeLangKey.inverter":
+                        dev_ids = node.get("devIds") or []
+                        dn = dev_ids[0] if dev_ids else node.get("devDn")
+                        if dn:
+                            self.inverter_dn = dn
                             _LOGGER.info("Discovered inverter DN: %s", self.inverter_dn)
                         else:
-                            _LOGGER.debug("String node has no devDn field. Node keys: %s", list(node.keys()))
+                            _LOGGER.warning(
+                                "Could not determine inverter DN from inverter node. "
+                                "Node: %s", node
+                            )
                         break
 
             self.update_output_with_battery_capacity(output)
