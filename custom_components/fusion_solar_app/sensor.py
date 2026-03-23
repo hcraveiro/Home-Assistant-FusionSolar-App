@@ -8,7 +8,14 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPower, UnitOfEnergy
+from homeassistant.const import (
+    UnitOfPower,
+    UnitOfEnergy,
+    UnitOfElectricPotential,
+    UnitOfElectricCurrent,
+    UnitOfFrequency,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -38,7 +45,13 @@ async def async_setup_entry(
     sensors = [
         FusionSolarSensor(coordinator, device)
         for device in coordinator.data.devices
-        if device.device_type in {DeviceType.SENSOR_KW, DeviceType.SENSOR_KWH, DeviceType.SENSOR_PERCENTAGE, DeviceType.SENSOR_TIME}
+        if device.device_type in {
+            DeviceType.SENSOR_KW, DeviceType.SENSOR_KWH, DeviceType.SENSOR_PERCENTAGE,
+            DeviceType.SENSOR_TIME, DeviceType.SENSOR_VOLTAGE, DeviceType.SENSOR_CURRENT,
+            DeviceType.SENSOR_FREQUENCY, DeviceType.SENSOR_TEMPERATURE,
+            DeviceType.SENSOR_RESISTANCE, DeviceType.SENSOR_POWER_FACTOR,
+            DeviceType.SENSOR_TEXT,
+        }
     ]
 
     # Create the sensors.
@@ -64,18 +77,21 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         _LOGGER.debug("Device: %s", self.device)
         self.async_write_ha_state()
 
+    DEVICE_CLASS_MAP = {
+        DeviceType.SENSOR_KW: SensorDeviceClass.POWER,
+        DeviceType.SENSOR_KWH: SensorDeviceClass.ENERGY,
+        DeviceType.SENSOR_TIME: SensorDeviceClass.TIMESTAMP,
+        DeviceType.SENSOR_PERCENTAGE: SensorDeviceClass.BATTERY,
+        DeviceType.SENSOR_VOLTAGE: SensorDeviceClass.VOLTAGE,
+        DeviceType.SENSOR_CURRENT: SensorDeviceClass.CURRENT,
+        DeviceType.SENSOR_FREQUENCY: SensorDeviceClass.FREQUENCY,
+        DeviceType.SENSOR_TEMPERATURE: SensorDeviceClass.TEMPERATURE,
+    }
+
     @property
-    def device_class(self) -> str:
+    def device_class(self) -> str | None:
         """Return device class."""
-        # https://developers.home-assistant.io/docs/core/entity/sensor/#available-device-classes
-        if self.device.device_type == DeviceType.SENSOR_KW:
-            return SensorDeviceClass.POWER
-        elif self.device.device_type == DeviceType.SENSOR_KWH:
-            return SensorDeviceClass.ENERGY
-        elif self.device.device_type == DeviceType.SENSOR_TIME:
-            return SensorDeviceClass.TIMESTAMP
-        else:
-            return SensorDeviceClass.BATTERY
+        return self.DEVICE_CLASS_MAP.get(self.device.device_type)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -103,36 +119,41 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         return self.device.name
 
     @property
-    def native_value(self) -> float | int | datetime:
+    def native_value(self) -> float | int | datetime | str:
         """Return the state of the entity."""
-        # Using native value and native unit of measurement, allows you to change units
-        # in Lovelace and HA will automatically calculate the correct value.
-        if self.device.device_type == DeviceType.SENSOR_TIME:
+        dtype = self.device.device_type
+        if dtype == DeviceType.SENSOR_TIME:
             return self.device.state
-        elif self.device.device_type == DeviceType.SENSOR_PERCENTAGE:
-           return int(self.device.state)
+        elif dtype == DeviceType.SENSOR_TEXT:
+            return str(self.device.state)
+        elif dtype == DeviceType.SENSOR_PERCENTAGE:
+            return int(self.device.state)
         else:
             return float(self.device.state)
 
+    UNIT_MAP = {
+        DeviceType.SENSOR_KW: UnitOfPower.KILO_WATT,
+        DeviceType.SENSOR_KWH: UnitOfEnergy.KILO_WATT_HOUR,
+        DeviceType.SENSOR_PERCENTAGE: "%",
+        DeviceType.SENSOR_VOLTAGE: UnitOfElectricPotential.VOLT,
+        DeviceType.SENSOR_CURRENT: UnitOfElectricCurrent.AMPERE,
+        DeviceType.SENSOR_FREQUENCY: UnitOfFrequency.HERTZ,
+        DeviceType.SENSOR_TEMPERATURE: UnitOfTemperature.CELSIUS,
+        DeviceType.SENSOR_RESISTANCE: "MΩ",
+    }
+
     @property
     def native_unit_of_measurement(self) -> str | None:
-        """Return unit of power."""
-        if self.device.device_type == DeviceType.SENSOR_KW:
-            return UnitOfPower.KILO_WATT
-        elif self.device.device_type == DeviceType.SENSOR_KWH:
-            return UnitOfEnergy.KILO_WATT_HOUR
-        elif self.device.device_type == DeviceType.SENSOR_TIME:
-            return ""
-        else:
-            return "%"
+        """Return unit of measurement."""
+        return self.UNIT_MAP.get(self.device.device_type)
 
     @property
     def state_class(self) -> str | None:
         """Return state class."""
-        # https://developers.home-assistant.io/docs/core/entity/sensor/#available-state-classes
-        if self.device.device_type == DeviceType.SENSOR_TIME:
-            return ""
-        elif self.device.device_type == DeviceType.SENSOR_KWH:
+        dtype = self.device.device_type
+        if dtype in {DeviceType.SENSOR_TIME, DeviceType.SENSOR_TEXT}:
+            return None
+        elif dtype == DeviceType.SENSOR_KWH:
             return SensorStateClass.TOTAL
         else:
             return SensorStateClass.MEASUREMENT

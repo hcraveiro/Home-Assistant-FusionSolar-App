@@ -78,6 +78,25 @@ After setting up the Integration you will get a Device which will have the follo
 * Battery Capacity
 * Last Authentication Time
 
+#### Inverter Real-Time Sensors
+
+The following sensors are fetched directly from the inverter device and require the inverter to be reachable via the API:
+
+* Inverter Grid Voltage (V)
+* Inverter Grid Current (A)
+* Inverter Grid Frequency (Hz)
+* Inverter Internal Temperature (°C)
+* Inverter Insulation Resistance (MΩ)
+* Inverter Power Factor
+* Inverter Status
+* Inverter Startup Time
+* Inverter PV1 Voltage (V)
+* Inverter PV1 Current (A)
+* Inverter PV2 Voltage (V)
+* Inverter PV2 Current (A)
+* Inverter PV3 Voltage (V)
+* Inverter PV3 Current (A)
+
 ## Card configuration
 
 I have configured a card using [flixlix](https://github.com/flixlix)'s [power-flow-card-plus](https://github.com/flixlix/power-flow-card-plus) that looks something like this: <a href="#"><img src="https://raw.githubusercontent.com/hcraveiro/Home-Assistant-FusionSolar-App/main/assets/card.png"></a>

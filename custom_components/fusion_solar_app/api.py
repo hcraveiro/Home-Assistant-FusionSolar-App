@@ -12,7 +12,7 @@ from typing import Dict, Optional
 from urllib.parse import unquote, quote, urlparse, urlencode
 from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
-from .const import DOMAIN, PUBKEY_URL, LOGIN_HEADERS_1_STEP_REFERER, LOGIN_HEADERS_2_STEP_REFERER, LOGIN_VALIDATE_USER_URL, LOGIN_VALIDATE_USER_URL_LA5, FINAL_AUTH_URL_LA5, LOGIN_FORM_URL, DATA_URL, STATION_LIST_URL, KEEP_ALIVE_URL, DATA_REFERER_URL, ENERGY_BALANCE_URL, LOGIN_DEFAULT_REDIRECT_URL, CAPTCHA_URL
+from .const import DOMAIN, PUBKEY_URL, LOGIN_HEADERS_1_STEP_REFERER, LOGIN_HEADERS_2_STEP_REFERER, LOGIN_VALIDATE_USER_URL, LOGIN_VALIDATE_USER_URL_LA5, FINAL_AUTH_URL_LA5, LOGIN_FORM_URL, DATA_URL, STATION_LIST_URL, KEEP_ALIVE_URL, DATA_REFERER_URL, ENERGY_BALANCE_URL, LOGIN_DEFAULT_REDIRECT_URL, CAPTCHA_URL, DEVICE_REALTIME_DATA_URL, DEVICE_REAL_KPI_URL
 from .utils import extract_numeric, encrypt_password, generate_nonce
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,6 +25,13 @@ class DeviceType(StrEnum):
     SENSOR_KWH = "sensor_kwh"
     SENSOR_PERCENTAGE = "sensor_percentage"
     SENSOR_TIME = "sensor_time"
+    SENSOR_VOLTAGE = "sensor_voltage"
+    SENSOR_CURRENT = "sensor_current"
+    SENSOR_FREQUENCY = "sensor_frequency"
+    SENSOR_TEMPERATURE = "sensor_temperature"
+    SENSOR_RESISTANCE = "sensor_resistance"
+    SENSOR_POWER_FACTOR = "sensor_power_factor"
+    SENSOR_TEXT = "sensor_text"
 
 class ENERGY_BALANCE_CALL_TYPE(StrEnum):
     """Device types."""
@@ -82,6 +89,24 @@ DEVICES = [
     {"id": "Last Authentication Time", "type": DeviceType.SENSOR_TIME, "icon": "mdi:clock-outline"},
 ]
 
+# Signal ID -> sensor definition for inverter real-time data
+INVERTER_SIGNAL_MAP = {
+    10008: {"id": "Inverter Grid Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:flash"},
+    10014: {"id": "Inverter Grid Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:current-ac"},
+    10021: {"id": "Inverter Grid Frequency", "type": DeviceType.SENSOR_FREQUENCY, "icon": "mdi:sine-wave"},
+    10023: {"id": "Inverter Internal Temperature", "type": DeviceType.SENSOR_TEMPERATURE, "icon": "mdi:thermometer"},
+    10024: {"id": "Inverter Insulation Resistance", "type": DeviceType.SENSOR_RESISTANCE, "icon": "mdi:omega"},
+    10020: {"id": "Inverter Power Factor", "type": DeviceType.SENSOR_POWER_FACTOR, "icon": "mdi:angle-acute"},
+    10025: {"id": "Inverter Status", "type": DeviceType.SENSOR_TEXT, "icon": "mdi:information-outline"},
+    10027: {"id": "Inverter Startup Time", "type": DeviceType.SENSOR_TEXT, "icon": "mdi:clock-outline"},
+    11001: {"id": "Inverter PV1 Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:solar-panel"},
+    11002: {"id": "Inverter PV1 Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:solar-panel"},
+    11004: {"id": "Inverter PV2 Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:solar-panel"},
+    11005: {"id": "Inverter PV2 Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:solar-panel"},
+    11007: {"id": "Inverter PV3 Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:solar-panel"},
+    11008: {"id": "Inverter PV3 Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:solar-panel"},
+}
+
 @dataclass
 class Device:
     """FusionSolarAPI device."""
@@ -90,7 +115,7 @@ class Device:
     device_unique_id: str
     device_type: DeviceType
     name: str
-    state: float | int | datetime
+    state: float | int | datetime | str
     icon: str
 
 
@@ -104,6 +129,7 @@ class FusionSolarAPI:
         self.captcha_input = captcha_input
         self.captcha_img = None
         self.station = None
+        self.inverter_dn = None
         self.battery_capacity = None
         self.login_host = login_host
         self.data_host = None
@@ -307,7 +333,7 @@ class FusionSolarAPI:
     
                 if self.battery_capacity is None or self.battery_capacity == 0.0:
                     self.battery_capacity = station_data["data"]["list"][0]["batteryCapacity"]
-    
+
                 self._start_session_monitor()
                 return True, self.station
     
@@ -560,6 +586,69 @@ class FusionSolarAPI:
         _LOGGER.debug("Station info: %s", json_response.get("data"))
         return json_response
 
+    def get_inverter_realtime_data(self) -> dict:
+        """Fetch real-time inverter data from device-realtime-data endpoint."""
+        if not self.inverter_dn:
+            return {}
+
+        self.refresh_csrf()
+        headers = {
+            "Accept": "application/json",
+            "Roarand": self.csrf,
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+        }
+        params = {"deviceDn": self.inverter_dn, "displayAccessModel": "true"}
+
+        url = f"https://{self.data_host}{DEVICE_REALTIME_DATA_URL}"
+        _LOGGER.debug("Getting inverter realtime data at: %s", url)
+        response = self.session.get(url, headers=headers, params=params, timeout=20)
+
+        if response.status_code != 200:
+            _LOGGER.warning("Inverter realtime data request failed: %s", response.status_code)
+            return {}
+
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            _LOGGER.warning("Inverter realtime data response is not valid JSON")
+            return {}
+
+        if not data.get("success") or not data.get("data"):
+            _LOGGER.warning("Inverter realtime data response indicates failure")
+            return {}
+
+        # Parse signals from device-realtime-data response
+        result = {}
+        for entry in data["data"]:
+            if not isinstance(entry, dict) or "signals" not in entry:
+                continue
+            for signal in entry["signals"]:
+                signal_id = signal.get("id")
+                if signal_id in INVERTER_SIGNAL_MAP:
+                    result[signal_id] = signal.get("value", "")
+
+        # Fetch PV string signals from device-real-kpi (not included in device-realtime-data)
+        pv_signal_ids = [sid for sid in INVERTER_SIGNAL_MAP if sid >= 11000]
+        if pv_signal_ids:
+            try:
+                self.refresh_csrf()
+                headers["Roarand"] = self.csrf
+                signal_str = "&".join(f"signalIds={s}" for s in pv_signal_ids)
+                kpi_url = f"https://{self.data_host}{DEVICE_REAL_KPI_URL}?deviceDn={self.inverter_dn}&{signal_str}"
+                _LOGGER.debug("Getting inverter PV KPI data at: %s", kpi_url)
+                kpi_response = self.session.get(kpi_url, headers=headers, timeout=20)
+                if kpi_response.status_code == 200:
+                    kpi_data = kpi_response.json()
+                    if kpi_data.get("success") and kpi_data.get("data", {}).get("signals"):
+                        for sid_str, val in kpi_data["data"]["signals"].items():
+                            sid = int(sid_str)
+                            if sid in INVERTER_SIGNAL_MAP:
+                                result[sid] = val.get("value", "")
+            except Exception as ex:
+                _LOGGER.warning("Failed to fetch PV string KPI data: %s", ex)
+
+        _LOGGER.debug("Inverter realtime data: %s", result)
+        return result
 
     def get_devices(self) -> list[Device]:
         self.refresh_csrf()
@@ -680,6 +769,21 @@ class FusionSolarAPI:
                             output["grid_consumption_power"] = grid_consumption_injection
                             output["grid_injection_power"] = 0.0
 
+            if self.inverter_dn is None:
+                for node in flow_data_nodes:
+                    if node.get("name") == "neteco.pvms.devTypeLangKey.inverter":
+                        dev_ids = node.get("devIds") or []
+                        dn = dev_ids[0] if dev_ids else node.get("devDn")
+                        if dn:
+                            self.inverter_dn = dn
+                            _LOGGER.info("Discovered inverter DN: %s", self.inverter_dn)
+                        else:
+                            _LOGGER.warning(
+                                "Could not determine inverter DN from inverter node. "
+                                "Node: %s", node
+                            )
+                        break
+
             self.update_output_with_battery_capacity(output)
             self.update_output_with_energy_balance(output)
 
@@ -690,7 +794,7 @@ class FusionSolarAPI:
             raise APIDataStructureError("Error on data structure! %s", response.text)
 
         """Get devices on api."""
-        return [
+        devices = [
             Device(
                 device_id=device.get("id"),
                 device_unique_id=self.get_device_unique_id(
@@ -703,6 +807,33 @@ class FusionSolarAPI:
             )
             for device in DEVICES
         ]
+
+        # Add inverter real-time sensors
+        try:
+            inverter_data = self.get_inverter_realtime_data()
+            for signal_id, value in inverter_data.items():
+                if signal_id in INVERTER_SIGNAL_MAP:
+                    sig = INVERTER_SIGNAL_MAP[signal_id]
+                    sig_type = sig["type"]
+                    if sig_type == DeviceType.SENSOR_TEXT:
+                        state = str(value)
+                    else:
+                        try:
+                            state = float(value)
+                        except (ValueError, TypeError):
+                            state = 0.0
+                    devices.append(Device(
+                        device_id=sig["id"],
+                        device_unique_id=self.get_device_unique_id(sig["id"], sig_type),
+                        device_type=sig_type,
+                        name=sig["id"],
+                        state=state,
+                        icon=sig["icon"],
+                    ))
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch inverter realtime data: %s", ex)
+
+        return devices
 
     def update_output_with_battery_capacity(self, output: Dict[str, Optional[float | str]]):
         if self.battery_capacity is None or self.battery_capacity == 0.0:
