@@ -83,7 +83,12 @@ After setting up the Integration you will get a Device which will have the follo
 The following sensors are fetched directly from the inverter device and require the inverter to be reachable via the API:
 
 * Inverter Grid Voltage (V)
-* Inverter Grid Current (A)
+* Inverter Grid Current (A, phase A on 3-phase systems)
+* Inverter Phase A Voltage (V)
+* Inverter Phase B Voltage (V)
+* Inverter Phase C Voltage (V)
+* Inverter Phase B Current (A)
+* Inverter Phase C Current (A)
 * Inverter Grid Frequency (Hz)
 * Inverter Internal Temperature (°C)
 * Inverter Insulation Resistance (MΩ)
