@@ -92,7 +92,12 @@ DEVICES = [
 # Signal ID -> sensor definition for inverter real-time data
 INVERTER_SIGNAL_MAP = {
     10008: {"id": "Inverter Grid Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:flash"},
+    10011: {"id": "Inverter Phase A Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:flash"},
+    10012: {"id": "Inverter Phase B Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:flash"},
+    10013: {"id": "Inverter Phase C Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:flash"},
     10014: {"id": "Inverter Grid Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:current-ac"},
+    10015: {"id": "Inverter Phase B Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:current-ac"},
+    10016: {"id": "Inverter Phase C Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:current-ac"},
     10021: {"id": "Inverter Grid Frequency", "type": DeviceType.SENSOR_FREQUENCY, "icon": "mdi:sine-wave"},
     10023: {"id": "Inverter Internal Temperature", "type": DeviceType.SENSOR_TEMPERATURE, "icon": "mdi:thermometer"},
     10024: {"id": "Inverter Insulation Resistance", "type": DeviceType.SENSOR_RESISTANCE, "icon": "mdi:omega"},
