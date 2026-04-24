@@ -480,8 +480,7 @@ The following dashboard section shows:
 
 ### Screenshot
 
-<!-- Replace this path with your own screenshot path -->
-![Energy Management forecast dashboard](docs/images/energy-management-forecast-dashboard.png)
+<a href="#"><img src="https://raw.githubusercontent.com/hcraveiro/Home-Assistant-FusionSolar-App/main/assets/card3.png"></a>
 
 ### Required custom cards
 
