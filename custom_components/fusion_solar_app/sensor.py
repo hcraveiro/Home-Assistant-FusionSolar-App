@@ -294,9 +294,9 @@ class FusionSolarForecastSensor(CoordinatorEntity, SensorEntity):
         return UnitOfEnergy.KILO_WATT_HOUR
 
     @property
-    def state_class(self) -> str:
+    def state_class(self) -> str | None:
         """Return state class."""
-        return SensorStateClass.MEASUREMENT
+        return None
 
     @property
     def name(self) -> str:
