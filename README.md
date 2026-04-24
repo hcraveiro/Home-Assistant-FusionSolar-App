@@ -396,7 +396,7 @@ cards:
       - entity: sensor.grid_consumption_power
       - entity: sensor.grid_injection_power
 ```
-That looks something like this: <a href="#"><img src="https://raw.githubusercontent.com/hcraveiro/Home-Assistant-FusionSolar-App/main/assets/card2.png"></a>
+That looks something like this: <a href="#"><img src="https://raw.githubusercontent.com/hcraveiro/Home-Assistant-FusionSolar-App/main/assets/card2.PNG"></a>
 
 ## Solar Production Forecast
 
