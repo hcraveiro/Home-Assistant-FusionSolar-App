@@ -12,7 +12,7 @@ Integrate FusionSolar App into your Home Assistant. This Integration was built d
   * [Card configuration](#card-configuration)
   * [Optional: Home Assistant package example (extra sensors)](#optional-home-assistant-package-example-extra-sensors)
   * [Example Lovelace cards (using the extra sensors)](#example-lovelace-cards-using-the-extra-sensors)
-  * [Solar Production Forecast](#solar_production_forecast)
+  * [Solar Production Forecast](#solar-production-forecast)
   * [FAQ](#faq)
   * [Credits](#credits)
 
