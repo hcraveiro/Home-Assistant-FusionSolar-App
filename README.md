@@ -12,6 +12,7 @@ Integrate FusionSolar App into your Home Assistant. This Integration was built d
   * [Card configuration](#card-configuration)
   * [Optional: Home Assistant package example (extra sensors)](#optional-home-assistant-package-example-extra-sensors)
   * [Example Lovelace cards (using the extra sensors)](#example-lovelace-cards-using-the-extra-sensors)
+  * [Solar Production Forecast](#solar_production_forecast)
   * [FAQ](#faq)
   * [Credits](#credits)
 
@@ -393,6 +394,427 @@ cards:
       - entity: sensor.grid_injection_power
 ```
 That looks something like this: <a href="#"><img src="https://raw.githubusercontent.com/hcraveiro/Home-Assistant-FusionSolar-App/main/assets/card2.png"></a>
+
+## Solar Production Forecast
+
+This integration exposes two additional forecast sensors for the current day panel production:
+
+| Sensor | Description |
+|---|---|
+| `Panel Production Forecasted Today` | Estimated total panel production for the current day, in kWh |
+| `Panel Production Remaining Today` | Estimated remaining panel production for the current day, in kWh |
+
+The forecast is built from the historical values of the `Panel Production Today` sensor stored in Home Assistant Recorder.
+
+### How it works
+
+The forecast model uses the last 7 days of panel production history and applies weighted averages to estimate the expected production curve for the current day.
+
+Recent days have more influence than older days:
+
+```text
+Day -1: 40%
+Day -2: 25%
+Day -3: 15%
+Day -4: 10%
+Day -5: 5%
+Day -6: 3%
+Day -7: 2%
+```
+
+The forecast is generated as a daily cumulative curve. Each point contains:
+
+| Attribute | Description |
+|---|---|
+| `time` | Timestamp of the curve point |
+| `value` | Cumulative forecasted production at that time, in kWh |
+| `delta_kwh` | Expected production during that interval |
+| `power_w` | Estimated power for that interval, in W |
+| `source` | Either `actual`, `actual_now` or `forecast` |
+
+The forecast uses a persistent daily cache. The historical forecast curve is built once per day and reused during the day. If Home Assistant restarts, the cache is restored when possible. If the cache is missing, outdated or incompatible, it is rebuilt automatically.
+
+The forecasted total is calculated as:
+
+```text
+current actual production + remaining forecasted deltas
+```
+
+This allows the forecast to follow the real production already measured today while still using the historical production pattern for the remaining hours.
+
+### Forecast smoothing
+
+Historical solar production can contain short spikes caused by clouds, shading, sensor updates or recorder sampling intervals.
+
+To make the forecast more useful for dashboards, the integration smooths the forecast delta curve while preserving the total expected daily energy. This avoids unrealistic instant power spikes without changing the forecasted total production.
+
+### Recorder and database usage
+
+The forecast sensors expose a large `curve` attribute used by dashboard cards such as ApexCharts.
+
+To avoid unnecessary database growth, the integration marks forecast sensor attributes as unrecorded. The current state of the sensors is still recorded, but large attributes such as the forecast curve are not stored historically.
+
+This means:
+
+- the forecast sensor values can still have history;
+- the current `curve` attribute is still available for dashboards;
+- the Recorder database is not filled with repeated large forecast attributes.
+
+### Notes
+
+The forecast depends on Home Assistant Recorder history. For best results, make sure the source sensor `Panel Production Today` has at least a few days of history available.
+
+The first forecast days may be less accurate until enough historical data exists.
+
+## Dashboard example
+
+The following dashboard section shows:
+
+- realtime panel production;
+- realtime forecasted production;
+- cumulative panel production;
+- cumulative forecasted production;
+- forecasted and remaining production sensors.
+
+> Replace the entity IDs with your own entities if needed.
+
+### Screenshot
+
+<!-- Replace this path with your own screenshot path -->
+![Energy Management forecast dashboard](docs/images/energy-management-forecast-dashboard.png)
+
+### Required custom cards
+
+This dashboard example uses:
+
+- `custom:apexcharts-card`
+- `custom:card-templater`
+- `custom:mushroom-chips-card`
+
+### Optional helper
+
+The dashboard example uses an `input_number` helper to navigate between days:
+
+```yaml
+input_number:
+  graph_offset:
+    name: Graph Offset
+    min: 0
+    max: 30
+    step: 1
+    mode: box
+```
+
+The date chip expects a template sensor similar to this:
+
+```yaml
+template:
+  - sensor:
+      - name: Graph Offset Date
+        state: >
+          {% set offset = states('input_number.graph_offset') | int(0) %}
+          {{ (as_timestamp(now()) - (offset * 86400)) | timestamp_custom('%Y-%m-%d', true) }}
+```
+
+### Dashboard YAML
+
+```yaml
+type: grid
+cards:
+  - type: heading
+    heading: Energy Management
+    heading_style: title
+    icon: mdi:solar-power
+  - type: custom:mushroom-chips-card
+    alignment: center
+    chips:
+      - type: entity
+        entity: input_number.graph_offset
+        content_info: none
+        icon: mdi:arrow-left
+        tap_action:
+          action: call-service
+          service: input_number.increment
+          service-data:
+            entity_id: input_number.graph_offset
+          target:
+            entity_id: input_number.graph_offset
+      - type: template
+        content: |
+          {{ states('sensor.graph_offset_date') }}
+        icon: mdi:calendar
+        tap_action:
+          action: none
+      - type: entity
+        entity: input_number.graph_offset
+        content_info: none
+        icon: mdi:arrow-right
+        tap_action:
+          action: call-service
+          service: input_number.decrement
+          service-data:
+            entity_id: input_number.graph_offset
+          target:
+            entity_id: input_number.graph_offset
+      - type: entity
+        entity: input_number.graph_offset
+        name: Today
+        content_info: name
+        icon: mdi:home
+        tap_action:
+          action: call-service
+          service: input_number.set_value
+          service-data:
+            entity_id: input_number.graph_offset
+          target:
+            entity_id: input_number.graph_offset
+          data:
+            value: 0
+  - type: custom:card-templater
+    entities:
+      - input_number.graph_offset
+    card:
+      type: custom:apexcharts-card
+      graph_span: 24h
+      header:
+        show: true
+        title: Realtime Panel Production
+      span:
+        start: day
+        offset_template: "-{{ states('input_number.graph_offset') }}d"
+      all_series_config:
+        stroke_width: 2
+      experimental:
+        hidden_by_default: true
+      apex_config:
+        yaxis:
+          title:
+            text: kW
+      series:
+        - entity: sensor.house_load_power
+          name: House Load
+          type: area
+          extend_to: false
+        - entity: sensor.panel_production_power
+          name: Panel Production
+          type: area
+          extend_to: false
+        - entity: sensor.fusion_solar_ne_xxxxxx_panel_production_forecasted_today
+          name: Forecast Power
+          type: area
+          unit: kW
+          color: blue
+          opacity: 0.7
+          data_generator: >
+            const data = entity.attributes.curve;
+
+            if (!data || data.length === 0) return [];
+
+
+            const stepMinutes = Number(entity.attributes.step_minutes || 5);
+
+            const stepHours = stepMinutes / 60;
+
+            const now = Date.now();
+
+
+            const result = [];
+
+
+            let firstForecastIndex = null;
+
+            let lastActualIndex = null;
+
+
+            for (let i = 0; i < data.length; i++) {
+              const item = data[i];
+              const t = new Date(item.time).getTime();
+
+              if (
+                item.source === "forecast" &&
+                t >= now &&
+                firstForecastIndex === null
+              ) {
+                firstForecastIndex = i;
+              }
+
+              if (
+                (item.source === "actual" || item.source === "actual_now") &&
+                t <= now
+              ) {
+                lastActualIndex = i;
+              }
+            }
+
+
+            if (firstForecastIndex === null) return [];
+
+
+            const firstForecastItem = data[firstForecastIndex];
+
+            const firstForecastDelta = Number(firstForecastItem.delta_kwh || 0);
+
+            const firstForecastPowerKw = stepHours > 0
+              ? Math.max(0, firstForecastDelta / stepHours)
+              : 0;
+
+            // Bridge from the last actual point, capped to the first forecast
+            power.
+
+            // This avoids an artificial spike caused by the last actual bucket.
+
+            if (lastActualIndex !== null) {
+              const actualItem = data[lastActualIndex];
+              const actualTime = new Date(actualItem.time).getTime();
+              const actualPowerKw = Math.max(0, Number(actualItem.power_w || 0) / 1000);
+
+              const bridgePowerKw = Math.min(
+                actualPowerKw,
+                firstForecastPowerKw
+              );
+
+              result.push([actualTime, bridgePowerKw]);
+
+              if (actualTime < now) {
+                result.push([now, bridgePowerKw]);
+              }
+            }
+
+
+            for (let i = firstForecastIndex; i < data.length; i++) {
+              const item = data[i];
+
+              if (item.source !== "forecast") continue;
+
+              const t = new Date(item.time).getTime();
+              if (t < now) continue;
+
+              const delta = Number(item.delta_kwh || 0);
+              const powerKw = stepHours > 0 ? delta / stepHours : 0;
+
+              result.push([
+                t,
+                Math.max(0, powerKw)
+              ]);
+            }
+
+
+            return result;
+        - entity: sensor.battery_injection_power
+          name: Battery Charge
+          type: area
+          extend_to: false
+          show:
+            hidden_by_default: true
+        - entity: sensor.battery_consumption_power
+          name: Battery Discharge
+          type: area
+          extend_to: false
+          show:
+            hidden_by_default: true
+  - type: custom:apexcharts-card
+    graph_span: 24h
+    span:
+      start: day
+    header:
+      show: true
+      title: Cumulative Panel Production
+    all_series_config:
+      stroke_width: 2
+    apex_config:
+      yaxis:
+        title:
+          text: kWh
+        labels:
+          formatter: |
+            EVAL:function (val) {
+              if (val === null || val === undefined) return "";
+              const num = Number(val);
+              if (isNaN(num)) return "";
+              return num.toFixed(1);
+            }
+    series:
+      - entity: sensor.panel_production_today
+        name: Actual
+        type: line
+        extend_to: now
+      - entity: sensor.fusion_solar_ne_xxxxxx_panel_production_forecasted_today
+        name: Forecast
+        type: line
+        unit: kWh
+        data_generator: |
+          const data = entity.attributes.curve;
+          if (!data || data.length === 0) return [];
+
+          const now = Date.now();
+          const result = [];
+
+          let firstForecastIndex = null;
+          let lastActualIndex = null;
+
+          for (let i = 0; i < data.length; i++) {
+            const item = data[i];
+            const t = new Date(item.time).getTime();
+
+            if (
+              item.source === "forecast" &&
+              t >= now &&
+              firstForecastIndex === null
+            ) {
+              firstForecastIndex = i;
+            }
+
+            if (
+              (item.source === "actual" || item.source === "actual_now") &&
+              t <= now
+            ) {
+              lastActualIndex = i;
+            }
+          }
+
+          if (firstForecastIndex === null) return [];
+
+          // Bridge from the last actual cumulative value.
+          if (lastActualIndex !== null) {
+            const actualItem = data[lastActualIndex];
+            const actualTime = new Date(actualItem.time).getTime();
+            const actualValue = Number(actualItem.value);
+
+            if (!isNaN(actualValue)) {
+              result.push([actualTime, actualValue]);
+
+              if (actualTime < now) {
+                result.push([now, actualValue]);
+              }
+            }
+          }
+
+          for (let i = firstForecastIndex; i < data.length; i++) {
+            const item = data[i];
+
+            if (item.source !== "forecast") continue;
+
+            const t = new Date(item.time).getTime();
+            if (t < now) continue;
+
+            const value = Number(item.value);
+            if (isNaN(value)) continue;
+
+            result.push([t, value]);
+          }
+
+          return result;
+  - type: heading
+    icon: mdi:chart-areaspline-variant
+    heading: Forecast
+    heading_style: title
+  - type: entities
+    entities:
+      - entity: sensor.fusion_solar_ne_xxxxxx_panel_production_forecasted_today
+        name: Panel Production Forecasted Today
+      - entity: sensor.fusion_solar_ne_xxxxxx_panel_production_remaining_today
+        name: Panel Production Remaining Today
+```
 
 ## FAQ
 
