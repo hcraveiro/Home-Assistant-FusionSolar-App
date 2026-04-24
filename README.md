@@ -13,6 +13,7 @@ Integrate FusionSolar App into your Home Assistant. This Integration was built d
   * [Optional: Home Assistant package example (extra sensors)](#optional-home-assistant-package-example-extra-sensors)
   * [Example Lovelace cards (using the extra sensors)](#example-lovelace-cards-using-the-extra-sensors)
   * [Solar Production Forecast](#solar-production-forecast)
+  * [Dashboard example](#dashboard-example)
   * [FAQ](#faq)
   * [Credits](#credits)
 
@@ -26,9 +27,9 @@ The configuration happens in the configuration flow when you add the integration
 
 ## Configuration
 
-To access FusionSolar App you'll need an App account first. When you get it from your installer you'll have an Username and Password. That account is used on this integration. You will need also to provide the Fusion Solar Host you use to login on Fusion Solar App, as you will only be ablet o login on your specific region.
+To access FusionSolar App you'll need an App account first. When you get it from your installer you'll have an Username and Password. That account is used on this integration. You will need also to provide the Fusion Solar host you use to log in to Fusion Solar App, as you will only be able to log in to your specific region.
 
-The default sensor's update frequency is 60 seconds, although the FusionSolar App only gets data every 5 minutes. It is just to make sure that as soon as the data can be retrieved from the API the sensors will be updated as soon as possible. After configuring the Integration you can go on the Config Entry and press configure where you'll have the opportunity to change de default update frequency (in seconds). Bare in mind that too frequent will not get data more frequent than 5 minutes and may push the API too much.
+The default sensor's update frequency is 60 seconds, although the FusionSolar App only gets data every 5 minutes. It is just to make sure that as soon as the data can be retrieved from the API the sensors will be updated as soon as possible. After configuring the integration, you can open the config entry and press Configure to change the default update frequency in seconds. Bear in mind that setting it too low will not make the API return data more often than every 5 minutes, and may put unnecessary pressure on the API.
 
 ### Device Data
 
@@ -78,6 +79,8 @@ After setting up the Integration you will get a Device which will have the follo
 * Battery Percentage (%)
 * Battery Capacity
 * Last Authentication Time
+* Panel Production Forecasted Today (kWh)
+* Panel Production Remaining Today (kWh)
 
 #### Inverter Real-Time Sensors
 
@@ -422,15 +425,22 @@ Day -6: 3%
 Day -7: 2%
 ```
 
-The forecast is generated as a daily cumulative curve. Each point contains:
+The forecast sensor exposes a raw `curve` attribute. Each point in the curve contains:
 
 | Attribute | Description |
 |---|---|
 | `time` | Timestamp of the curve point |
-| `value` | Cumulative forecasted production at that time, in kWh |
-| `delta_kwh` | Expected production during that interval |
+| `value` | Cumulative production at that time, in kWh |
+| `delta_kwh` | Production during that interval, in kWh |
 | `power_w` | Estimated power for that interval, in W |
 | `source` | Either `actual`, `actual_now` or `forecast` |
+
+The sensor also exposes ApexCharts-ready attributes:
+
+| Attribute | Description |
+|---|---|
+| `forecast_power_chart` | Forecasted instant power series, ready to be used by ApexCharts |
+| `forecast_cumulative_chart` | Forecasted cumulative production series, ready to be used by ApexCharts |
 
 The forecast uses a persistent daily cache. The historical forecast curve is built once per day and reused during the day. If Home Assistant restarts, the cache is restored when possible. If the cache is missing, outdated or incompatible, it is rebuilt automatically.
 
@@ -450,15 +460,20 @@ To make the forecast more useful for dashboards, the integration smooths the for
 
 ### Recorder and database usage
 
-The forecast sensors expose a large `curve` attribute used by dashboard cards such as ApexCharts.
+The forecast sensors expose large attributes such as `curve`, `forecast_power_chart` and `forecast_cumulative_chart`.
 
-To avoid unnecessary database growth, the integration marks forecast sensor attributes as unrecorded. The current state of the sensors is still recorded, but large attributes such as the forecast curve are not stored historically.
+These attributes are useful for dashboards, but they should not be stored repeatedly in the Recorder database.
+
+To avoid unnecessary database growth, the integration marks forecast sensor attributes as unrecorded. The current state of the sensors can still be stored by Recorder, but the large attributes are not stored historically.
+
+The forecast sensors intentionally do not expose a `state_class`. This prevents Home Assistant from generating long-term statistics for forecast values, which are not real measurements and can change throughout the day.
 
 This means:
 
-- the forecast sensor values can still have history;
-- the current `curve` attribute is still available for dashboards;
-- the Recorder database is not filled with repeated large forecast attributes.
+- the current forecast value is still available as the sensor state;
+- the current forecast attributes are still available for dashboards;
+- large forecast attributes are not stored in Recorder;
+- long-term statistics are not generated for forecast sensors.
 
 ### Notes
 
@@ -516,6 +531,23 @@ template:
 ```
 
 ### Dashboard YAML
+The dashboard example below uses the ApexCharts-ready attributes exposed by the forecast sensor, so the chart configuration can stay simple.
+
+For the instant power forecast series:
+
+```yaml
+data_generator: |
+  return entity.attributes.forecast_power_chart || [];
+```
+
+For the cumulative forecast series:
+
+```yaml
+data_generator: |
+  return entity.attributes.forecast_cumulative_chart || [];
+```
+
+In the example below, replace `sensor.fusion_solar_ne_xxxxx_panel_production_forecasted_today` and `sensor.fusion_solar_ne_xxxxx_panel_production_remaining_today` with the actual entity IDs created in your Home Assistant instance.
 
 ```yaml
 type: grid
@@ -680,5 +712,5 @@ If you want to help me solve that, either you provide me with credentials to sim
 
 ## Credits
 
-A big thank you to Mark Parker ([msp1974](https://github.com/msp1974)) for providing the Community with a set of [Home Assistant Integration Templates](https://github.com/msp1974/HAIntegrationExamples) from which I started to create this Integration-
+A big thank you to Mark Parker ([msp1974](https://github.com/msp1974)) for providing the Community with a set of [Home Assistant Integration Templates](https://github.com/msp1974/HAIntegrationExamples) from which I started to create this Integration.
 Another big thank you to Tijs Verkoyen for his [Integration](https://github.com/tijsverkoyen/HomeAssistant-FusionSolar) as I also took inspiration from there.
