@@ -25,6 +25,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .api import Device, DeviceType
 from .const import DOMAIN
@@ -113,6 +114,189 @@ def _forecast_to_dict(forecast: Any) -> dict[str, Any]:
 
     return payload
 
+def _get_timestamp_ms(value: Any) -> int | None:
+    """Convert a datetime value to a JavaScript timestamp in milliseconds."""
+    if isinstance(value, datetime):
+        parsed_dt = value
+    elif isinstance(value, str):
+        parsed_dt = dt_util.parse_datetime(value)
+    else:
+        return None
+
+    if parsed_dt is None:
+        return None
+
+    if parsed_dt.tzinfo is None:
+        parsed_dt = dt_util.as_local(parsed_dt)
+
+    return int(parsed_dt.timestamp() * 1000)
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Return a float value with a fallback."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_forecast_power_chart(payload: dict[str, Any]) -> list[list[float]]:
+    """Build an ApexCharts-ready power forecast series."""
+    curve = payload.get("curve")
+
+    if not isinstance(curve, list) or not curve:
+        return []
+
+    step_minutes = _safe_float(payload.get("step_minutes"), 5.0)
+    step_hours = step_minutes / 60
+    now_ms = int(dt_util.now().timestamp() * 1000)
+
+    result: list[list[float]] = []
+
+    first_forecast_index: int | None = None
+    last_actual_index: int | None = None
+
+    for index, item in enumerate(curve):
+        if not isinstance(item, dict):
+            continue
+
+        timestamp_ms = _get_timestamp_ms(item.get("time"))
+        if timestamp_ms is None:
+            continue
+
+        source = item.get("source")
+
+        if (
+            source == "forecast"
+            and timestamp_ms >= now_ms
+            and first_forecast_index is None
+        ):
+            first_forecast_index = index
+
+        if source in ("actual", "actual_now") and timestamp_ms <= now_ms:
+            last_actual_index = index
+
+    if first_forecast_index is None:
+        return []
+
+    first_forecast_item = curve[first_forecast_index]
+    first_forecast_delta = _safe_float(first_forecast_item.get("delta_kwh"))
+    first_forecast_power_kw = (
+        max(0.0, first_forecast_delta / step_hours)
+        if step_hours > 0
+        else 0.0
+    )
+
+    if last_actual_index is not None:
+        actual_item = curve[last_actual_index]
+        actual_time = _get_timestamp_ms(actual_item.get("time"))
+
+        if actual_time is not None:
+            actual_power_kw = max(
+                0.0,
+                _safe_float(actual_item.get("power_w")) / 1000,
+            )
+
+            bridge_power_kw = min(
+                actual_power_kw,
+                first_forecast_power_kw,
+            )
+
+            result.append([actual_time, round(bridge_power_kw, 3)])
+
+            if actual_time < now_ms:
+                result.append([now_ms, round(bridge_power_kw, 3)])
+
+    for item in curve[first_forecast_index:]:
+        if not isinstance(item, dict):
+            continue
+
+        if item.get("source") != "forecast":
+            continue
+
+        timestamp_ms = _get_timestamp_ms(item.get("time"))
+        if timestamp_ms is None or timestamp_ms < now_ms:
+            continue
+
+        delta_kwh = _safe_float(item.get("delta_kwh"))
+        power_kw = delta_kwh / step_hours if step_hours > 0 else 0.0
+
+        result.append(
+            [
+                timestamp_ms,
+                round(max(0.0, power_kw), 3),
+            ]
+        )
+
+    return result
+
+
+def _build_forecast_cumulative_chart(payload: dict[str, Any]) -> list[list[float]]:
+    """Build an ApexCharts-ready cumulative forecast series."""
+    curve = payload.get("curve")
+
+    if not isinstance(curve, list) or not curve:
+        return []
+
+    now_ms = int(dt_util.now().timestamp() * 1000)
+
+    result: list[list[float]] = []
+
+    first_forecast_index: int | None = None
+    last_actual_index: int | None = None
+
+    for index, item in enumerate(curve):
+        if not isinstance(item, dict):
+            continue
+
+        timestamp_ms = _get_timestamp_ms(item.get("time"))
+        if timestamp_ms is None:
+            continue
+
+        source = item.get("source")
+
+        if (
+            source == "forecast"
+            and timestamp_ms >= now_ms
+            and first_forecast_index is None
+        ):
+            first_forecast_index = index
+
+        if source in ("actual", "actual_now") and timestamp_ms <= now_ms:
+            last_actual_index = index
+
+    if first_forecast_index is None:
+        return []
+
+    if last_actual_index is not None:
+        actual_item = curve[last_actual_index]
+        actual_time = _get_timestamp_ms(actual_item.get("time"))
+        actual_value = _safe_float(actual_item.get("value"), None)
+
+        if actual_time is not None and actual_value is not None:
+            result.append([actual_time, round(actual_value, 3)])
+
+            if actual_time < now_ms:
+                result.append([now_ms, round(actual_value, 3)])
+
+    for item in curve[first_forecast_index:]:
+        if not isinstance(item, dict):
+            continue
+
+        if item.get("source") != "forecast":
+            continue
+
+        timestamp_ms = _get_timestamp_ms(item.get("time"))
+        if timestamp_ms is None or timestamp_ms < now_ms:
+            continue
+
+        value = _safe_float(item.get("value"), None)
+        if value is None:
+            continue
+
+        result.append([timestamp_ms, round(value, 3)])
+
+    return result
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -353,11 +537,17 @@ class FusionSolarForecastedTodaySensor(FusionSolarForecastSensor):
             "days",
             "start_of_day",
             "end_of_day",
-            "debug",
         ):
             value = payload.get(key)
             if value is not None:
                 attrs[key] = value
+    
+        attrs["forecast_power_chart"] = _build_forecast_power_chart(payload)
+        attrs["forecast_cumulative_chart"] = _build_forecast_cumulative_chart(payload)
+    
+        debug = payload.get("debug")
+        if debug:
+            attrs["debug"] = debug
     
         return attrs
 
