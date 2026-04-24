@@ -598,107 +598,14 @@ cards:
           name: Panel Production
           type: area
           extend_to: false
-        - entity: sensor.fusion_solar_ne_xxxxxx_panel_production_forecasted_today
+        - entity: sensor.fusion_solar_ne_xxxxx_panel_production_forecasted_today
           name: Forecast Power
           type: area
           unit: kW
           color: blue
           opacity: 0.7
-          data_generator: >
-            const data = entity.attributes.curve;
-
-            if (!data || data.length === 0) return [];
-
-
-            const stepMinutes = Number(entity.attributes.step_minutes || 5);
-
-            const stepHours = stepMinutes / 60;
-
-            const now = Date.now();
-
-
-            const result = [];
-
-
-            let firstForecastIndex = null;
-
-            let lastActualIndex = null;
-
-
-            for (let i = 0; i < data.length; i++) {
-              const item = data[i];
-              const t = new Date(item.time).getTime();
-
-              if (
-                item.source === "forecast" &&
-                t >= now &&
-                firstForecastIndex === null
-              ) {
-                firstForecastIndex = i;
-              }
-
-              if (
-                (item.source === "actual" || item.source === "actual_now") &&
-                t <= now
-              ) {
-                lastActualIndex = i;
-              }
-            }
-
-
-            if (firstForecastIndex === null) return [];
-
-
-            const firstForecastItem = data[firstForecastIndex];
-
-            const firstForecastDelta = Number(firstForecastItem.delta_kwh || 0);
-
-            const firstForecastPowerKw = stepHours > 0
-              ? Math.max(0, firstForecastDelta / stepHours)
-              : 0;
-
-            // Bridge from the last actual point, capped to the first forecast
-            power.
-
-            // This avoids an artificial spike caused by the last actual bucket.
-
-            if (lastActualIndex !== null) {
-              const actualItem = data[lastActualIndex];
-              const actualTime = new Date(actualItem.time).getTime();
-              const actualPowerKw = Math.max(0, Number(actualItem.power_w || 0) / 1000);
-
-              const bridgePowerKw = Math.min(
-                actualPowerKw,
-                firstForecastPowerKw
-              );
-
-              result.push([actualTime, bridgePowerKw]);
-
-              if (actualTime < now) {
-                result.push([now, bridgePowerKw]);
-              }
-            }
-
-
-            for (let i = firstForecastIndex; i < data.length; i++) {
-              const item = data[i];
-
-              if (item.source !== "forecast") continue;
-
-              const t = new Date(item.time).getTime();
-              if (t < now) continue;
-
-              const delta = Number(item.delta_kwh || 0);
-              const powerKw = stepHours > 0 ? delta / stepHours : 0;
-
-              result.push([
-                t,
-                Math.max(0, powerKw)
-              ]);
-            }
-
-
-            return result;
+          data_generator: |
+            return entity.attributes.forecast_power_chart || [];
         - entity: sensor.battery_injection_power
           name: Battery Charge
           type: area
@@ -737,81 +644,21 @@ cards:
         name: Actual
         type: line
         extend_to: now
-      - entity: sensor.fusion_solar_ne_xxxxxx_panel_production_forecasted_today
+      - entity: sensor.fusion_solar_ne_xxxxx_panel_production_forecasted_today
         name: Forecast
         type: line
         unit: kWh
         data_generator: |
-          const data = entity.attributes.curve;
-          if (!data || data.length === 0) return [];
-
-          const now = Date.now();
-          const result = [];
-
-          let firstForecastIndex = null;
-          let lastActualIndex = null;
-
-          for (let i = 0; i < data.length; i++) {
-            const item = data[i];
-            const t = new Date(item.time).getTime();
-
-            if (
-              item.source === "forecast" &&
-              t >= now &&
-              firstForecastIndex === null
-            ) {
-              firstForecastIndex = i;
-            }
-
-            if (
-              (item.source === "actual" || item.source === "actual_now") &&
-              t <= now
-            ) {
-              lastActualIndex = i;
-            }
-          }
-
-          if (firstForecastIndex === null) return [];
-
-          // Bridge from the last actual cumulative value.
-          if (lastActualIndex !== null) {
-            const actualItem = data[lastActualIndex];
-            const actualTime = new Date(actualItem.time).getTime();
-            const actualValue = Number(actualItem.value);
-
-            if (!isNaN(actualValue)) {
-              result.push([actualTime, actualValue]);
-
-              if (actualTime < now) {
-                result.push([now, actualValue]);
-              }
-            }
-          }
-
-          for (let i = firstForecastIndex; i < data.length; i++) {
-            const item = data[i];
-
-            if (item.source !== "forecast") continue;
-
-            const t = new Date(item.time).getTime();
-            if (t < now) continue;
-
-            const value = Number(item.value);
-            if (isNaN(value)) continue;
-
-            result.push([t, value]);
-          }
-
-          return result;
+          return entity.attributes.forecast_cumulative_chart || [];
   - type: heading
     icon: mdi:chart-areaspline-variant
     heading: Forecast
     heading_style: title
   - type: entities
     entities:
-      - entity: sensor.fusion_solar_ne_xxxxxx_panel_production_forecasted_today
+      - entity: sensor.fusion_solar_ne_xxxxx_panel_production_forecasted_today
         name: Panel Production Forecasted Today
-      - entity: sensor.fusion_solar_ne_xxxxxx_panel_production_remaining_today
+      - entity: sensor.fusion_solar_ne_xxxxx_panel_production_remaining_today
         name: Panel Production Remaining Today
 ```
 
