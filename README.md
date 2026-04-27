@@ -409,6 +409,8 @@ This integration exposes two additional forecast sensors for the current day pan
 
 The forecast is built from the historical values of the `Panel Production Today` sensor stored in Home Assistant Recorder.
 
+> This is not a weather-based forecast. It is a local statistical forecast based on your own recent production history.
+
 ### How it works
 
 The forecast model uses the last 7 days of panel production history and applies weighted averages to estimate the expected production curve for the current day.
@@ -424,6 +426,31 @@ Day -5: 5%
 Day -6: 3%
 Day -7: 2%
 ```
+
+For each time interval, the integration calculates the historical production delta and builds a daily forecast delta curve.
+
+Because FusionSolar App data is not updated continuously, some days may contain artificial gaps or jumps. For example, if the API skips a few update cycles and then reports the accumulated production later, a single 5-minute interval may appear to contain an unrealistic production spike.
+
+To reduce the impact of this, the forecast uses a robust average for each interval. Very low or very high outliers are filtered out before calculating the weighted average. This helps avoid cases where missing data produces false zero values or delayed API updates produce unrealistic power spikes.
+
+The resulting delta curve is then smoothed while preserving the expected total energy.
+
+### Forecast calculation
+
+During the day, the forecast combines:
+
+- the real production already measured today;
+- the remaining forecasted production based on the historical pattern.
+
+In simplified terms:
+
+```text
+forecasted total today = current actual production + remaining forecasted production
+```
+
+The `Panel Production Remaining Today` sensor represents only the estimated production still expected for the rest of the current day.
+
+### Forecast attributes
 
 The forecast sensor exposes a raw `curve` attribute. Each point in the curve contains:
 
@@ -442,21 +469,25 @@ The sensor also exposes ApexCharts-ready attributes:
 | `forecast_power_chart` | Forecasted instant power series, ready to be used by ApexCharts |
 | `forecast_cumulative_chart` | Forecasted cumulative production series, ready to be used by ApexCharts |
 
-The forecast uses a persistent daily cache. The historical forecast curve is built once per day and reused during the day. If Home Assistant restarts, the cache is restored when possible. If the cache is missing, outdated or incompatible, it is rebuilt automatically.
+### Forecast cache
 
-The forecasted total is calculated as:
+The forecast uses a persistent daily cache.
 
-```text
-current actual production + remaining forecasted deltas
-```
+The historical forecast curve is built once per day and reused during the day. If Home Assistant restarts, the cache is restored when possible. If the cache is missing, outdated or incompatible, it is rebuilt automatically.
 
-This allows the forecast to follow the real production already measured today while still using the historical production pattern for the remaining hours.
+The cache may also be rebuilt automatically when the forecast algorithm changes between integration versions.
 
-### Forecast smoothing
+### Forecast smoothing and outlier filtering
 
-Historical solar production can contain short spikes caused by clouds, shading, sensor updates or recorder sampling intervals.
+Historical solar production can contain short spikes caused by clouds, shading, API update delays, sensor updates or Recorder sampling intervals.
 
-To make the forecast more useful for dashboards, the integration smooths the forecast delta curve while preserving the total expected daily energy. This avoids unrealistic instant power spikes without changing the forecasted total production.
+To make the forecast more useful for dashboards, the integration applies:
+
+- weighted historical averaging;
+- robust outlier filtering;
+- delta-curve smoothing.
+
+This avoids unrealistic instant power spikes without losing the expected daily production shape.
 
 ### Recorder and database usage
 
@@ -475,11 +506,15 @@ This means:
 - large forecast attributes are not stored in Recorder;
 - long-term statistics are not generated for forecast sensors.
 
-### Notes
+### Notes and limitations
 
 The forecast depends on Home Assistant Recorder history. For best results, make sure the source sensor `Panel Production Today` has at least a few days of history available.
 
 The first forecast days may be less accurate until enough historical data exists.
+
+FusionSolar App data is usually updated every few minutes, not continuously. Depending on your region, account and API behaviour, updates may arrive roughly every 5 minutes or sometimes slightly later. This can create visible jumps in charts based on cumulative production sensors.
+
+The forecast is designed to reduce the impact of those jumps, but the real-time production chart may still show short spikes if it is derived from cumulative energy values instead of using a direct instant power sensor.
 
 ## Dashboard example
 
