@@ -34,7 +34,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 FORECAST_DEBUG_ENABLED = False
-FORECAST_CACHE_ALGORITHM_VERSION = 4
+FORECAST_CACHE_ALGORITHM_VERSION = 5
+FORECAST_OUTLIER_FILTER_MIN_SAMPLES = 4
+FORECAST_OUTLIER_FILTER_MIN_POSITIVE_SAMPLES = 3
+FORECAST_OUTLIER_FILTER_MIN_DELTA_KWH = 0.005
+FORECAST_OUTLIER_FILTER_LOW_FACTOR = 0.35
+FORECAST_OUTLIER_FILTER_HIGH_FACTOR = 2.25
+FORECAST_OUTLIER_FILTER_MIN_UPPER_MARGIN_KWH = 0.05
 FORECAST_DELTA_SMOOTHING_RADIUS = 6
 FORECAST_DELTA_SMOOTHING_PASSES = 3
 FORECAST_CACHE_STORAGE_VERSION = 1
@@ -776,10 +782,9 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                     )
     
                 if weighted_deltas:
-                    total_weight = sum(weight for _, weight in weighted_deltas)
-                    delta_kwh = sum(
-                        delta * weight for delta, weight in weighted_deltas
-                    ) / total_weight
+                    delta_kwh = self._calculate_robust_weighted_delta(
+                        weighted_deltas
+                    )
                 else:
                     delta_kwh = 0.0
     
@@ -809,7 +814,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
         smoothed_total = sum(smoothed_delta_values)
     
         _LOGGER.info(
-            "[fusion_solar.forecast] built smoothed delta cache "
+            "[fusion_solar.forecast] built robust smoothed delta cache "
             "(raw_total=%.3f, smoothed_total=%.3f, curves=%s)",
             raw_total,
             smoothed_total,
@@ -1296,3 +1301,93 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             ),
             "historical_day_summaries": historical_day_summaries,
         }
+    
+    def _calculate_weighted_average_delta(
+        self,
+        weighted_deltas: list[tuple[float, float]],
+    ) -> float:
+        """Calculate a weighted average delta."""
+        valid_deltas = [
+            (max(0.0, float(delta)), max(0.0, float(weight)))
+            for delta, weight in weighted_deltas
+            if weight > 0
+        ]
+    
+        if not valid_deltas:
+            return 0.0
+    
+        total_weight = sum(weight for _, weight in valid_deltas)
+    
+        if total_weight <= 0:
+            return 0.0
+    
+        return max(
+            0.0,
+            sum(delta * weight for delta, weight in valid_deltas) / total_weight,
+        )
+
+
+    def _calculate_median_delta(
+        self,
+        delta_values: list[float],
+    ) -> float:
+        """Calculate the median delta value."""
+        if not delta_values:
+            return 0.0
+    
+        sorted_values = sorted(delta_values)
+        middle_index = len(sorted_values) // 2
+    
+        if len(sorted_values) % 2 == 1:
+            return sorted_values[middle_index]
+    
+        return (
+            sorted_values[middle_index - 1]
+            + sorted_values[middle_index]
+        ) / 2
+    
+    
+    def _calculate_robust_weighted_delta(
+        self,
+        weighted_deltas: list[tuple[float, float]],
+    ) -> float:
+        """Calculate a robust weighted delta by excluding low and high outliers."""
+        valid_deltas = [
+            (max(0.0, float(delta)), max(0.0, float(weight)))
+            for delta, weight in weighted_deltas
+            if weight > 0
+        ]
+    
+        if len(valid_deltas) < FORECAST_OUTLIER_FILTER_MIN_SAMPLES:
+            return self._calculate_weighted_average_delta(valid_deltas)
+    
+        positive_delta_values = [
+            delta
+            for delta, _ in valid_deltas
+            if delta >= FORECAST_OUTLIER_FILTER_MIN_DELTA_KWH
+        ]
+    
+        if len(positive_delta_values) < FORECAST_OUTLIER_FILTER_MIN_POSITIVE_SAMPLES:
+            return self._calculate_weighted_average_delta(valid_deltas)
+    
+        median_delta = self._calculate_median_delta(positive_delta_values)
+    
+        if median_delta <= 0:
+            return self._calculate_weighted_average_delta(valid_deltas)
+    
+        lower_limit = median_delta * FORECAST_OUTLIER_FILTER_LOW_FACTOR
+        upper_limit = max(
+            median_delta * FORECAST_OUTLIER_FILTER_HIGH_FACTOR,
+            median_delta + FORECAST_OUTLIER_FILTER_MIN_UPPER_MARGIN_KWH,
+        )
+    
+        filtered_deltas = [
+            (delta, weight)
+            for delta, weight in valid_deltas
+            if lower_limit <= delta <= upper_limit
+        ]
+    
+        if len(filtered_deltas) < FORECAST_OUTLIER_FILTER_MIN_POSITIVE_SAMPLES:
+            return self._calculate_weighted_average_delta(valid_deltas)
+    
+        return self._calculate_weighted_average_delta(filtered_deltas)
