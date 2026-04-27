@@ -51,24 +51,34 @@ async def validate_input(
     Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
     Returns a tuple of (info dict, api instance).
     """
+    captcha_input = data.get(CAPTCHA_INPUT)
+
+    if isinstance(captcha_input, str):
+        captcha_input = captcha_input.strip()
+
     if api is None:
-        api = FusionSolarAPI(data[CONF_USERNAME], data[CONF_PASSWORD], data[FUSION_SOLAR_HOST], data.get(CAPTCHA_INPUT, None))
+        api = FusionSolarAPI(
+            data[CONF_USERNAME],
+            data[CONF_PASSWORD],
+            data[FUSION_SOLAR_HOST],
+            captcha_input,
+        )
     else:
         api.user = data[CONF_USERNAME]
         api.pwd = data[CONF_PASSWORD]
         api.login_host = data[FUSION_SOLAR_HOST]
-        api.captcha_input = data.get(CAPTCHA_INPUT, None)
+        api.captcha_input = captcha_input
 
     try:
         await hass.async_add_executor_job(api.login)
-    except APIAuthError as err:
-        raise InvalidAuth from err
     except APIAuthCaptchaError as err:
         raise InvalidCaptcha(api) from err
+    except APIAuthError as err:
+        raise InvalidAuth from err
     except APIConnectionError as err:
         raise CannotConnect from err
 
-    return {"title": f"Fusion Solar App Integration"}, api
+    return {"title": "Fusion Solar App Integration"}, api
 
 
 class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -204,31 +214,50 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle the captcha step."""
         errors: dict[str, str] = {}
 
+        if self._api is None or self._captcha_credentials is None:
+            errors["base"] = "unknown"
+
+            return self.async_show_form(
+                step_id="user",
+                data_schema=STEP_USER_DATA_SCHEMA,
+                errors=errors,
+            )
+
         if user_input is not None and CAPTCHA_INPUT in user_input:
-            # User submitted the captcha form
-            self._api.captcha_input = user_input[CAPTCHA_INPUT]
+            captcha_input = user_input[CAPTCHA_INPUT]
+
+            if isinstance(captcha_input, str):
+                captcha_input = captcha_input.strip()
+
+            self._api.captcha_input = captcha_input
+
             try:
                 await self.hass.async_add_executor_job(self._api.login)
+
                 if self._api.connected:
                     if self._target_entry:
                         return await self._finish_entry_update(
-                            self._target_entry, self._captcha_credentials, self._api,
+                            self._target_entry,
+                            self._captcha_credentials,
+                            self._api,
                         )
 
-                    # Normal flow: proceed to station selection
                     self._input_data = {**self._captcha_credentials}
+
                     try:
-                        station_data = await self.hass.async_add_executor_job(self._api.get_station_list)
+                        station_data = await self.hass.async_add_executor_job(
+                            self._api.get_station_list
+                        )
                         self._stations = station_data["data"]["list"]
                     except Exception:  # pylint: disable=broad-except
                         _LOGGER.exception("Failed to fetch station list after captcha login")
                         errors["base"] = "cannot_connect"
                     else:
                         return await self.async_step_select_station()
-                else:
-                    errors["base"] = "invalid_captcha"
+
+                errors["base"] = "invalid_captcha"
+
             except APIAuthCaptchaError:
-                # Wrong captcha or expired — API already fetched a new captcha image
                 errors["base"] = "invalid_captcha"
             except APIAuthError:
                 errors["base"] = "invalid_auth"
@@ -238,8 +267,8 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception during captcha handling")
                 errors["base"] = "unknown"
 
-        # Show captcha form
         captcha_img = ""
+
         if self._api and self._api.captcha_img:
             captcha_img = self._api.captcha_img
 

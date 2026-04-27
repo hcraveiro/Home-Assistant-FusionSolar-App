@@ -163,25 +163,40 @@ class FusionSolarAPI:
             return self._login_eu5()
             
     def _login_eu5(self) -> bool:
-        """Connect to api."""
+        """Connect to API using the EU5 login flow."""
+        captcha_input = ""
 
-        # Pre-warm session: visit login page to get session cookies.
-        # This mimics browser behavior and may avoid the CAPTCHA requirement.
-        # Skip pre-warm when retrying with a captcha answer, as it would reset
-        # the server-side session that the CAPTCHA is bound to.
-        if not self.captcha_input:
+        if isinstance(self.captcha_input, str):
+            captcha_input = self.captcha_input.strip()
+
+        if not captcha_input:
             login_page_url = f"https://{self.login_host}{LOGIN_FORM_URL}"
             _LOGGER.debug("Pre-warming session by visiting login page: %s", login_page_url)
+
             try:
                 self.session.get(login_page_url, timeout=20)
             except Exception as ex:
                 _LOGGER.warning("Failed to pre-warm session: %s", ex)
 
+        if captcha_input:
+            captcha_is_valid = self._prevalidate_captcha(captcha_input)
+
+            if not captcha_is_valid:
+                _LOGGER.warning("Captcha pre-validation failed.")
+                self.connected = False
+                self.set_captcha_img()
+                raise APIAuthCaptchaError("Invalid captcha.")
+
         public_key_url = f"https://{self.login_host}{PUBKEY_URL}"
         _LOGGER.debug("Getting Public Key at: %s", public_key_url)
-        
-        response = self.session.get(public_key_url)
-        _LOGGER.debug("Pubkey Response Headers: %s\r\nResponse: %s", response.headers, response.text)
+
+        response = self.session.get(public_key_url, timeout=20)
+        _LOGGER.debug(
+            "Pubkey Response Headers: %s\r\nResponse: %s",
+            response.headers,
+            response.text,
+        )
+
         try:
             pubkey_data = response.json()
             _LOGGER.debug("Pubkey Response: %s", pubkey_data)
@@ -193,34 +208,37 @@ class FusionSolarAPI:
                 response.text,
             )
             raise APIAuthError(
-                "Error processing Pubkey response: JSON format invalid!\r\nResponse Headers: %s\r\nResponse: %s",
-                response.headers,
-                response.text,
-            )
-        
-        
+                "Error processing Pubkey response: JSON format invalid!"
+            ) from ex
+
         pub_key_pem = pubkey_data["pubKey"]
         time_stamp = pubkey_data["timeStamp"]
-        enable_encrypt = pubkey_data["enableEncrypt"]
         version = pubkey_data["version"]
-        
+
         nonce = generate_nonce()
-        
         encrypted_password = encrypt_password(pub_key_pem, self.pwd) + version
-    
-        login_url = f"https://{self.login_host}{LOGIN_VALIDATE_USER_URL}?timeStamp={time_stamp}&nonce={nonce}"
+
+        login_url = (
+            f"https://{self.login_host}{LOGIN_VALIDATE_USER_URL}"
+            f"?timeStamp={time_stamp}&nonce={nonce}"
+        )
+
         payload = {
             "organizationName": "",
-            "password": encrypted_password,
             "username": self.user,
+            "password": encrypted_password,
+            "multiRegionName": "",
         }
-        
-        _LOGGER.debug("captcha_input=%s", self.captcha_input)
-        if self.captcha_input is not None and self.captcha_input != "":
-            payload["verifycode"] = self.captcha_input
-        
+
+        if captcha_input:
+            payload["verifycode"] = captcha_input
+            _LOGGER.debug("Submitting login with captcha input.")
+        else:
+            _LOGGER.debug("Submitting login without captcha input.")
+
         headers = {
             "Content-Type": "application/json",
+            "Accept": "application/json",
             "accept-encoding": "gzip, deflate, br, zstd",
             "connection": "keep-alive",
             "host": self.login_host,
@@ -228,130 +246,155 @@ class FusionSolarAPI:
             "referer": f"https://{self.login_host}{LOGIN_HEADERS_1_STEP_REFERER}",
             "x-requested-with": "XMLHttpRequest",
         }
-        
+
         _LOGGER.debug("Login Request to: %s", login_url)
-        response = self.session.post(login_url, json=payload, headers=headers)
+
+        response = self.session.post(
+            login_url,
+            json=payload,
+            headers=headers,
+            timeout=20,
+        )
+
         _LOGGER.debug(
             "Login: Request Headers: %s\r\nResponse Headers: %s\r\nResponse: %s",
             headers,
             response.headers,
             response.text,
         )
-        if response.status_code == 200:
-            try:
-                login_response = response.json()
-                _LOGGER.debug("Login Response: %s", login_response)
-            except Exception as ex:
-                self.connected = False
-                _LOGGER.error(
-                    "Error processing Login response: JSON format invalid!\r\nRequest Headers: %s\r\nResponse Headers: %s\r\nResponse: %s",
-                    headers,
-                    response.headers,
-                    response.text,
-                )
-                raise APIAuthError(
-                    "Error processing Login response: JSON format invalid!\r\nRequest Headers: %s\r\nResponse Headers: %s\r\nResponse: %s",
-                    headers,
-                    response.headers,
-                    response.text,
-                )
-            
-            redirect_url = None
-    
-            if "respMultiRegionName" in login_response and login_response["respMultiRegionName"]:
-                redirect_info = login_response["respMultiRegionName"][1]  # Extract redirect URL
-                redirect_url = f"https://{self.login_host}{redirect_info}"
-            elif "redirectURL" in login_response and login_response["redirectURL"]:
-                redirect_info = login_response["redirectURL"]  # Extract redirect URL
-                redirect_url = f"https://{self.login_host}{redirect_info}"
-            else:
-                _LOGGER.warning("Login response did not include redirect information.")
-                self.connected = False
-    
-                if (
-                    "errorCode" in login_response
-                    and login_response["errorCode"]
-                    and login_response["errorCode"] == "411"
-                ):
-                    _LOGGER.warning("Captcha required.")
-                    self.set_captcha_img()
-                    raise APIAuthCaptchaError("Login requires Captcha.")
-                else:
-                    login_form_url = f"https://{self.login_host}{LOGIN_FORM_URL}"
-                    _LOGGER.debug("Redirecting to Login Form: %s", login_form_url)
-                    response = self.session.get(login_form_url)
-                    _LOGGER.debug("Login Form Response: %s", response.text)
-                    _LOGGER.debug("Login Form Response headers: %s", response.headers)
-                    raise APIAuthError("Login response did not include redirect information.")
-    
-            redirect_headers = {
-                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "accept-encoding": "gzip, deflate, br, zstd",
-                "connection": "keep-alive",
-                "host": f"{self.login_host}",
-                "referer": f"https://{self.login_host}{LOGIN_HEADERS_2_STEP_REFERER}",
-            }
-    
-            _LOGGER.debug("Redirect to: %s", redirect_url)
-            redirect_response = self.session.get(redirect_url, headers=redirect_headers, allow_redirects=False)
-            _LOGGER.debug("Redirect Response: %s", redirect_response.text)
-            response_headers = redirect_response.headers
-            location_header = response_headers.get("Location")
-            _LOGGER.debug("Redirect Response headers: %s", response_headers)
-    
-            self.data_host = urlparse(location_header).netloc
-    
-            if redirect_response.status_code == 200 or redirect_response.status_code == 302:
-                # Requests parses Set-Cookie headers into a cookie jar for us.
-                # Do NOT attempt to split the raw Set-Cookie header, because it may
-                # contain multiple cookies and extra '=' (e.g. Path=/) which breaks
-                # naive parsing.
-                dp_session = redirect_response.cookies.get("dp-session")
-                if not dp_session:
-                    # Fallback: some deployments return a combined Set-Cookie header.
-                    # Try a minimal parse for dp-session=...; in the raw header.
-                    raw_set_cookie = redirect_response.headers.get("Set-Cookie", "")
-                    for part in raw_set_cookie.split(","):
-                        part = part.strip()
-                        if part.startswith("dp-session="):
-                            dp_session = part.split("=", 1)[1].split(";", 1)[0]
-                            break
-    
-                if not dp_session:
-                    _LOGGER.error("DP Session not found in cookies.")
-                    self.connected = False
-                    raise APIAuthError("DP Session not found in cookies.")
-    
-                _LOGGER.debug("DP Session Cookie: %s", dp_session)
-                self.dp_session = dp_session
-                self.connected = True
-                self.last_session_time = datetime.now(timezone.utc)
-    
-                self.refresh_csrf()
-                station_data = self.get_station_list()
-    
-                if not self.station:
-                    self.station = station_data["data"]["list"][0]["dn"]
-                else:
-                    if not any(s["dn"] == self.station for s in station_data["data"]["list"]):
-                        raise APIDataStructureError(f"Station {self.station} not found.")
-    
-                if self.battery_capacity is None or self.battery_capacity == 0.0:
-                    self.battery_capacity = station_data["data"]["list"][0]["batteryCapacity"]
 
-                self._start_session_monitor()
-                return True, self.station
-    
-            _LOGGER.error("Redirect failed: %s", redirect_response.status_code)
-            _LOGGER.error("%s", redirect_response.text)
+        if response.status_code != 200:
+            _LOGGER.warning("Login failed: %s", response.status_code)
+            _LOGGER.warning("Response headers: %s", response.headers)
+            _LOGGER.warning("Response: %s", response.text)
             self.connected = False
-            raise APIAuthError("Redirect failed.")
-    
-        _LOGGER.warning("Login failed: %s", response.status_code)
-        _LOGGER.warning("Response headers: %s", response.headers)
-        _LOGGER.warning("Response: %s", response.text)
+            raise APIAuthError("Login failed.")
+
+        try:
+            login_response = response.json()
+            _LOGGER.debug("Login Response: %s", login_response)
+        except Exception as ex:
+            self.connected = False
+            _LOGGER.error(
+                "Error processing Login response: JSON format invalid!\r\nRequest Headers: %s\r\nResponse Headers: %s\r\nResponse: %s",
+                headers,
+                response.headers,
+                response.text,
+            )
+            raise APIAuthError(
+                "Error processing Login response: JSON format invalid!"
+            ) from ex
+
+        redirect_url = None
+
+        if login_response.get("respMultiRegionName"):
+            redirect_info = login_response["respMultiRegionName"][1]
+            redirect_url = f"https://{self.login_host}{redirect_info}"
+        elif login_response.get("redirectURL"):
+            redirect_info = login_response["redirectURL"]
+            redirect_url = f"https://{self.login_host}{redirect_info}"
+
+        if not redirect_url:
+            error_code = str(login_response.get("errorCode", ""))
+            error_message = str(login_response.get("errorMsg", ""))
+            verify_code_create = bool(login_response.get("verifyCodeCreate"))
+
+            _LOGGER.warning(
+                "Login response did not include redirect information. errorCode=%s errorMsg=%s verifyCodeCreate=%s",
+                error_code,
+                error_message,
+                verify_code_create,
+            )
+
+            self.connected = False
+
+            if error_code == "411" or verify_code_create:
+                _LOGGER.warning("Captcha required or captcha challenge still active.")
+                self.set_captcha_img()
+                raise APIAuthCaptchaError("Login requires Captcha.")
+
+            if error_code == "406":
+                raise APIAuthError("Invalid username or password.")
+
+            raise APIAuthError("Login response did not include redirect information.")
+
+        redirect_headers = {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "connection": "keep-alive",
+            "host": self.login_host,
+            "referer": f"https://{self.login_host}{LOGIN_HEADERS_2_STEP_REFERER}",
+        }
+
+        _LOGGER.debug("Redirect to: %s", redirect_url)
+
+        redirect_response = self.session.get(
+            redirect_url,
+            headers=redirect_headers,
+            allow_redirects=False,
+            timeout=20,
+        )
+
+        _LOGGER.debug("Redirect Response: %s", redirect_response.text)
+
+        response_headers = redirect_response.headers
+        location_header = response_headers.get("Location")
+        _LOGGER.debug("Redirect Response headers: %s", response_headers)
+
+        if location_header:
+            self.data_host = urlparse(location_header).netloc
+        else:
+            self.data_host = self.login_host
+
+        if redirect_response.status_code in (200, 302):
+            dp_session = redirect_response.cookies.get("dp-session")
+
+            if not dp_session:
+                raw_set_cookie = redirect_response.headers.get("Set-Cookie", "")
+
+                for part in raw_set_cookie.split(","):
+                    part = part.strip()
+
+                    if part.startswith("dp-session="):
+                        dp_session = part.split("=", 1)[1].split(";", 1)[0]
+                        break
+
+            if not dp_session:
+                dp_session = self.session.cookies.get("dp-session")
+
+            if not dp_session:
+                _LOGGER.error("DP Session not found in cookies.")
+                self.connected = False
+                raise APIAuthError("DP Session not found in cookies.")
+
+            _LOGGER.debug("DP Session Cookie: %s", dp_session)
+
+            self.dp_session = dp_session
+            self.connected = True
+            self.last_session_time = datetime.now(timezone.utc)
+            self.captcha_input = None
+            self.captcha_img = None
+
+            self.refresh_csrf()
+            station_data = self.get_station_list()
+
+            if not self.station:
+                self.station = station_data["data"]["list"][0]["dn"]
+            else:
+                if not any(s["dn"] == self.station for s in station_data["data"]["list"]):
+                    raise APIDataStructureError(f"Station {self.station} not found.")
+
+            if self.battery_capacity is None or self.battery_capacity == 0.0:
+                self.battery_capacity = station_data["data"]["list"][0]["batteryCapacity"]
+
+            self._start_session_monitor()
+            return True, self.station
+
+        _LOGGER.error("Redirect failed: %s", redirect_response.status_code)
+        _LOGGER.error("%s", redirect_response.text)
+
         self.connected = False
-        raise APIAuthError("Login failed.")
+        raise APIAuthError("Redirect failed.")
 
     def _login_la5(self) -> bool:
         """Login flow for la5 (SSO without pubkey)."""
@@ -459,6 +502,78 @@ class FusionSolarAPI:
             self.connected = False
             raise
 
+    def _prevalidate_captcha(self, captcha_input: str) -> bool:
+        """Pre-validate the captcha using the same endpoint as the web UI."""
+        captcha_value = captcha_input.strip() if isinstance(captcha_input, str) else ""
+
+        if not captcha_value:
+            return False
+
+        prevalidate_url = f"https://{self.login_host}/unisso/preValidVerifycode"
+
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": f"https://{self.login_host}",
+            "Referer": f"https://{self.login_host}{LOGIN_HEADERS_1_STEP_REFERER}",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
+        payload = {
+            "verifycode": captcha_value,
+            "index": "0",
+        }
+
+        _LOGGER.debug("Pre-validating captcha at: %s", prevalidate_url)
+
+        response = self.session.post(
+            prevalidate_url,
+            data=payload,
+            headers=headers,
+            timeout=20,
+        )
+
+        response_text = response.text.strip()
+        normalized_response = response_text.strip('"').lower()
+
+        _LOGGER.debug(
+            "Captcha pre-validation response. Status=%s Response=%s",
+            response.status_code,
+            response_text,
+        )
+
+        if response.status_code != 200:
+            return False
+
+        invalid_markers = (
+            "false",
+            "fail",
+            "failed",
+            "failure",
+            "incorrect",
+            "invalid",
+            "error",
+            "411",
+        )
+
+        valid_markers = (
+            "true",
+            "success",
+            "successful",
+            "correct",
+            "valid",
+            "ok",
+            "1",
+        )
+
+        if any(marker in normalized_response for marker in invalid_markers):
+            return False
+
+        if any(marker in normalized_response for marker in valid_markers):
+            return True
+
+        return True
+
     def restore_session(self, dp_session: str, data_host: str) -> None:
         """Restore an authenticated session without requiring login.
 
@@ -482,15 +597,43 @@ class FusionSolarAPI:
         self.csrf_time = None
 
     def set_captcha_img(self):
-        timestampNow = datetime.now().timestamp() * 1000
-        captcha_request_url = f"https://{self.login_host}{CAPTCHA_URL}?timestamp={timestampNow}"
+        """Fetch a new captcha image using the current session."""
+        self.captcha_input = None
+
+        timestamp_now = int(time.time() * 1000)
+        captcha_request_url = (
+            f"https://{self.login_host}{CAPTCHA_URL}?timestamp={timestamp_now}"
+        )
+
+        headers = {
+            "Accept": "*/*",
+            "Referer": f"https://{self.login_host}{LOGIN_HEADERS_1_STEP_REFERER}",
+        }
+
         _LOGGER.debug("Requesting Captcha at: %s", captcha_request_url)
-        response = self.session.get(captcha_request_url)
-        
-        if response.status_code == 200:
-            self.captcha_img = f"data:image/png;base64,{base64.b64encode(response.content).decode('utf-8')}"
-        else:
-            self.captcha_img = None
+
+        response = self.session.get(
+            captcha_request_url,
+            headers=headers,
+            timeout=20,
+        )
+
+        if response.status_code == 200 and response.content:
+            self.captcha_img = (
+                "data:image/png;base64,"
+                f"{base64.b64encode(response.content).decode('utf-8')}"
+            )
+            _LOGGER.debug("Captcha image refreshed successfully.")
+            return
+
+        self.captcha_img = None
+
+        _LOGGER.warning(
+            "Failed to fetch captcha image. Status=%s Headers=%s Body=%s",
+            response.status_code,
+            response.headers,
+            response.text[:300],
+        )
 
     def refresh_csrf(self):
         if self.csrf is None or datetime.now() - self.csrf_time > timedelta(minutes=5):
