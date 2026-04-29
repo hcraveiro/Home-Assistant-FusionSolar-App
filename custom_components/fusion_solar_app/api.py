@@ -145,7 +145,9 @@ class FusionSolarAPI:
         self._stop_event = threading.Event()
         self.csrf = None
         self.csrf_time = None
+        self.request_timeout = 20
         self.session = requests.Session()
+        self.session.cookies.set("locale", "en-us")
 
     @property
     def controller_name(self) -> str:
@@ -589,12 +591,128 @@ class FusionSolarAPI:
         self._start_session_monitor()
 
     def reset_session(self):
-        """Reset HTTP session, clearing all cookies."""
+        """Reset HTTP session, clearing cookies and volatile auth state."""
+        try:
+            self.session.close()
+        except Exception:
+            pass
+    
         self.session = requests.Session()
+        self.session.cookies.set("locale", "en-us")
         self.connected = False
         self.dp_session = ""
         self.csrf = None
         self.csrf_time = None
+        self.captcha_input = None
+        self.captcha_img = None
+        
+    def _response_looks_like_auth_failure(self, response: requests.Response) -> bool:
+        """Return True when the response looks like an expired-session login page."""
+        location = (response.headers.get("Location") or "").lower()
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        body_preview = (response.text or "")[:500].lower()
+    
+        auth_markers = (
+            "login",
+            "sign in",
+            "verifycode",
+            "captcha",
+            "dpcloud/auth",
+            "uniportal",
+            "user name",
+            "username",
+            "password",
+        )
+    
+        return (
+            response.status_code in (401, 403)
+            or "login" in location
+            or (
+                "text/html" in content_type
+                and any(marker in body_preview for marker in auth_markers)
+            )
+        )
+    
+    def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        context: str,
+        timeout: int | None = None,
+        **kwargs,
+    ) -> tuple[requests.Response, dict]:
+        """Perform an HTTP request and return parsed JSON with robust auth/timeout handling."""
+        effective_timeout = timeout or self.request_timeout
+    
+        try:
+            response = self.session.request(
+                method,
+                url,
+                timeout=effective_timeout,
+                **kwargs,
+            )
+        except requests.Timeout as err:
+            raise APIConnectionError(
+                f"{context} timed out after {effective_timeout}s"
+            ) from err
+        except requests.RequestException as err:
+            raise APIConnectionError(f"{context} request failed: {err}") from err
+    
+        if self._response_looks_like_auth_failure(response):
+            _LOGGER.warning(
+                "%s appears to have returned an auth page or expired session. "
+                "Status=%s Headers=%s Body=%s",
+                context,
+                response.status_code,
+                response.headers,
+                response.text[:300],
+            )
+            self.connected = False
+            raise APIAuthError(f"{context} returned an expired or invalid session")
+    
+        if response.status_code != 200:
+            _LOGGER.error(
+                "%s failed. Status=%s Headers=%s Body=%s",
+                context,
+                response.status_code,
+                response.headers,
+                response.text[:300],
+            )
+            raise APIConnectionError(
+                f"{context} failed with HTTP {response.status_code}"
+            )
+    
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as err:
+            content_type = response.headers.get("Content-Type", "")
+            body_preview = response.text[:300]
+    
+            if (
+                "html" in content_type.lower()
+                or "<html" in body_preview.lower()
+                or "<!doctype" in body_preview.lower()
+            ):
+                _LOGGER.warning(
+                    "%s returned HTML instead of JSON. Treating it as an expired "
+                    "session. Status=%s Body=%s",
+                    context,
+                    response.status_code,
+                    body_preview,
+                )
+                self.connected = False
+                raise APIAuthError(f"{context} returned HTML instead of JSON") from err
+    
+            _LOGGER.error(
+                "%s did not return JSON. Content-Type=%s Body=%s",
+                context,
+                content_type,
+                body_preview,
+            )
+            raise APIConnectionError(f"{context} did not return JSON") from err
+    
+        return response, payload
 
     def set_captcha_img(self):
         """Fetch a new captcha image using the current session."""
@@ -636,50 +754,50 @@ class FusionSolarAPI:
         )
 
     def refresh_csrf(self):
-        if self.csrf is None or datetime.now() - self.csrf_time > timedelta(minutes=5):
-            roarand_url = f"https://{self.data_host}{KEEP_ALIVE_URL}"
-            roarand_headers = {
-                "accept": "application/json, text/plain, */*",
-                "accept-encoding": "gzip, deflate, br, zstd",
-                "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
-            }
-
-            _LOGGER.debug("Getting Roarand at: %s", roarand_url)
-            roarand_response = self.session.get(
-                roarand_url,
-                headers=roarand_headers,
-                timeout=20,
+        """Refresh the CSRF token when needed."""
+        now = datetime.now()
+    
+        if (
+            self.csrf is not None
+            and self.csrf_time is not None
+            and now - self.csrf_time <= timedelta(minutes=5)
+        ):
+            return
+    
+        roarand_url = f"https://{self.data_host}{KEEP_ALIVE_URL}"
+        roarand_headers = {
+            "accept": "application/json, text/plain, */*",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+        }
+    
+        _LOGGER.debug("Getting Roarand at: %s", roarand_url)
+        _, roarand_json = self._request_json(
+            "GET",
+            roarand_url,
+            context="FusionSolar keep-alive",
+            headers=roarand_headers,
+        )
+    
+        csrf_value = roarand_json.get("payload")
+        if not csrf_value:
+            _LOGGER.error(
+                "Keep-alive JSON did not contain a CSRF payload. Body=%s",
+                str(roarand_json)[:300],
             )
+            self.connected = False
+            raise APIAuthError("Could not refresh CSRF token")
     
-            try:
-                roarand_json = roarand_response.json()
-            except json.JSONDecodeError as err:
-                _LOGGER.error(
-                    "Keep-alive did not return JSON. Status=%s Content-Type=%s Body=%s",
-                    roarand_response.status_code,
-                    roarand_response.headers.get("Content-Type"),
-                    roarand_response.text[:300],
-                )
-                raise APIAuthError("Keep-alive did not return JSON") from err
-    
-            csrf_value = roarand_json.get("payload")
-            if not csrf_value:
-                _LOGGER.error(
-                    "Keep-alive JSON did not contain a CSRF payload. Status=%s Body=%s",
-                    roarand_response.status_code,
-                    str(roarand_json)[:300],
-                )
-                raise APIAuthError("Could not refresh CSRF token")
-    
-            self.csrf = csrf_value
-            self.csrf_time = datetime.now()
-            _LOGGER.debug("CSRF refreshed: %s", self.csrf)
+        self.csrf = csrf_value
+        self.csrf_time = now
+        _LOGGER.debug("CSRF refreshed: %s", self.csrf)
 
     
     def get_station_id(self):
         return self.get_station_list()["data"]["list"][0]["dn"]
 
     def get_station_list(self):
+        """Return the list of stations for the authenticated account."""
         self.refresh_csrf()
     
         station_url = f"https://{self.data_host}{STATION_LIST_URL}"
@@ -692,7 +810,7 @@ class FusionSolarAPI:
             "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
             "Roarand": f"{self.csrf}",
         }
-
+    
         station_payload = {
             "curPage": 1,
             "pageSize": 10,
@@ -703,33 +821,23 @@ class FusionSolarAPI:
             "sortDir": "DESC",
             "locale": "en_US",
         }
-
+    
         _LOGGER.debug("Getting Station at: %s", station_url)
-        station_response = self.session.post(
+        _, json_response = self._request_json(
+            "POST",
             station_url,
-            json=station_payload,
+            context="FusionSolar station list",
             headers=station_headers,
-            timeout=20,
+            json=station_payload,
         )
     
-        try:
-            json_response = station_response.json()
-        except json.JSONDecodeError as err:
+        stations = json_response.get("data", {}).get("list")
+        if not isinstance(stations, list):
             _LOGGER.error(
-                "Station list did not return JSON. Status=%s Content-Type=%s Body=%s",
-                station_response.status_code,
-                station_response.headers.get("Content-Type"),
-                station_response.text[:300],
-            )
-            raise APIAuthError("Station list did not return JSON") from err
-    
-        if station_response.status_code != 200:
-            _LOGGER.error(
-                "Station list request failed. Status=%s Body=%s",
-                station_response.status_code,
+                "Station list response did not contain the expected data. Body=%s",
                 str(json_response)[:300],
             )
-            raise APIConnectionError("Station list request failed")
+            raise APIDataStructureError("Station list response did not contain data.list")
     
         _LOGGER.debug("Station info: %s", json_response.get("data"))
         return json_response
@@ -738,7 +846,7 @@ class FusionSolarAPI:
         """Fetch real-time inverter data from device-realtime-data endpoint."""
         if not self.inverter_dn:
             return {}
-
+    
         self.refresh_csrf()
         headers = {
             "Accept": "application/json",
@@ -746,26 +854,22 @@ class FusionSolarAPI:
             "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
         }
         params = {"deviceDn": self.inverter_dn, "displayAccessModel": "true"}
-
+    
         url = f"https://{self.data_host}{DEVICE_REALTIME_DATA_URL}"
         _LOGGER.debug("Getting inverter realtime data at: %s", url)
-        response = self.session.get(url, headers=headers, params=params, timeout=20)
-
-        if response.status_code != 200:
-            _LOGGER.warning("Inverter realtime data request failed: %s", response.status_code)
-            return {}
-
-        try:
-            data = response.json()
-        except json.JSONDecodeError:
-            _LOGGER.warning("Inverter realtime data response is not valid JSON")
-            return {}
-
+    
+        _, data = self._request_json(
+            "GET",
+            url,
+            context="FusionSolar inverter realtime data",
+            headers=headers,
+            params=params,
+        )
+    
         if not data.get("success") or not data.get("data"):
-            _LOGGER.warning("Inverter realtime data response indicates failure")
+            _LOGGER.warning("Inverter realtime data response indicates failure: %s", data)
             return {}
-
-        # Parse signals from device-realtime-data response
+    
         result = {}
         for entry in data["data"]:
             if not isinstance(entry, dict) or "signals" not in entry:
@@ -774,50 +878,68 @@ class FusionSolarAPI:
                 signal_id = signal.get("id")
                 if signal_id in INVERTER_SIGNAL_MAP:
                     result[signal_id] = signal.get("value", "")
-
-        # Fetch PV string signals from device-real-kpi (not included in device-realtime-data)
+    
         pv_signal_ids = [sid for sid in INVERTER_SIGNAL_MAP if sid >= 11000]
         if pv_signal_ids:
             try:
                 self.refresh_csrf()
                 headers["Roarand"] = self.csrf
                 signal_str = "&".join(f"signalIds={s}" for s in pv_signal_ids)
-                kpi_url = f"https://{self.data_host}{DEVICE_REAL_KPI_URL}?deviceDn={self.inverter_dn}&{signal_str}"
+                kpi_url = (
+                    f"https://{self.data_host}{DEVICE_REAL_KPI_URL}"
+                    f"?deviceDn={self.inverter_dn}&{signal_str}"
+                )
                 _LOGGER.debug("Getting inverter PV KPI data at: %s", kpi_url)
-                kpi_response = self.session.get(kpi_url, headers=headers, timeout=20)
-                if kpi_response.status_code == 200:
-                    kpi_data = kpi_response.json()
-                    if kpi_data.get("success") and kpi_data.get("data", {}).get("signals"):
-                        for sid_str, val in kpi_data["data"]["signals"].items():
-                            sid = int(sid_str)
-                            if sid in INVERTER_SIGNAL_MAP:
-                                result[sid] = val.get("value", "")
+    
+                _, kpi_data = self._request_json(
+                    "GET",
+                    kpi_url,
+                    context="FusionSolar inverter PV KPI data",
+                    headers=headers,
+                )
+    
+                if kpi_data.get("success") and kpi_data.get("data", {}).get("signals"):
+                    for sid_str, val in kpi_data["data"]["signals"].items():
+                        sid = int(sid_str)
+                        if sid in INVERTER_SIGNAL_MAP:
+                            result[sid] = val.get("value", "")
             except Exception as ex:
                 _LOGGER.warning("Failed to fetch PV string KPI data: %s", ex)
-
+    
         _LOGGER.debug("Inverter realtime data: %s", result)
         return result
 
     def get_devices(self) -> list[Device]:
+        """Fetch device values from the FusionSolar data endpoint."""
         self.refresh_csrf()
-
+    
         if not self.station:
             raise APIDataStructureError("FusionSolar station DN is not configured")
-        
+    
         headers = {
             "Accept": "application/json",
             "Accept-Encoding": "gzip, deflate, br, zstd",
             "Accept-Language": "en-GB,en;q=0.9",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
         }
-
-        # Fusion Solar App Station parameter
+    
         params = {"stationDn": unquote(self.station)}
-
+    
         data_access_url = f"https://{self.data_host}{DATA_URL}"
         _LOGGER.debug("Getting Data at: %s", data_access_url)
-        response = self.session.get(data_access_url, headers=headers, params=params)
-
+    
+        _, data = self._request_json(
+            "GET",
+            data_access_url,
+            context="FusionSolar realtime data",
+            headers=headers,
+            params=params,
+        )
+    
         output = {
             "panel_production_power": 0.0,
             "panel_production_today": 0.0,
@@ -864,102 +986,110 @@ class FusionSolarAPI:
             "battery_capacity": 0.0,
             "exit_code": "SUCCESS",
         }
-
-        if response.status_code == 200:
-            try:
-                data = response.json()
-                _LOGGER.debug("Get Data Response: %s", data)
-            except Exception as ex:
-                _LOGGER.error("Error processing response: JSON format invalid!\r\nCookies: %s\r\nHeader: %s\r\n%s", cookies, headers, response.text)
-                raise APIAuthError("Error processing response: JSON format invalid!\r\nCookies: %s\r\nHeader: %s\r\n%s", cookies, headers, response.text)
-
-            if "data" not in data or "flow" not in data["data"]:
-                _LOGGER.error("Error on data structure!")
-                raise APIDataStructureError("Error on data structure!")
-
-            # Process nodes to gather required information
-            flow_data_nodes = data["data"]["flow"].get("nodes", [])
-            flow_data_links = data["data"]["flow"].get("links", [])
-            node_map = {
-                "neteco.pvms.energy.flow.buy.power": "grid_consumption_power",
-                "neteco.pvms.devTypeLangKey.string": "panel_production_power",
-                "neteco.pvms.devTypeLangKey.energy_store": "battery_injection_power",
-                "neteco.pvms.KPI.kpiView.electricalLoad": "house_load_power",
-            }
-        
-            for node in flow_data_nodes:
-                label = node.get("name", "")
-                value = node.get("description", {}).get("value", "")
-                
-                if label == "neteco.pvms.devTypeLangKey.energy_store":
-                    soc = extract_numeric(node.get("deviceTips", {}).get("SOC", ""))
-                    if soc is not None:
-                        output["battery_percentage"] = soc
-                    
-                    battery_power = extract_numeric(node.get("deviceTips", {}).get("BATTERY_POWER", ""))
-                    if battery_power is None or battery_power <= 0:
-                        output["battery_consumption_power"] = extract_numeric(value)
-                        output["battery_injection_power"] = 0.0
-                    else:
-                        output[node_map[label]] = extract_numeric(value)
-                        output["battery_consumption_power"] = 0.0
+    
+        if "data" not in data or "flow" not in data["data"]:
+            _LOGGER.error(
+                "FusionSolar realtime data response had an unexpected structure. "
+                "Cookies=%s Headers=%s Body=%s",
+                self.session.cookies.get_dict(),
+                headers,
+                str(data)[:500],
+            )
+            raise APIDataStructureError("FusionSolar realtime data structure is invalid")
+    
+        _LOGGER.debug("Get Data Response: %s", data)
+    
+        flow_data_nodes = data["data"]["flow"].get("nodes", [])
+        flow_data_links = data["data"]["flow"].get("links", [])
+    
+        if not isinstance(flow_data_nodes, list) or not isinstance(flow_data_links, list):
+            raise APIDataStructureError("FusionSolar flow nodes/links structure is invalid")
+    
+        node_map = {
+            "neteco.pvms.energy.flow.buy.power": "grid_consumption_power",
+            "neteco.pvms.devTypeLangKey.string": "panel_production_power",
+            "neteco.pvms.devTypeLangKey.energy_store": "battery_injection_power",
+            "neteco.pvms.KPI.kpiView.electricalLoad": "house_load_power",
+        }
+    
+        for node in flow_data_nodes:
+            label = node.get("name", "")
+            value = node.get("description", {}).get("value", "")
+    
+            if label == "neteco.pvms.devTypeLangKey.energy_store":
+                soc = extract_numeric(node.get("deviceTips", {}).get("SOC", ""))
+                if soc is not None:
+                    output["battery_percentage"] = soc
+    
+                battery_power = extract_numeric(
+                    node.get("deviceTips", {}).get("BATTERY_POWER", "")
+                )
+                if battery_power is None or battery_power <= 0:
+                    output["battery_consumption_power"] = extract_numeric(value)
+                    output["battery_injection_power"] = 0.0
                 else:
-                    if label in node_map:
-                        output[node_map[label]] = extract_numeric(value)
-        
-            for node in flow_data_links:
-                label = node.get("description", {}).get("label", "")
-                value = node.get("description", {}).get("value", "")
-                if label in node_map:
-                    if label == "neteco.pvms.energy.flow.buy.power":
-                        grid_consumption_injection = extract_numeric(value)
-                        if (output["panel_production_power"] + output["battery_consumption_power"] - output["battery_injection_power"] - output["house_load_power"]) > 0:
-                            output["grid_injection_power"] = grid_consumption_injection
-                            output["grid_consumption_power"] = 0.0
-                        else:
-                            output["grid_consumption_power"] = grid_consumption_injection
-                            output["grid_injection_power"] = 0.0
-
-            if self.inverter_dn is None:
-                for node in flow_data_nodes:
-                    if node.get("name") == "neteco.pvms.devTypeLangKey.inverter":
-                        dev_ids = node.get("devIds") or []
-                        dn = dev_ids[0] if dev_ids else node.get("devDn")
-                        if dn:
-                            self.inverter_dn = dn
-                            _LOGGER.info("Discovered inverter DN: %s", self.inverter_dn)
-                        else:
-                            _LOGGER.warning(
-                                "Could not determine inverter DN from inverter node. "
-                                "Node: %s", node
-                            )
-                        break
-
-            self.update_output_with_battery_capacity(output)
-            self.update_output_with_energy_balance(output)
-
-            output["exit_code"] = "SUCCESS"
-            _LOGGER.debug("output JSON: %s", output)
-        else:
-            _LOGGER.error("Error on data structure! %s", response.text)
-            raise APIDataStructureError("Error on data structure! %s", response.text)
-
-        """Get devices on api."""
+                    output[node_map[label]] = extract_numeric(value)
+                    output["battery_consumption_power"] = 0.0
+            elif label in node_map:
+                output[node_map[label]] = extract_numeric(value)
+    
+        for node in flow_data_links:
+            label = node.get("description", {}).get("label", "")
+            value = node.get("description", {}).get("value", "")
+            if label in node_map and label == "neteco.pvms.energy.flow.buy.power":
+                grid_consumption_injection = extract_numeric(value)
+                if (
+                    output["panel_production_power"]
+                    + output["battery_consumption_power"]
+                    - output["battery_injection_power"]
+                    - output["house_load_power"]
+                ) > 0:
+                    output["grid_injection_power"] = grid_consumption_injection
+                    output["grid_consumption_power"] = 0.0
+                else:
+                    output["grid_consumption_power"] = grid_consumption_injection
+                    output["grid_injection_power"] = 0.0
+    
+        if self.inverter_dn is None:
+            for node in flow_data_nodes:
+                if node.get("name") == "neteco.pvms.devTypeLangKey.inverter":
+                    dev_ids = node.get("devIds") or []
+                    dn = dev_ids[0] if dev_ids else node.get("devDn")
+                    if dn:
+                        self.inverter_dn = dn
+                        _LOGGER.info("Discovered inverter DN: %s", self.inverter_dn)
+                    else:
+                        _LOGGER.warning(
+                            "Could not determine inverter DN from inverter node. Node: %s",
+                            node,
+                        )
+                    break
+    
+        self.update_output_with_battery_capacity(output)
+        self.update_output_with_energy_balance(output)
+    
+        output["exit_code"] = "SUCCESS"
+        _LOGGER.debug("output JSON: %s", output)
+    
         devices = [
             Device(
                 device_id=device.get("id"),
                 device_unique_id=self.get_device_unique_id(
-                    device.get("id"), device.get("type")
+                    device.get("id"),
+                    device.get("type"),
                 ),
                 device_type=device.get("type"),
                 name=self.get_device_name(device.get("id")),
-                state=self.get_device_value(device.get("id"), device.get("type"), output),
-                icon=device.get("icon")
+                state=self.get_device_value(
+                    device.get("id"),
+                    device.get("type"),
+                    output,
+                ),
+                icon=device.get("icon"),
             )
             for device in DEVICES
         ]
-
-        # Add inverter real-time sensors
+    
         try:
             inverter_data = self.get_inverter_realtime_data()
             for signal_id, value in inverter_data.items():
@@ -973,17 +1103,23 @@ class FusionSolarAPI:
                             state = float(value)
                         except (ValueError, TypeError):
                             state = 0.0
-                    devices.append(Device(
-                        device_id=sig["id"],
-                        device_unique_id=self.get_device_unique_id(sig["id"], sig_type),
-                        device_type=sig_type,
-                        name=sig["id"],
-                        state=state,
-                        icon=sig["icon"],
-                    ))
+    
+                    devices.append(
+                        Device(
+                            device_id=sig["id"],
+                            device_unique_id=self.get_device_unique_id(
+                                sig["id"],
+                                sig_type,
+                            ),
+                            device_type=sig_type,
+                            name=sig["id"],
+                            state=state,
+                            icon=sig["icon"],
+                        )
+                    )
         except Exception as ex:
             _LOGGER.warning("Failed to fetch inverter realtime data: %s", ex)
-
+    
         return devices
 
     def update_output_with_battery_capacity(self, output: Dict[str, Optional[float | str]]):
@@ -1143,7 +1279,14 @@ class FusionSolarAPI:
             output["battery_consumption_lifetime"] = lifetime_total_discharge_power
         
         
-    def call_energy_balance(self, call_type: ENERGY_BALANCE_CALL_TYPE, specific_date: datetime = None):
+    def call_energy_balance(
+        self,
+        call_type: ENERGY_BALANCE_CALL_TYPE,
+        specific_date: datetime = None,
+    ):
+        """Call the energy balance endpoint and return parsed JSON."""
+        self.refresh_csrf()
+    
         currentTime = datetime.now()
         timestampNow = currentTime.timestamp() * 1000
         current_day = currentTime.day
@@ -1152,7 +1295,7 @@ class FusionSolarAPI:
         first_day_of_month = datetime(current_year, current_month, 1)
         first_day_of_previous_month = first_day_of_month - relativedelta(months=1)
         first_day_of_year = datetime(current_year, 1, 1)
-
+    
         if call_type == ENERGY_BALANCE_CALL_TYPE.MONTH:
             timestamp = first_day_of_month.timestamp() * 1000
             dateStr = first_day_of_month.strftime("%Y-%m-%d %H:%M:%S")
@@ -1168,16 +1311,20 @@ class FusionSolarAPI:
                 specific_year = specific_date.year
                 specific_month = specific_date.month
                 specific_day = specific_date.day
-                current_day_of_year = datetime(specific_year, specific_month, specific_day)
+                current_day_of_year = datetime(
+                    specific_year,
+                    specific_month,
+                    specific_day,
+                )
             else:
                 current_day_of_year = datetime(current_year, current_month, current_day)
-            
+    
             timestamp = current_day_of_year.timestamp() * 1000
             dateStr = current_day_of_year.strftime("%Y-%m-%d %H:%M:%S")
         else:
             timestamp = first_day_of_year.timestamp() * 1000
             dateStr = first_day_of_year.strftime("%Y-%m-%d %H:%M:%S")
-        
+    
         headers = {
             "application/json": "text/plain, */*",
             "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -1185,28 +1332,39 @@ class FusionSolarAPI:
             "Host": self.data_host,
             "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
             "X-Requested-With": "XMLHttpRequest",
-            "Roarand": self.csrf
+            "Roarand": self.csrf,
         }
-
+    
         params = {
-             "stationDn": unquote(self.station),
-             "timeDim": call_type,
-             "queryTime": int(timestamp),
-             "timeZone": "0.0",
-             "timeZoneStr": "Europe/London",
-             "dateStr": dateStr,
-             "_": int(timestampNow)
+            "stationDn": unquote(self.station),
+            "timeDim": call_type,
+            "queryTime": int(timestamp),
+            "timeZone": "0.0",
+            "timeZoneStr": "Europe/London",
+            "dateStr": dateStr,
+            "_": int(timestampNow),
         }
-
-        energy_balance_url = f"https://{self.data_host}{ENERGY_BALANCE_URL}?{urlencode(params)}"
+    
+        energy_balance_url = (
+            f"https://{self.data_host}{ENERGY_BALANCE_URL}?{urlencode(params)}"
+        )
         _LOGGER.debug("Getting Energy Balance at: %s", energy_balance_url)
-        energy_balance_response = self.session.get(energy_balance_url, headers=headers)
-        _LOGGER.debug("Energy Balance Response: %s", energy_balance_response.text)
-        try:
-            energy_balance_data = energy_balance_response.json()
-        except Exception as ex:
-            _LOGGER.warn("Error processing Energy Balance response: JSON format invalid!")
-        
+    
+        _, energy_balance_data = self._request_json(
+            "GET",
+            energy_balance_url,
+            context=f"FusionSolar energy balance ({call_type})",
+            headers=headers,
+        )
+    
+        if "data" not in energy_balance_data:
+            _LOGGER.error(
+                "Energy balance response had an unexpected structure: %s",
+                str(energy_balance_data)[:500],
+            )
+            raise APIDataStructureError("Energy balance response did not contain data")
+    
+        _LOGGER.debug("Energy Balance Response: %s", energy_balance_data)
         return energy_balance_data
 
     def get_week_data(self):

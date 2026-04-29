@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from dataclasses import dataclass, field
+import time
 from datetime import datetime, timedelta
 import logging
 from typing import Any
@@ -21,7 +22,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .api import APIAuthCaptchaError, APIAuthError, Device, DeviceType, FusionSolarAPI
+from .api import (
+    APIAuthCaptchaError,
+    APIAuthError,
+    APIConnectionError,
+    APIDataStructureError,
+    Device,
+    DeviceType,
+    FusionSolarAPI,
+)
 from .const import (
     CAPTCHA_INPUT,
     CONF_STATION_DN,
@@ -183,12 +192,14 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
         
     async def async_update_data(self) -> FusonSolarAPIData:
         """Fetch data from API endpoint."""
+        started_at = time.monotonic()
+    
         try:
             if not self.api.connected:
+                _LOGGER.info("FusionSolar session not connected. Performing login.")
                 await self.hass.async_add_executor_job(self.api.login)
     
             await self._ensure_station_dn()
-    
             devices = await self.hass.async_add_executor_job(self.api.get_devices)
     
         except APIAuthCaptchaError as err:
@@ -196,14 +207,17 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 "Login requires CAPTCHA. Please reconfigure the integration."
             ) from err
     
-        except APIAuthError as err:
-            _LOGGER.warning("Auth error, attempting re-login: %s", err)
+        except (APIAuthError, APIDataStructureError) as err:
+            _LOGGER.warning(
+                "FusionSolar session looks invalid or inconsistent (%s). "
+                "Resetting the session and retrying once.",
+                err,
+            )
             try:
                 self.api.reset_session()
                 await self.hass.async_add_executor_job(self.api.login)
     
                 await self._ensure_station_dn()
-    
                 devices = await self.hass.async_add_executor_job(self.api.get_devices)
             except APIAuthCaptchaError as captcha_err:
                 raise ConfigEntryAuthFailed(
@@ -211,6 +225,10 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 ) from captcha_err
             except Exception as retry_err:
                 raise UpdateFailed(f"Re-login failed: {retry_err}") from retry_err
+    
+        except APIConnectionError as err:
+            _LOGGER.warning("FusionSolar API connection error: %s", err)
+            raise UpdateFailed(f"Error communicating with API: {err}") from err
     
         except Exception as err:
             _LOGGER.error("Error communicating with FusionSolar API", exc_info=True)
@@ -225,6 +243,13 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 ex,
                 exc_info=True,
             )
+    
+        elapsed = time.monotonic() - started_at
+        _LOGGER.debug(
+            "FusionSolar refresh finished successfully in %.2fs with %s devices",
+            elapsed,
+            len(devices),
+        )
     
         return FusonSolarAPIData(
             self.api.controller_name,
