@@ -801,6 +801,9 @@ class FusionSolarAPI:
     def get_devices(self) -> list[Device]:
         self.refresh_csrf()
 
+        if not self.station:
+            raise APIDataStructureError("FusionSolar station DN is not configured")
+        
         headers = {
             "Accept": "application/json",
             "Accept-Encoding": "gzip, deflate, br, zstd",

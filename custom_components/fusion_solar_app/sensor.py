@@ -517,7 +517,7 @@ class FusionSolarForecastedTodaySensor(FusionSolarForecastSensor):
     """Fusion Solar forecasted production today sensor."""
 
     _forecast_key = "forecasted_today"
-    _name = "Panel Production Forecasted Today"
+    _name = "PV Forecasted Today"
     _icon = "mdi:chart-timeline-variant"
 
     @property
@@ -556,7 +556,7 @@ class FusionSolarRemainingTodaySensor(FusionSolarForecastSensor):
     """Fusion Solar remaining production today sensor."""
 
     _forecast_key = "remaining_today"
-    _name = "Panel Production Remaining Today"
+    _name = "PV Remaining Today"
     _icon = "mdi:progress-clock"
 
     @property

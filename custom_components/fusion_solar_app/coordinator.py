@@ -92,6 +92,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize coordinator."""
+        self.config_entry = config_entry
         self.user = config_entry.data[CONF_USERNAME]
         self.pwd = config_entry.data[CONF_PASSWORD]
         self.login_host = config_entry.data[FUSION_SOLAR_HOST]
@@ -142,12 +143,51 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                     "Failed to restore session, will login fresh: %s",
                     ex,
                 )
-
+    
+    async def _ensure_station_dn(self) -> None:
+        """Ensure the API has a station DN configured."""
+        if self.api.station:
+            return
+    
+        _LOGGER.warning(
+            "FusionSolar station DN is missing from the config entry. "
+            "Trying to auto-select the first available station."
+        )
+    
+        station_data = await self.hass.async_add_executor_job(self.api.get_station_list)
+        stations = station_data.get("data", {}).get("list") or []
+    
+        if not stations:
+            raise UpdateFailed("No FusionSolar stations were returned by the API")
+    
+        station_dn = stations[0].get("dn")
+    
+        if not station_dn:
+            raise UpdateFailed("FusionSolar station list did not include a station DN")
+    
+        self.api.station = station_dn
+    
+        updated_data = {
+            **self.config_entry.data,
+            CONF_STATION_DN: station_dn,
+        }
+    
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            data=updated_data,
+        )
+    
+        _LOGGER.info(
+            "Auto-selected FusionSolar station DN and stored it in the config entry"
+        )
+        
     async def async_update_data(self) -> FusonSolarAPIData:
         """Fetch data from API endpoint."""
         try:
             if not self.api.connected:
                 await self.hass.async_add_executor_job(self.api.login)
+    
+            await self._ensure_station_dn()
     
             devices = await self.hass.async_add_executor_job(self.api.get_devices)
     
@@ -161,6 +201,9 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             try:
                 self.api.reset_session()
                 await self.hass.async_add_executor_job(self.api.login)
+    
+                await self._ensure_station_dn()
+    
                 devices = await self.hass.async_add_executor_job(self.api.get_devices)
             except APIAuthCaptchaError as captcha_err:
                 raise ConfigEntryAuthFailed(
@@ -170,7 +213,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed(f"Re-login failed: {retry_err}") from retry_err
     
         except Exception as err:
-            _LOGGER.error(err)
+            _LOGGER.error("Error communicating with FusionSolar API", exc_info=True)
             raise UpdateFailed(f"Error communicating with API: {err}") from err
     
         forecast: FusionSolarForecastData | None = None
