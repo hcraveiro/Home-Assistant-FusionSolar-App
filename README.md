@@ -1,3 +1,4 @@
+
 # Home Assistant FusionSolar App Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
@@ -12,8 +13,11 @@ This integration was built for FusionSolar users who only have access to the reg
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Supported hosts / regions](#supported-hosts--regions)
+- [Device organization](#device-organization)
 - [Sensors](#sensors)
   - [Plant / energy sensors](#plant--energy-sensors)
+  - [Battery sensors](#battery-sensors)
+  - [Battery pack sensors](#battery-pack-sensors)
   - [Built-in ratio sensors](#built-in-ratio-sensors)
   - [Social contribution sensors](#social-contribution-sensors)
   - [Inverter real-time sensors](#inverter-real-time-sensors)
@@ -76,11 +80,27 @@ It also includes improved handling for:
 - login flows inferred from real FusionSolar frontend behaviour
 - HAR-based validation of region-specific behaviour
 
+## Device organization
+
+This integration organizes entities into separate Home Assistant devices when the corresponding hardware is available:
+
+- **Fusion Solar Installation**: installation-wide / plant-wide metrics
+- **Fusion Solar Inverter**: inverter-specific realtime and PV string metrics
+- **Fusion Solar Battery**: battery-specific metrics and battery pack diagnostics
+
+This makes the entity model cleaner and closer to the real FusionSolar device structure.
+
 ## Sensors
 
-After setting up the integration, you will get a FusionSolar device with the following sensors.
+After setting up the integration, the entities are organized into multiple Home Assistant devices:
+
+- **Fusion Solar Installation**: plant-wide energy, forecast, social contribution and ratio sensors
+- **Fusion Solar Inverter**: inverter real-time electrical and PV string sensors
+- **Fusion Solar Battery**: battery status, battery metadata and battery pack sensors
 
 ### Plant / energy sensors
+
+These sensors belong to the **Fusion Solar Installation** device and represent plant-wide / system-wide values:
 
 - Panels Production (kW)
 - Panels Production Today (kWh)
@@ -130,15 +150,73 @@ After setting up the integration, you will get a FusionSolar device with the fol
 - Grid Injection Year (kWh)
 - Grid Injection Lifetime (kWh)
 
+- Last Authentication Time
+- PV Forecasted Today (kWh)
+- PV Remaining Today (kWh)
+
+### Battery sensors
+
+The battery is exposed as a dedicated Home Assistant device and includes:
+
 - Battery Percentage (%)
 - Battery Capacity
-- Last Authentication Time
-- Panel Production Forecasted Today (kWh)
-- Panel Production Remaining Today (kWh)
+- Battery Operating Status
+- Battery Charge/Discharge Mode
+- Battery Backup Time
+- Battery Energy Charged Today (kWh)
+- Battery Energy Discharged Today (kWh)
+- Battery Charge/Discharge Power (kW)
+- Battery Bus Voltage (V)
+- Battery Bus Current (A)
+- Battery Internal Temperature (°C)
+- Battery Total Charge Energy (kWh)
+- Battery Total Discharge Energy (kWh)
+
+The battery device also exposes hardware metadata when available from the FusionSolar frontend / API, including:
+
+- Battery model
+- Battery firmware version
+- Battery serial number
+
+### Battery pack sensors
+
+Battery pack diagnostic sensors are exposed dynamically when available. Depending on your battery system, you may see sensors such as:
+
+- Battery Pack 1 Operating Status
+- Battery Pack 1 Voltage
+- Battery Pack 1 Charge/Discharge Power
+- Battery Pack 1 Maximum Temperature
+- Battery Pack 1 Minimum Temperature
+- Battery Pack 1 SOH
+- Battery Pack 1 Total Discharge Energy
+- Battery Pack 1 Battery Health Check
+- Battery Pack 1 Heating Status
+
+- Battery Pack 2 Operating Status
+- Battery Pack 2 Voltage
+- Battery Pack 2 Charge/Discharge Power
+- Battery Pack 2 Maximum Temperature
+- Battery Pack 2 Minimum Temperature
+- Battery Pack 2 SOH
+- Battery Pack 2 Total Discharge Energy
+- Battery Pack 2 Battery Health Check
+- Battery Pack 2 Heating Status
+
+- Battery Pack 3 Operating Status
+- Battery Pack 3 Voltage
+- Battery Pack 3 Charge/Discharge Power
+- Battery Pack 3 Maximum Temperature
+- Battery Pack 3 Minimum Temperature
+- Battery Pack 3 SOH
+- Battery Pack 3 Total Discharge Energy
+- Battery Pack 3 Battery Health Check
+- Battery Pack 3 Heating Status
+
+These sensors are grouped under the dedicated battery device.
 
 ### Built-in ratio sensors
 
-The integration now includes native self-consumption ratio sensors, so you no longer need to create those manually in templates if these are the metrics you want.
+The integration includes native self-consumption ratio sensors, so you no longer need to create those manually in templates if these are the metrics you want.
 
 #### Self consumption ratio
 
@@ -174,6 +252,8 @@ The integration also exposes the social / environmental contribution values show
 These values are taken from the same FusionSolar frontend endpoint used by the official web UI.
 
 ### Inverter real-time sensors
+
+The inverter is exposed as a dedicated Home Assistant device.
 
 The following sensors are fetched directly from the inverter device and require the inverter to be reachable through the API:
 
@@ -214,6 +294,12 @@ Depending on your inverter and API response, you may see sensors such as:
 
 The integration uses both real-time inverter endpoints and HAR-validated FusionSolar frontend behaviour to avoid exposing placeholder PV inputs that do not really exist for the device.
 
+The inverter device also exposes hardware metadata when available from the FusionSolar frontend / API, including:
+
+- Inverter model
+- Inverter firmware version
+- Inverter serial number
+
 ### Diagnostic sensors
 
 Some sensors are primarily useful for diagnostics and troubleshooting rather than day-to-day dashboards, including:
@@ -222,6 +308,8 @@ Some sensors are primarily useful for diagnostics and troubleshooting rather tha
 - Inverter Startup Time
 - Inverter Last Shutdown Time
 - Inverter Output Mode
+- Battery Backup Time
+- Battery pack diagnostic sensors
 
 ## Card configuration
 
@@ -516,8 +604,8 @@ This integration exposes two additional forecast sensors for the current day pan
 
 | Sensor | Description |
 |---|---|
-| `Panel Production Forecasted Today` | Estimated total panel production for the current day, in kWh |
-| `Panel Production Remaining Today` | Estimated remaining panel production for the current day, in kWh |
+| `PV Forecasted Today` | Estimated total panel production for the current day, in kWh |
+| `PV Remaining Today` | Estimated remaining panel production for the current day, in kWh |
 
 The forecast is built from the historical values of the `Panel Production Today` sensor stored in Home Assistant Recorder.
 
@@ -560,7 +648,7 @@ In simplified terms:
 forecasted total today = current actual production + remaining forecasted production
 ```
 
-The `Panel Production Remaining Today` sensor represents only the estimated production still expected for the rest of the current day.
+The `PV Remaining Today` sensor represents only the estimated production still expected for the rest of the current day.
 
 ### Forecast attributes
 
@@ -758,7 +846,7 @@ cards:
           name: Panel Production
           type: area
           extend_to: false
-        - entity: sensor.fusion_solar_ne_xxxxx_panel_production_forecasted_today
+        - entity: sensor.fusion_solar_ne_xxxxx_pv_forecasted_today
           name: Forecast Power
           type: area
           unit: kW
@@ -804,7 +892,7 @@ cards:
         name: Actual
         type: line
         extend_to: now
-      - entity: sensor.fusion_solar_ne_xxxxx_panel_production_forecasted_today
+      - entity: sensor.fusion_solar_ne_xxxxx_pv_forecasted_today
         name: Forecast
         type: line
         unit: kWh
@@ -816,10 +904,10 @@ cards:
     heading_style: title
   - type: entities
     entities:
-      - entity: sensor.fusion_solar_ne_xxxxx_panel_production_forecasted_today
-        name: Panel Production Forecasted Today
-      - entity: sensor.fusion_solar_ne_xxxxx_panel_production_remaining_today
-        name: Panel Production Remaining Today
+      - entity: sensor.fusion_solar_ne_xxxxx_pv_forecasted_today
+        name: PV Forecasted Today
+      - entity: sensor.fusion_solar_ne_xxxxx_pv_remaining_today
+        name: PV Remaining Today
 ```
 
 ## FAQ
@@ -864,6 +952,7 @@ Additional thanks to the community members who shared browser traces, HAR files 
 - regional login compatibility
 - session handling
 - inverter PV string discovery
+- battery metadata coverage
 - device and frontend-derived sensor coverage
 
 Also thanks to [FusionSolarPlus](https://github.com/JortvanSchijndel/FusionSolarPlus) for useful ideas around broader frontend coverage, device-oriented signals and regional behaviour analysis.
