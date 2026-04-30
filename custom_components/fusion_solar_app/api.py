@@ -3,20 +3,20 @@
 from dataclasses import dataclass
 from enum import StrEnum
 import logging
+import re
 import threading
 import time
 import requests
 import json
 import base64
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import unquote, quote, urlparse, urlencode
 from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
-from .const import DOMAIN, PUBKEY_URL, LOGIN_HEADERS_1_STEP_REFERER, LOGIN_HEADERS_2_STEP_REFERER, LOGIN_VALIDATE_USER_URL, LOGIN_VALIDATE_USER_URL_LA5, FINAL_AUTH_URL_LA5, LOGIN_FORM_URL, DATA_URL, STATION_LIST_URL, KEEP_ALIVE_URL, DATA_REFERER_URL, ENERGY_BALANCE_URL, LOGIN_DEFAULT_REDIRECT_URL, CAPTCHA_URL, DEVICE_REALTIME_DATA_URL, DEVICE_REAL_KPI_URL
+from .const import DOMAIN, PUBKEY_URL, LOGIN_HEADERS_1_STEP_REFERER, LOGIN_HEADERS_2_STEP_REFERER, LOGIN_VALIDATE_USER_URL, LOGIN_VALIDATE_USER_URL_LA5, FINAL_AUTH_URL_LA5, LOGIN_FORM_URL, DATA_URL, STATION_LIST_URL, KEEP_ALIVE_URL, DATA_REFERER_URL, ENERGY_BALANCE_URL, LOGIN_DEFAULT_REDIRECT_URL, CAPTCHA_URL, DEVICE_REALTIME_DATA_URL, DEVICE_REAL_KPI_URL, SOCIAL_CONTRIBUTION_URL
 from .utils import extract_numeric, encrypt_password, generate_nonce
 
 _LOGGER = logging.getLogger(__name__)
-
 
 class DeviceType(StrEnum):
     """Device types."""
@@ -24,6 +24,7 @@ class DeviceType(StrEnum):
     SENSOR_KW = "sensor"
     SENSOR_KWH = "sensor_kwh"
     SENSOR_PERCENTAGE = "sensor_percentage"
+    SENSOR_RATIO = "sensor_ratio"
     SENSOR_TIME = "sensor_time"
     SENSOR_VOLTAGE = "sensor_voltage"
     SENSOR_CURRENT = "sensor_current"
@@ -32,6 +33,31 @@ class DeviceType(StrEnum):
     SENSOR_RESISTANCE = "sensor_resistance"
     SENSOR_POWER_FACTOR = "sensor_power_factor"
     SENSOR_TEXT = "sensor_text"
+    SENSOR_KG = "sensor_kg"
+    SENSOR_COUNT = "sensor_count"
+
+def normalize_fusionsolar_host(host: str) -> str:
+    """Normalize a FusionSolar host into the correct login host."""
+    if not isinstance(host, str):
+        return "eu5.fusionsolar.huawei.com"
+
+    normalized = host.strip().lower()
+    normalized = re.sub(r"^https?://", "", normalized)
+    normalized = normalized.split("/", 1)[0]
+    normalized = normalized.split(":", 1)[0]
+
+    domain_suffix = ".fusionsolar.huawei.com"
+    if normalized.endswith(domain_suffix):
+        normalized = normalized[: -len(domain_suffix)]
+
+    region_match = re.match(r"^(?:region|uni)\d+(?P<suffix>[a-z]+\d+)$", normalized)
+    if region_match:
+        normalized = region_match.group("suffix")
+
+    if not normalized:
+        normalized = "eu5"
+
+    return f"{normalized}{domain_suffix}"
 
 class ENERGY_BALANCE_CALL_TYPE(StrEnum):
     """Device types."""
@@ -60,6 +86,16 @@ DEVICES = [
     {"id": "Panel Production Consumption Month", "type": DeviceType.SENSOR_KWH, "icon": "mdi:solar-panel"},
     {"id": "Panel Production Consumption Year", "type": DeviceType.SENSOR_KWH, "icon": "mdi:solar-panel"},
     {"id": "Panel Production Consumption Lifetime", "type": DeviceType.SENSOR_KWH, "icon": "mdi:solar-panel"},
+    {"id": "Self Consumption Ratio Today", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
+    {"id": "Self Consumption Ratio Week", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
+    {"id": "Self Consumption Ratio Month", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
+    {"id": "Self Consumption Ratio Year", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
+    {"id": "Self Consumption Ratio Lifetime", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
+    {"id": "Self Consumption Ratio By Production Today", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
+    {"id": "Self Consumption Ratio By Production Week", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
+    {"id": "Self Consumption Ratio By Production Month", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
+    {"id": "Self Consumption Ratio By Production Year", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
+    {"id": "Self Consumption Ratio By Production Lifetime", "type": DeviceType.SENSOR_RATIO, "icon": "mdi:percent-outline"},
     {"id": "Battery Consumption Power", "type": DeviceType.SENSOR_KW, "icon": "mdi:battery-charging-100"},
     {"id": "Battery Consumption Today", "type": DeviceType.SENSOR_KWH, "icon": "mdi:battery-charging-100"},
     {"id": "Battery Consumption Week", "type": DeviceType.SENSOR_KWH, "icon": "mdi:battery-charging-100"},
@@ -86,11 +122,17 @@ DEVICES = [
     {"id": "Grid Injection Lifetime", "type": DeviceType.SENSOR_KWH, "icon": "mdi:transmission-tower-import"},
     {"id": "Battery Percentage", "type": DeviceType.SENSOR_PERCENTAGE, "icon": ""},
     {"id": "Battery Capacity", "type": DeviceType.SENSOR_KW, "icon": "mdi:home-lightning-bolt-outline"},
+    {"id": "Standard Coal Saved", "type": DeviceType.SENSOR_KG, "icon": "mdi:mine"},
+    {"id": "Standard Coal Saved This Year", "type": DeviceType.SENSOR_KG, "icon": "mdi:mine"},
+    {"id": "CO2 Avoided", "type": DeviceType.SENSOR_KG, "icon": "mdi:molecule-co2"},
+    {"id": "CO2 Avoided This Year", "type": DeviceType.SENSOR_KG, "icon": "mdi:molecule-co2"},
+    {"id": "Equivalent Trees Planted", "type": DeviceType.SENSOR_COUNT, "icon": "mdi:tree"},
+    {"id": "Equivalent Trees Planted This Year", "type": DeviceType.SENSOR_COUNT, "icon": "mdi:tree"},
     {"id": "Last Authentication Time", "type": DeviceType.SENSOR_TIME, "icon": "mdi:clock-outline"},
 ]
 
 # Signal ID -> sensor definition for inverter real-time data
-INVERTER_SIGNAL_MAP = {
+BASE_INVERTER_SIGNAL_MAP = {
     10008: {"id": "Inverter Grid Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:flash"},
     10011: {"id": "Inverter Phase A Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:flash"},
     10012: {"id": "Inverter Phase B Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:flash"},
@@ -104,13 +146,39 @@ INVERTER_SIGNAL_MAP = {
     10020: {"id": "Inverter Power Factor", "type": DeviceType.SENSOR_POWER_FACTOR, "icon": "mdi:angle-acute"},
     10025: {"id": "Inverter Status", "type": DeviceType.SENSOR_TEXT, "icon": "mdi:information-outline"},
     10027: {"id": "Inverter Startup Time", "type": DeviceType.SENSOR_TEXT, "icon": "mdi:clock-outline"},
-    11001: {"id": "Inverter PV1 Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:solar-panel"},
-    11002: {"id": "Inverter PV1 Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:solar-panel"},
-    11004: {"id": "Inverter PV2 Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:solar-panel"},
-    11005: {"id": "Inverter PV2 Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:solar-panel"},
-    11007: {"id": "Inverter PV3 Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:solar-panel"},
-    11008: {"id": "Inverter PV3 Current", "type": DeviceType.SENSOR_CURRENT, "icon": "mdi:solar-panel"},
+    10028: {"id": "Inverter Last Shutdown Time", "type": DeviceType.SENSOR_TEXT, "icon": "mdi:clock-outline"},
+    21029: {"id": "Inverter Output Mode", "type": DeviceType.SENSOR_TEXT, "icon": "mdi:transmission-tower"},
 }
+
+
+def _build_dynamic_pv_signal_map(max_pv_inputs: int = 20) -> dict[int, dict[str, Any]]:
+    """Build PV voltage/current/power signal definitions dynamically."""
+    signal_map: dict[int, dict[str, Any]] = {}
+
+    for pv_index in range(1, max_pv_inputs + 1):
+        base_signal_id = 11001 + ((pv_index - 1) * 3)
+        signal_map[base_signal_id] = {
+            "id": f"Inverter PV{pv_index} Voltage",
+            "type": DeviceType.SENSOR_VOLTAGE,
+            "icon": "mdi:solar-panel",
+        }
+        signal_map[base_signal_id + 1] = {
+            "id": f"Inverter PV{pv_index} Current",
+            "type": DeviceType.SENSOR_CURRENT,
+            "icon": "mdi:solar-panel",
+        }
+        signal_map[base_signal_id + 2] = {
+            "id": f"Inverter PV{pv_index} Power",
+            "type": DeviceType.SENSOR_KW,
+            "icon": "mdi:solar-panel",
+        }
+
+    return signal_map
+
+
+def get_inverter_signal_map() -> dict[int, dict[str, Any]]:
+    """Return the complete inverter signal definition map."""
+    return {**BASE_INVERTER_SIGNAL_MAP, **_build_dynamic_pv_signal_map()}
 
 @dataclass
 class Device:
@@ -136,7 +204,7 @@ class FusionSolarAPI:
         self.station = None
         self.inverter_dn = None
         self.battery_capacity = None
-        self.login_host = login_host
+        self.login_host = normalize_fusionsolar_host(login_host)
         self.data_host = None
         self.dp_session = ""
         self.connected: bool = False
@@ -156,8 +224,7 @@ class FusionSolarAPI:
 
     def login(self) -> bool:
         """Connect to api."""
-    
-        if "la5" in self.login_host:
+        if any(host in self.login_host for host in ("la5", "intl")):
             _LOGGER.debug("Using LA5 login flow")
             return self._login_la5()
         else:
@@ -842,10 +909,108 @@ class FusionSolarAPI:
         _LOGGER.debug("Station info: %s", json_response.get("data"))
         return json_response
 
+    def call_social_contribution(self):
+        """Call the social contribution endpoint and return parsed JSON."""
+        self.refresh_csrf()
+
+        current_time = int(datetime.now().timestamp() * 1000)
+        local_offset = datetime.now().astimezone().utcoffset()
+        time_zone_hours = int(local_offset.total_seconds() / 3600) if local_offset else 0
+
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Accept-Language": "en-GB,en;q=0.9",
+            "Host": self.data_host,
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+            "X-Requested-With": "XMLHttpRequest",
+            "Roarand": self.csrf,
+        }
+
+        params = {
+            "dn": unquote(self.station),
+            "clientTime": current_time,
+            "timeZone": str(time_zone_hours),
+            "_": current_time,
+        }
+
+        social_contribution_url = (
+            f"https://{self.data_host}{SOCIAL_CONTRIBUTION_URL}?{urlencode(params)}"
+        )
+        _LOGGER.debug("Getting Social Contribution at: %s", social_contribution_url)
+
+        response = self.session.get(
+            social_contribution_url,
+            headers=headers,
+            timeout=20,
+        )
+
+        if response.status_code != 200:
+            _LOGGER.error(
+                "Social contribution request failed. Status=%s Body=%s",
+                response.status_code,
+                response.text[:300],
+            )
+            raise APIConnectionError("Social contribution request failed")
+
+        try:
+            social_contribution_data = response.json()
+        except json.JSONDecodeError as err:
+            _LOGGER.error(
+                "Social contribution did not return JSON. Status=%s Content-Type=%s Body=%s",
+                response.status_code,
+                response.headers.get("Content-Type"),
+                response.text[:300],
+            )
+            raise APIAuthError("Social contribution did not return JSON") from err
+
+        if "data" not in social_contribution_data:
+            _LOGGER.error(
+                "Social contribution response had an unexpected structure: %s",
+                str(social_contribution_data)[:500],
+            )
+            raise APIDataStructureError(
+                "Social contribution response did not contain data"
+            )
+
+        _LOGGER.debug("Social Contribution Response: %s", social_contribution_data)
+        return social_contribution_data
+    
+    def update_output_with_social_contribution(
+        self,
+        output: Dict[str, Optional[float | str]],
+    ):
+        """Populate social contribution values in the output dictionary."""
+        _LOGGER.debug("Getting social contribution data")
+
+        social_contribution_data = self.call_social_contribution()
+        data = social_contribution_data.get("data", {})
+
+        output["standard_coal_saved"] = extract_numeric(
+            data.get("standardCoalSavings", 0)
+        )
+        output["standard_coal_saved_this_year"] = extract_numeric(
+            data.get("standardCoalSavingsByYear", 0)
+        )
+        output["co2_avoided"] = extract_numeric(
+            data.get("co2Reduction", 0)
+        )
+        output["co2_avoided_this_year"] = extract_numeric(
+            data.get("co2ReductionByYear", 0)
+        )
+        output["equivalent_trees_planted"] = int(
+            round(extract_numeric(data.get("equivalentTreePlanting", 0)))
+        )
+        output["equivalent_trees_planted_this_year"] = int(
+            round(extract_numeric(data.get("equivalentTreePlantingByYear", 0)))
+        )
+    
     def get_inverter_realtime_data(self) -> dict:
-        """Fetch real-time inverter data from device-realtime-data endpoint."""
+        """Fetch real-time inverter data and dynamically expose only visible PV inputs."""
         if not self.inverter_dn:
             return {}
+    
+        signal_map = get_inverter_signal_map()
     
         self.refresh_csrf()
         headers = {
@@ -855,36 +1020,60 @@ class FusionSolarAPI:
         }
         params = {"deviceDn": self.inverter_dn, "displayAccessModel": "true"}
     
-        url = f"https://{self.data_host}{DEVICE_REALTIME_DATA_URL}"
-        _LOGGER.debug("Getting inverter realtime data at: %s", url)
+        realtime_url = f"https://{self.data_host}{DEVICE_REALTIME_DATA_URL}"
+        _LOGGER.debug("Getting inverter realtime data at: %s", realtime_url)
     
-        _, data = self._request_json(
+        _, realtime_data = self._request_json(
             "GET",
-            url,
+            realtime_url,
             context="FusionSolar inverter realtime data",
             headers=headers,
             params=params,
         )
     
-        if not data.get("success") or not data.get("data"):
-            _LOGGER.warning("Inverter realtime data response indicates failure: %s", data)
+        if not realtime_data.get("success") or not realtime_data.get("data"):
+            _LOGGER.warning(
+                "Inverter realtime data response indicates failure: %s",
+                realtime_data,
+            )
             return {}
     
-        result = {}
-        for entry in data["data"]:
+        result: dict[int, Any] = {}
+    
+        # Collect general inverter signals from the realtime endpoint.
+        for entry in realtime_data["data"]:
             if not isinstance(entry, dict) or "signals" not in entry:
                 continue
+    
             for signal in entry["signals"]:
                 signal_id = signal.get("id")
-                if signal_id in INVERTER_SIGNAL_MAP:
-                    result[signal_id] = signal.get("value", "")
+                signal_value = signal.get("value", "")
     
-        pv_signal_ids = [sid for sid in INVERTER_SIGNAL_MAP if sid >= 11000]
-        if pv_signal_ids:
+                if signal_id not in signal_map:
+                    continue
+    
+                if signal_value in ("", "--", "null", None):
+                    continue
+    
+                result[signal_id] = signal_value
+    
+        # Query only PV voltage/current signal IDs from KPI.
+        pv_voltage_current_signal_ids: list[int] = []
+        for pv_index in range(1, 21):
+            voltage_id = 11001 + ((pv_index - 1) * 3)
+            current_id = voltage_id + 1
+            pv_voltage_current_signal_ids.extend([voltage_id, current_id])
+    
+        pv_signal_meta: dict[int, dict[str, Any]] = {}
+    
+        if pv_voltage_current_signal_ids:
             try:
                 self.refresh_csrf()
                 headers["Roarand"] = self.csrf
-                signal_str = "&".join(f"signalIds={s}" for s in pv_signal_ids)
+                signal_str = "&".join(
+                    f"signalIds={signal_id}"
+                    for signal_id in pv_voltage_current_signal_ids
+                )
                 kpi_url = (
                     f"https://{self.data_host}{DEVICE_REAL_KPI_URL}"
                     f"?deviceDn={self.inverter_dn}&{signal_str}"
@@ -901,13 +1090,139 @@ class FusionSolarAPI:
                 if kpi_data.get("success") and kpi_data.get("data", {}).get("signals"):
                     for sid_str, val in kpi_data["data"]["signals"].items():
                         sid = int(sid_str)
-                        if sid in INVERTER_SIGNAL_MAP:
-                            result[sid] = val.get("value", "")
+    
+                        if sid not in signal_map:
+                            continue
+    
+                        raw_value = val.get("value", "")
+                        if raw_value in ("", "--", "null", None):
+                            continue
+    
+                        pv_signal_meta[sid] = {
+                            "value": raw_value,
+                            "latestTime": val.get("latestTime"),
+                        }
             except Exception as ex:
                 _LOGGER.warning("Failed to fetch PV string KPI data: %s", ex)
     
-        _LOGGER.debug("Inverter realtime data: %s", result)
+        visible_pv_indexes = self._get_visible_pv_indexes_from_signal_meta(pv_signal_meta)
+    
+        # Keep only voltage/current values for visible PV inputs.
+        for sid, meta in pv_signal_meta.items():
+            pv_index = ((sid - 11001) // 3) + 1
+            if pv_index not in visible_pv_indexes:
+                continue
+            result[sid] = meta["value"]
+    
+        # Calculate PV power locally for visible PV inputs.
+        for pv_index in visible_pv_indexes:
+            voltage_id = 11001 + ((pv_index - 1) * 3)
+            current_id = voltage_id + 1
+            power_id = voltage_id + 2
+    
+            if voltage_id not in result or current_id not in result:
+                continue
+    
+            voltage_value = extract_numeric(result[voltage_id])
+            current_value = extract_numeric(result[current_id])
+            result[power_id] = round(voltage_value * current_value / 1000, 4)
+    
+        _LOGGER.debug(
+            "Inverter realtime data after PV filtering: visible_pv_indexes=%s result=%s",
+            sorted(visible_pv_indexes),
+            result,
+        )
         return result
+    
+    def _get_visible_pv_indexes_from_signal_meta(
+        self,
+        pv_signal_meta: dict[int, dict[str, Any]],
+        max_pv_inputs: int = 20,
+    ) -> set[int]:
+        """Determine which PV inputs should be exposed.
+    
+        The FusionSolar web UI requests many PV signal IDs, but on some inverters
+        the API returns a repeated stale zero-value tail for non-existent inputs.
+        This method keeps the contiguous real PV inputs and trims that placeholder tail.
+        """
+        pv_pairs: list[dict[str, Any]] = []
+    
+        for pv_index in range(1, max_pv_inputs + 1):
+            voltage_id = 11001 + ((pv_index - 1) * 3)
+            current_id = voltage_id + 1
+    
+            voltage_meta = pv_signal_meta.get(voltage_id)
+            current_meta = pv_signal_meta.get(current_id)
+    
+            if voltage_meta is None and current_meta is None:
+                continue
+    
+            voltage_value = (
+                extract_numeric(voltage_meta.get("value"))
+                if voltage_meta is not None
+                else 0.0
+            )
+            current_value = (
+                extract_numeric(current_meta.get("value"))
+                if current_meta is not None
+                else 0.0
+            )
+            voltage_time = voltage_meta.get("latestTime") if voltage_meta else None
+            current_time = current_meta.get("latestTime") if current_meta else None
+    
+            pv_pairs.append(
+                {
+                    "pv_index": pv_index,
+                    "voltage_value": voltage_value,
+                    "current_value": current_value,
+                    "voltage_time": voltage_time,
+                    "current_time": current_time,
+                    "is_zero_only": voltage_value == 0 and current_value == 0,
+                    "time_tuple": (voltage_time, current_time),
+                }
+            )
+    
+        if not pv_pairs:
+            return set()
+    
+        cutoff_index: int | None = None
+    
+        for pos, pair in enumerate(pv_pairs):
+            tail = pv_pairs[pos:]
+    
+            if len(tail) < 2:
+                continue
+    
+            if not pair["is_zero_only"]:
+                continue
+    
+            placeholder_time_tuple = pair["time_tuple"]
+    
+            if all(
+                tail_pair["is_zero_only"]
+                and tail_pair["time_tuple"] == placeholder_time_tuple
+                for tail_pair in tail
+            ):
+                cutoff_index = pair["pv_index"] - 1
+                break
+    
+        if cutoff_index is None:
+            cutoff_index = pv_pairs[-1]["pv_index"]
+    
+        visible_indexes = {
+            pair["pv_index"]
+            for pair in pv_pairs
+            if pair["pv_index"] <= cutoff_index
+        }
+    
+        _LOGGER.debug(
+            "Visible PV indexes determined from signal metadata: %s (cutoff=%s, pairs=%s)",
+            sorted(visible_indexes),
+            cutoff_index,
+            pv_pairs,
+        )
+    
+        return visible_indexes
 
     def get_devices(self) -> list[Device]:
         """Fetch device values from the FusionSolar data endpoint."""
@@ -984,6 +1299,22 @@ class FusionSolarAPI:
             "battery_consumption_lifetime": 0.0,
             "battery_percentage": 0.0,
             "battery_capacity": 0.0,
+            "self_consumption_ratio_today": 0.0,
+            "self_consumption_ratio_week": 0.0,
+            "self_consumption_ratio_month": 0.0,
+            "self_consumption_ratio_year": 0.0,
+            "self_consumption_ratio_lifetime": 0.0,
+            "self_consumption_ratio_by_production_today": 0.0,
+            "self_consumption_ratio_by_production_week": 0.0,
+            "self_consumption_ratio_by_production_month": 0.0,
+            "self_consumption_ratio_by_production_year": 0.0,
+            "self_consumption_ratio_by_production_lifetime": 0.0,
+            "standard_coal_saved": 0.0,
+            "standard_coal_saved_this_year": 0.0,
+            "co2_avoided": 0.0,
+            "co2_avoided_this_year": 0.0,
+            "equivalent_trees_planted": 0,
+            "equivalent_trees_planted_this_year": 0,
             "exit_code": "SUCCESS",
         }
     
@@ -1067,6 +1398,12 @@ class FusionSolarAPI:
     
         self.update_output_with_battery_capacity(output)
         self.update_output_with_energy_balance(output)
+        self._update_output_with_self_consumption_ratios(output)
+    
+        try:
+            self.update_output_with_social_contribution(output)
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch social contribution data: %s", ex)
     
         output["exit_code"] = "SUCCESS"
         _LOGGER.debug("output JSON: %s", output)
@@ -1092,9 +1429,10 @@ class FusionSolarAPI:
     
         try:
             inverter_data = self.get_inverter_realtime_data()
+            signal_map = get_inverter_signal_map()
             for signal_id, value in inverter_data.items():
-                if signal_id in INVERTER_SIGNAL_MAP:
-                    sig = INVERTER_SIGNAL_MAP[signal_id]
+                if signal_id in signal_map:
+                    sig = signal_map[signal_id]
                     sig_type = sig["type"]
                     if sig_type == DeviceType.SENSOR_TEXT:
                         state = str(value)
@@ -1122,6 +1460,32 @@ class FusionSolarAPI:
     
         return devices
 
+    def _calculate_ratio_percentage(self, numerator: float, denominator: float) -> float:
+        """Return a percentage ratio with safe division handling."""
+        if denominator <= 0:
+            return 0.0
+    
+        return round((numerator / denominator) * 100, 2)
+    
+    
+    def _update_output_with_self_consumption_ratios(self, output: Dict[str, Optional[float | str]]):
+        """Populate self-consumption ratios for all supported periods."""
+        periods = ("today", "week", "month", "year", "lifetime")
+    
+        for period in periods:
+            self_use_value = float(output.get(f"panel_production_consumption_{period}", 0.0) or 0.0)
+            house_load_value = float(output.get(f"house_load_{period}", 0.0) or 0.0)
+            panel_production_value = float(output.get(f"panel_production_{period}", 0.0) or 0.0)
+    
+            output[f"self_consumption_ratio_{period}"] = self._calculate_ratio_percentage(
+                self_use_value,
+                house_load_value,
+            )
+            output[f"self_consumption_ratio_by_production_{period}"] = self._calculate_ratio_percentage(
+                self_use_value,
+                panel_production_value,
+            )
+            
     def update_output_with_battery_capacity(self, output: Dict[str, Optional[float | str]]):
         if self.battery_capacity is None or self.battery_capacity == 0.0:
             _LOGGER.debug("Getting Battery capacity")
@@ -1153,24 +1517,24 @@ class FusionSolarAPI:
         if month_discharge_power_list:
             month_total_discharge_power = sum(extract_numeric(value) for value in month_discharge_power_list if (value != "--" and value != "null"))
             output["battery_consumption_month"] = month_total_discharge_power
-
+    
         # Today energy sensors
         _LOGGER.debug("Getting Today's energy data")
         week_data = self.get_week_data()
         output["grid_consumption_today"] = extract_numeric(week_data[-1]["data"]["totalBuyPower"])
         output["grid_injection_today"] = extract_numeric(week_data[-1]["data"]["totalOnGridPower"])
-
+    
         if month_charge_power_list:
             charge_value_today = month_charge_power_list[datetime.now().day - 1]
             charge_value_today = extract_numeric(charge_value_today)
             output["battery_injection_today"] = charge_value_today
-
+    
         if month_discharge_power_list:
             discharge_value_today = month_discharge_power_list[datetime.now().day - 1]
             discharge_value_today = extract_numeric(discharge_value_today)
             output["battery_consumption_today"] = discharge_value_today
         
-
+    
         month_self_use_list = month_data["data"]["selfUsePower"]
         if month_self_use_list:
             self_use_value_today = month_self_use_list[datetime.now().day - 1]
@@ -1182,7 +1546,7 @@ class FusionSolarAPI:
             house_load_value_today = month_house_load_list[datetime.now().day - 1]
             house_load_value_today = extract_numeric(house_load_value_today)
             output["house_load_today"] = house_load_value_today
-
+    
         month_panel_production_list = month_data["data"]["productPower"]
         if month_panel_production_list:
             panel_production_value_today = month_panel_production_list[datetime.now().day - 1]
@@ -1193,7 +1557,7 @@ class FusionSolarAPI:
         _LOGGER.debug("Getting Week's energy data")
         today = datetime.now()
         start_day_week = today - timedelta(days=today.weekday())
-
+    
         days_previous_month = []
         days_current_month = []
         
@@ -1201,9 +1565,9 @@ class FusionSolarAPI:
             current_day = start_day_week + timedelta(days=i)
             if current_day.month < today.month:
                 days_previous_month.append(current_day.day)
-            else: 
+            else:
                 days_current_month.append(current_day.day)
-
+    
         panel_production_value_week = 0
         panel_production_consumption_value_week = 0
         house_load_value_week = 0
@@ -1224,7 +1588,7 @@ class FusionSolarAPI:
             house_load_value_week += self.calculate_week_energy(month_data, days_current_month, "usePower")
             battery_injection_value_week += self.calculate_week_energy(month_data, days_current_month, "chargePower")
             battery_consumption_value_week += self.calculate_week_energy(month_data, days_current_month, "dischargePower")
-
+    
         output["panel_production_week"] = panel_production_value_week
         output["panel_production_consumption_week"] = panel_production_consumption_value_week
         output["house_load_week"] = house_load_value_week
@@ -1233,7 +1597,7 @@ class FusionSolarAPI:
         if week_data:
             output["grid_consumption_week"] = sum(extract_numeric(day["data"]["totalBuyPower"]) for day in week_data if (day["data"]["totalBuyPower"] != "--" and day["data"]["totalBuyPower"] != "null"))
             output["grid_injection_week"] = sum(extract_numeric(day["data"]["totalOnGridPower"]) for day in week_data if (day["data"]["totalOnGridPower"] != "--" and day["data"]["totalOnGridPower"] != "null"))
-
+    
         # Year energy sensors
         _LOGGER.debug("Getting Years's energy data")
         year_data = self.call_energy_balance(ENERGY_BALANCE_CALL_TYPE.YEAR)
@@ -1242,7 +1606,7 @@ class FusionSolarAPI:
         output["panel_production_year"] = extract_numeric(year_data["data"]["totalProductPower"])
         output["grid_consumption_year"] = extract_numeric(year_data["data"]["totalBuyPower"])
         output["grid_injection_year"] = extract_numeric(year_data["data"]["totalOnGridPower"])
-
+    
         charge_power_list = year_data["data"]["chargePower"]
         if charge_power_list:
             total_charge_power = sum(extract_numeric(value) for value in charge_power_list if (value != "--" and value != "null"))
@@ -1277,6 +1641,8 @@ class FusionSolarAPI:
         if lifetime_discharge_power_list:
             lifetime_total_discharge_power = sum(extract_numeric(value) for value in lifetime_discharge_power_list if (value != "--" and value != "--"))
             output["battery_consumption_lifetime"] = lifetime_total_discharge_power
+    
+        self._update_output_with_self_consumption_ratios(output)
         
         
     def call_energy_balance(
@@ -1464,29 +1830,56 @@ class FusionSolarAPI:
         """Return the device name."""
         return device_id
 
-    def get_device_value(self, device_id: str, device_type: DeviceType, output: Dict[str, Optional[float | str]], default: int = 0) -> float | int | datetime:
-        """Get device random value."""
+    def get_device_value(
+        self,
+        device_id: str,
+        device_type: DeviceType,
+        output: Dict[str, Optional[float | str]],
+        default: int = 0,
+    ) -> float | int | datetime | str:
+        """Return the normalized device value for the requested entity."""
         if device_type == DeviceType.SENSOR_TIME:
-            _LOGGER.debug("%s: Value being returned is datetime: %s", device_id, self.last_session_time)
+            _LOGGER.debug(
+                "%s: Value being returned is datetime: %s",
+                device_id,
+                self.last_session_time,
+            )
             return self.last_session_time
-
-        if device_id.lower().replace(" ", "_") not in output:
+    
+        output_key = device_id.lower().replace(" ", "_")
+        if output_key not in output:
             raise KeyError(f"'{device_id}' not found.")
-
-        value = output[device_id.lower().replace(" ", "_")]
-        if value is None or value == 'None':
-            return default  # Retorna o valor padrão se for None
-
-        try:
-            if device_type == DeviceType.SENSOR_KW or device_type == DeviceType.SENSOR_KWH:
-               _LOGGER.debug("%s: Value being returned is float: %s", device_id, value)
-               return round(float(value), 4)
-            else:
-                _LOGGER.debug("%s: Value being returned is int: %i", device_id, value)
-                return int(value)
-        except ValueError:
-            _LOGGER.warn(f"Value '{value}' for '{device_id}' can't be converted.")
-            return 0.0
+    
+        value = output[output_key]
+        if value is None or value == "None":
+            return default
+    
+        if device_type == DeviceType.SENSOR_TEXT:
+            return str(value)
+    
+        if device_type == DeviceType.SENSOR_PERCENTAGE:
+            return int(float(value))
+    
+        if device_type == DeviceType.SENSOR_COUNT:
+            return int(round(float(value)))
+    
+        if device_type in (
+            DeviceType.SENSOR_KW,
+            DeviceType.SENSOR_KWH,
+            DeviceType.SENSOR_RATIO,
+            DeviceType.SENSOR_VOLTAGE,
+            DeviceType.SENSOR_CURRENT,
+            DeviceType.SENSOR_FREQUENCY,
+            DeviceType.SENSOR_TEMPERATURE,
+            DeviceType.SENSOR_RESISTANCE,
+            DeviceType.SENSOR_POWER_FACTOR,
+            DeviceType.SENSOR_KG,
+        ):
+            decimals = 2 if device_type == DeviceType.SENSOR_RATIO else 4
+            _LOGGER.debug("%s: Value being returned is float: %s", device_id, value)
+            return round(float(value), decimals)
+    
+        return value
 
 class APIAuthError(Exception):
     """Exception class for auth error."""

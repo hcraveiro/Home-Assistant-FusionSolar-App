@@ -22,6 +22,7 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -37,6 +38,7 @@ SUPPORTED_SENSOR_DEVICE_TYPES = {
     DeviceType.SENSOR_KW,
     DeviceType.SENSOR_KWH,
     DeviceType.SENSOR_PERCENTAGE,
+    DeviceType.SENSOR_RATIO,
     DeviceType.SENSOR_TIME,
     DeviceType.SENSOR_VOLTAGE,
     DeviceType.SENSOR_CURRENT,
@@ -45,8 +47,9 @@ SUPPORTED_SENSOR_DEVICE_TYPES = {
     DeviceType.SENSOR_RESISTANCE,
     DeviceType.SENSOR_POWER_FACTOR,
     DeviceType.SENSOR_TEXT,
+    DeviceType.SENSOR_KG,
+    DeviceType.SENSOR_COUNT,
 }
-
 
 def _get_station_suffix(coordinator: FusionSolarCoordinator) -> str:
     """Return a sanitized station suffix for unique IDs."""
@@ -342,11 +345,20 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         DeviceType.SENSOR_KW: UnitOfPower.KILO_WATT,
         DeviceType.SENSOR_KWH: UnitOfEnergy.KILO_WATT_HOUR,
         DeviceType.SENSOR_PERCENTAGE: "%",
+        DeviceType.SENSOR_RATIO: "%",
         DeviceType.SENSOR_VOLTAGE: UnitOfElectricPotential.VOLT,
         DeviceType.SENSOR_CURRENT: UnitOfElectricCurrent.AMPERE,
         DeviceType.SENSOR_FREQUENCY: UnitOfFrequency.HERTZ,
         DeviceType.SENSOR_TEMPERATURE: UnitOfTemperature.CELSIUS,
         DeviceType.SENSOR_RESISTANCE: "MΩ",
+        DeviceType.SENSOR_KG: "kg",
+    }
+
+    DIAGNOSTIC_SENSOR_IDS = {
+        "Inverter Output Mode",
+        "Inverter Last Shutdown Time",
+        "Inverter Startup Time",
+        "Last Authentication Time",
     }
 
     def __init__(self, coordinator: FusionSolarCoordinator, device: Device) -> None:
@@ -389,6 +401,13 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         return _build_device_info(self.coordinator)
 
     @property
+    def entity_category(self) -> EntityCategory | None:
+        """Return the entity category."""
+        if self.device_id in self.DIAGNOSTIC_SENSOR_IDS:
+            return EntityCategory.DIAGNOSTIC
+        return None
+
+    @property
     def name(self) -> str:
         """Return the name of the sensor."""
         if self.device is not None:
@@ -409,6 +428,10 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
             return str(self.device.state)
         if dtype == DeviceType.SENSOR_PERCENTAGE:
             return int(self.device.state)
+        if dtype == DeviceType.SENSOR_COUNT:
+            return int(self.device.state)
+        if dtype == DeviceType.SENSOR_RATIO:
+            return round(float(self.device.state), 2)
 
         return float(self.device.state)
 
@@ -442,7 +465,6 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the extra state attributes."""
         return {}
-
 
 class FusionSolarForecastSensor(CoordinatorEntity, SensorEntity):
     """Base class for Fusion Solar forecast sensors."""

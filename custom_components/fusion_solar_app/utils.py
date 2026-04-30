@@ -27,8 +27,14 @@ def encrypt_password(pub_key_pem, password) -> str:
     return base64.b64encode(encrypted_password).decode()
     
 def extract_numeric(value_with_unit) -> float:
-    try:
-        return float(value_with_unit.split()[0])
-    except (ValueError, AttributeError, IndexError):
-        return 0
+    """Extract a numeric value from either a number or a string with units."""
+    if value_with_unit is None:
+        return 0.0
 
+    if isinstance(value_with_unit, (int, float)):
+        return float(value_with_unit)
+
+    try:
+        return float(str(value_with_unit).split()[0])
+    except (ValueError, AttributeError, IndexError, TypeError):
+        return 0.0
