@@ -1,116 +1,235 @@
 # Home Assistant FusionSolar App Integration
 
-[![hacs\_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 [![GitHub release](https://img.shields.io/github/release/hcraveiro/Home-Assistant-FusionSolar-App.svg)](https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/releases/)
 
-Integrate FusionSolar App into your Home Assistant. This Integration was built due to the fact that some FusionSolar users don't have access to the Kiosk mode or the Northbound API / OpenAPI. If you happen to have access to any of those, please use [Tijs Verkoyen's Integration](https://github.com/tijsverkoyen/HomeAssistant-FusionSolar)
+Integrate FusionSolar App into Home Assistant without requiring Kiosk mode or the Northbound API / OpenAPI.
 
-* [Home Assistant FusionSolar App Integration](#home-assistant-fusionsolar-app-integration)
+This integration was built for FusionSolar users who only have access to the regular FusionSolar App account. If you already have access to the official Northbound API / OpenAPI, please consider using [Tijs Verkoyen's Integration](https://github.com/tijsverkoyen/HomeAssistant-FusionSolar).
 
-  * [Installation](#installation)
-  * [Configuration](#configuration)
-  * [Card configuration](#card-configuration)
-  * [Optional: Home Assistant package example (extra sensors)](#optional-home-assistant-package-example-extra-sensors)
-  * [Example Lovelace cards (using the extra sensors)](#example-lovelace-cards-using-the-extra-sensors)
-  * [Solar Production Forecast](#solar-production-forecast)
-  * [Dashboard example](#dashboard-example)
-  * [FAQ](#faq)
-  * [Credits](#credits)
+## Contents
+
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Supported hosts / regions](#supported-hosts--regions)
+- [Sensors](#sensors)
+  - [Plant / energy sensors](#plant--energy-sensors)
+  - [Built-in ratio sensors](#built-in-ratio-sensors)
+  - [Social contribution sensors](#social-contribution-sensors)
+  - [Inverter real-time sensors](#inverter-real-time-sensors)
+  - [Diagnostic sensors](#diagnostic-sensors)
+- [Card configuration](#card-configuration)
+- [Optional: Home Assistant package example (extra sensors)](#optional-home-assistant-package-example-extra-sensors)
+- [Example Lovelace cards (using the extra sensors)](#example-lovelace-cards-using-the-extra-sensors)
+- [Solar Production Forecast](#solar-production-forecast)
+- [Dashboard example](#dashboard-example)
+- [FAQ](#faq)
+- [Credits](#credits)
 
 ## Installation
 
-This integration can be added as a custom repository in HACS and from there you can install it.
+This integration can be added as a custom repository in HACS and installed from there.
 
-When the integration is installed in HACS, you need to add it in Home Assistant: Settings → Devices & Services → Add Integration → Search for FusionSolar App Integration.
+After installing it in HACS, add it in Home Assistant:
 
-The configuration happens in the configuration flow when you add the integration.
+**Settings → Devices & Services → Add Integration → Search for “FusionSolar App Integration”**
+
+The integration is configured entirely through the config flow.
 
 ## Configuration
 
-To access FusionSolar App you'll need an App account first. When you get it from your installer you'll have an Username and Password. That account is used on this integration. You will need also to provide the Fusion Solar host you use to log in to Fusion Solar App, as you will only be able to log in to your specific region.
+To access FusionSolar App you need a regular FusionSolar App account provided by your installer or system administrator.
 
-The default sensor's update frequency is 60 seconds, although the FusionSolar App only gets data every 5 minutes. It is just to make sure that as soon as the data can be retrieved from the API the sensors will be updated as soon as possible. After configuring the integration, you can open the config entry and press Configure to change the default update frequency in seconds. Bear in mind that setting it too low will not make the API return data more often than every 5 minutes, and may put unnecessary pressure on the API.
+You will need:
 
-### Device Data
+- **Username**
+- **Password**
+- **FusionSolar host / region**
 
-After setting up the Integration you will get a Device which will have the following sensors:
+The integration logs in using the same credentials you use in the FusionSolar App web frontend.
 
-* Panels Production (kW)
-* Panels Production Today (kWh)
-* Panels Production Week (kWh)
-* Panels Production Month (kWh)
-* Panels Production Year (kWh)
-* Panels Production Lifetime (kWh)
-* Panels Production Consumption Today (kWh)
-* Panels Production Consumption Week (kWh)
-* Panels Production Consumption Month (kWh)
-* Panels Production Consumption Year (kWh)
-* Panels Production Consumption Lifetime (kWh)
-* House Load (kW)
-* House Load Today (kWh)
-* House Load Week (kWh)
-* House Load Month (kWh)
-* House Load Year (kWh)
-* House Load Lifetime (kWh)
-* Battery Consumption (kW)
-* Battery Consumption Today (kWh)
-* Battery Consumption Week (kWh)
-* Battery Consumption Month (kWh)
-* Battery Consumption Year (kWh)
-* Battery Consumption Lifetime (kWh)
-* Battery Injection (kW)
-* Battery Injection Today (kWh)
-* Battery Injection Week (kWh)
-* Battery Injection Month (kWh)
-* Battery Injection Year (kWh)
-* Battery Injection Lifetime (kWh)
-* Grid Consumption (kW)
-* Grid Consumption Today (kWh)
-* Grid Consumption Week (kWh)
-* Grid Consumption Month (kWh)
-* Grid Consumption Year (kWh)
-* Grid Consumption Lifetime (kWh)
-* Grid Injection (kW)
-* Grid Injection Today (kWh)
-* Grid Injection Week (kWh)
-* Grid Injection Month (kWh)
-* Grid Injection Year (kWh)
-* Grid Injection Lifetime (kWh)
-* Battery Percentage (%)
-* Battery Capacity
-* Last Authentication Time
-* Panel Production Forecasted Today (kWh)
-* Panel Production Remaining Today (kWh)
+The default sensor update interval is **60 seconds**.  
+FusionSolar App data is usually refreshed only every few minutes (commonly around 5 minutes depending on region / account / backend behaviour), but the shorter Home Assistant polling interval ensures the sensors update as soon as new data becomes available.
 
-#### Inverter Real-Time Sensors
+After configuring the integration, you can open the config entry and press **Configure** to change the update interval.
 
-The following sensors are fetched directly from the inverter device and require the inverter to be reachable via the API:
+> Setting a very short interval will not force FusionSolar to provide fresher data than the backend actually exposes, and may generate unnecessary load.
 
-* Inverter Grid Voltage (V)
-* Inverter Grid Current (A, phase A on 3-phase systems)
-* Inverter Phase A Voltage (V)
-* Inverter Phase B Voltage (V)
-* Inverter Phase C Voltage (V)
-* Inverter Phase B Current (A)
-* Inverter Phase C Current (A)
-* Inverter Grid Frequency (Hz)
-* Inverter Internal Temperature (°C)
-* Inverter Insulation Resistance (MΩ)
-* Inverter Power Factor
-* Inverter Status
-* Inverter Startup Time
-* Inverter PV1 Voltage (V)
-* Inverter PV1 Current (A)
-* Inverter PV2 Voltage (V)
-* Inverter PV2 Current (A)
-* Inverter PV3 Voltage (V)
-* Inverter PV3 Current (A)
+## Supported hosts / regions
+
+The integration supports a flexible host input and normalizes several common FusionSolar host formats.
+
+You can typically enter any of the following forms:
+
+- `eu5`
+- `region01eu5`
+- `uni002eu5`
+- `eu5.fusionsolar.huawei.com`
+- `https://eu5.fusionsolar.huawei.com`
+
+The integration normalizes those values internally and applies the correct login flow for the region.
+
+It also includes improved handling for:
+
+- different regional login patterns
+- session refresh / reauthentication
+- login flows inferred from real FusionSolar frontend behaviour
+- HAR-based validation of region-specific behaviour
+
+## Sensors
+
+After setting up the integration, you will get a FusionSolar device with the following sensors.
+
+### Plant / energy sensors
+
+- Panels Production (kW)
+- Panels Production Today (kWh)
+- Panels Production Week (kWh)
+- Panels Production Month (kWh)
+- Panels Production Year (kWh)
+- Panels Production Lifetime (kWh)
+
+- Panels Production Consumption Today (kWh)
+- Panels Production Consumption Week (kWh)
+- Panels Production Consumption Month (kWh)
+- Panels Production Consumption Year (kWh)
+- Panels Production Consumption Lifetime (kWh)
+
+- House Load (kW)
+- House Load Today (kWh)
+- House Load Week (kWh)
+- House Load Month (kWh)
+- House Load Year (kWh)
+- House Load Lifetime (kWh)
+
+- Battery Consumption (kW)
+- Battery Consumption Today (kWh)
+- Battery Consumption Week (kWh)
+- Battery Consumption Month (kWh)
+- Battery Consumption Year (kWh)
+- Battery Consumption Lifetime (kWh)
+
+- Battery Injection (kW)
+- Battery Injection Today (kWh)
+- Battery Injection Week (kWh)
+- Battery Injection Month (kWh)
+- Battery Injection Year (kWh)
+- Battery Injection Lifetime (kWh)
+
+- Grid Consumption (kW)
+- Grid Consumption Today (kWh)
+- Grid Consumption Week (kWh)
+- Grid Consumption Month (kWh)
+- Grid Consumption Year (kWh)
+- Grid Consumption Lifetime (kWh)
+
+- Grid Injection (kW)
+- Grid Injection Today (kWh)
+- Grid Injection Week (kWh)
+- Grid Injection Month (kWh)
+- Grid Injection Year (kWh)
+- Grid Injection Lifetime (kWh)
+
+- Battery Percentage (%)
+- Battery Capacity
+- Last Authentication Time
+- Panel Production Forecasted Today (kWh)
+- Panel Production Remaining Today (kWh)
+
+### Built-in ratio sensors
+
+The integration now includes native self-consumption ratio sensors, so you no longer need to create those manually in templates if these are the metrics you want.
+
+#### Self consumption ratio
+
+Share of house load covered by self-consumed solar energy:
+
+- Self Consumption Ratio Today (%)
+- Self Consumption Ratio Week (%)
+- Self Consumption Ratio Month (%)
+- Self Consumption Ratio Year (%)
+- Self Consumption Ratio Lifetime (%)
+
+#### Self consumption ratio by production
+
+Share of solar production that was self-consumed instead of exported:
+
+- Self Consumption Ratio By Production Today (%)
+- Self Consumption Ratio By Production Week (%)
+- Self Consumption Ratio By Production Month (%)
+- Self Consumption Ratio By Production Year (%)
+- Self Consumption Ratio By Production Lifetime (%)
+
+### Social contribution sensors
+
+The integration also exposes the social / environmental contribution values shown by FusionSolar:
+
+- Standard Coal Saved (kg)
+- Standard Coal Saved This Year (kg)
+- CO2 Avoided (kg)
+- CO2 Avoided This Year (kg)
+- Equivalent Trees Planted
+- Equivalent Trees Planted This Year
+
+These values are taken from the same FusionSolar frontend endpoint used by the official web UI.
+
+### Inverter real-time sensors
+
+The following sensors are fetched directly from the inverter device and require the inverter to be reachable through the API:
+
+- Inverter Grid Voltage (V)
+- Inverter Grid Current (A, phase A on 3-phase systems)
+- Inverter Phase A Voltage (V)
+- Inverter Phase B Voltage (V)
+- Inverter Phase C Voltage (V)
+- Inverter Phase B Current (A)
+- Inverter Phase C Current (A)
+- Inverter Grid Frequency (Hz)
+- Inverter Internal Temperature (°C)
+- Inverter Insulation Resistance (MΩ)
+- Inverter Power Factor
+- Inverter Status
+- Inverter Startup Time
+- Inverter Last Shutdown Time
+- Inverter Output Mode
+
+#### Dynamic PV string sensors
+
+PV string sensors are discovered dynamically based on what the FusionSolar frontend / API actually exposes for the inverter.
+
+This means the integration only creates the PV inputs that appear to be valid for your inverter, instead of exposing a fixed set blindly.
+
+Depending on your inverter and API response, you may see sensors such as:
+
+- Inverter PV1 Voltage (V)
+- Inverter PV1 Current (A)
+- Inverter PV1 Power (kW)
+
+- Inverter PV2 Voltage (V)
+- Inverter PV2 Current (A)
+- Inverter PV2 Power (kW)
+
+- ...
+- Inverter PVN Voltage / Current / Power
+
+The integration uses both real-time inverter endpoints and HAR-validated FusionSolar frontend behaviour to avoid exposing placeholder PV inputs that do not really exist for the device.
+
+### Diagnostic sensors
+
+Some sensors are primarily useful for diagnostics and troubleshooting rather than day-to-day dashboards, including:
+
+- Last Authentication Time
+- Inverter Startup Time
+- Inverter Last Shutdown Time
+- Inverter Output Mode
 
 ## Card configuration
 
-I have configured a card using [flixlix](https://github.com/flixlix)'s [power-flow-card-plus](https://github.com/flixlix/power-flow-card-plus) that looks something like this: <a href="#"><img src="https://raw.githubusercontent.com/hcraveiro/Home-Assistant-FusionSolar-App/main/assets/card.png"></a>
+I have configured a card using [flixlix](https://github.com/flixlix)'s [power-flow-card-plus](https://github.com/flixlix/power-flow-card-plus) that looks something like this:
 
-You can see my configuration here:
+<a href="#"><img src="https://raw.githubusercontent.com/hcraveiro/Home-Assistant-FusionSolar-App/main/assets/card.png"></a>
+
+You can use a configuration like this:
 
 ```yaml
 type: custom:power-flow-card-plus
@@ -144,15 +263,17 @@ watt_threshold: 1000
 transparency_zero_lines: 0
 ```
 
-You can find the fusionsolar.png in assets folder. You need to put it in 'www' folder (inside /config).
+You can find `fusionsolar.png` in the `assets` folder. Put it in your Home Assistant `www` folder (`/config/www`).
 
 ## Optional: Home Assistant package example (extra sensors)
 
-If you want some **extra calculated sensors** (net battery power, grid net power, PV self-consumption, etc.) you can add them using a **Home Assistant package**.
+If you want some **extra calculated sensors** (net battery power, grid net power, PV self-consumption at the current moment, etc.) you can still add them using a Home Assistant package.
+
+> Note: some historical / period-based self-consumption ratios are now built into the integration natively, so you may not need all the template examples below anymore.
 
 ### How to use this (Packages)
 
-1. **Enable packages** in your `/config/configuration.yaml` (if you don't already use packages):
+1. Enable packages in your `/config/configuration.yaml` if you do not already use them:
 
 ```yaml
 homeassistant:
@@ -165,13 +286,7 @@ homeassistant:
 
 3. Paste the YAML below into that file.
 
-4. **Restart Home Assistant**.
-
-> Notes:
->
-> * This is optional and does not affect the integration itself.
-> * Make sure the entity IDs match your setup.
-> * Packages merge configuration, so this won’t overwrite your existing `template:` or `sensor:` sections.
+4. Restart Home Assistant.
 
 ### Example package file (YAML)
 
@@ -219,7 +334,6 @@ template:
           {{ (charge + discharge) | round(0) }}
 
   - sensor:
-      # Net to grid: + = export, - = import
       - name: "Grid net power"
         unique_id: grid_net_power
         unit_of_measurement: "W"
@@ -230,7 +344,6 @@ template:
           {% set exp = states('sensor.grid_injection_power')|float(0) %}
           {{ (exp - imp) | round(0) }}
 
-      # PV self-consumption (approx): production - export
       - name: "PV self-consumed power"
         unique_id: pv_self_consumed_power
         unit_of_measurement: "W"
@@ -241,7 +354,6 @@ template:
           {% set exp = states('sensor.grid_injection_power')|float(0) %}
           {{ max(0, pv - exp) | round(0) }}
 
-      # Share of current house load covered by PV (0-100%)
       - name: "PV cover now"
         unique_id: pv_cover_now
         unit_of_measurement: "%"
@@ -254,7 +366,6 @@ template:
             0
           {% endif %}
 
-      # Instant self-sufficiency: 100% if you're not importing
       - name: "Self-sufficiency now"
         unique_id: self_sufficiency_now
         unit_of_measurement: "%"
@@ -311,8 +422,6 @@ sensor:
 ```
 
 ## Example Lovelace cards (using the extra sensors)
-
-Below are a couple of simple Lovelace examples that use the optional sensors above.
 
 ### Entities card
 
@@ -396,7 +505,10 @@ cards:
       - entity: sensor.grid_consumption_power
       - entity: sensor.grid_injection_power
 ```
-That looks something like this: <a href="#"><img src="https://raw.githubusercontent.com/hcraveiro/Home-Assistant-FusionSolar-App/main/assets/card2.PNG"></a>
+
+That looks something like this:
+
+<a href="#"><img src="https://raw.githubusercontent.com/hcraveiro/Home-Assistant-FusionSolar-App/main/assets/card2.PNG"></a>
 
 ## Solar Production Forecast
 
@@ -439,8 +551,8 @@ The resulting delta curve is then smoothed while preserving the expected total e
 
 During the day, the forecast combines:
 
-- the real production already measured today;
-- the remaining forecasted production based on the historical pattern.
+- the real production already measured today
+- the remaining forecasted production based on the historical pattern
 
 In simplified terms:
 
@@ -483,9 +595,9 @@ Historical solar production can contain short spikes caused by clouds, shading, 
 
 To make the forecast more useful for dashboards, the integration applies:
 
-- weighted historical averaging;
-- robust outlier filtering;
-- delta-curve smoothing.
+- weighted historical averaging
+- robust outlier filtering
+- delta-curve smoothing
 
 This avoids unrealistic instant power spikes without losing the expected daily production shape.
 
@@ -501,10 +613,10 @@ The forecast sensors intentionally do not expose a `state_class`. This prevents 
 
 This means:
 
-- the current forecast value is still available as the sensor state;
-- the current forecast attributes are still available for dashboards;
-- large forecast attributes are not stored in Recorder;
-- long-term statistics are not generated for forecast sensors.
+- the current forecast value is still available as the sensor state
+- the current forecast attributes are still available for dashboards
+- large forecast attributes are not stored in Recorder
+- long-term statistics are not generated for forecast sensors
 
 ### Notes and limitations
 
@@ -520,13 +632,11 @@ The forecast is designed to reduce the impact of those jumps, but the real-time 
 
 The following dashboard section shows:
 
-- realtime panel production;
-- realtime forecasted production;
-- cumulative panel production;
-- cumulative forecasted production;
-- forecasted and remaining production sensors.
-
-> Replace the entity IDs with your own entities if needed.
+- realtime panel production
+- realtime forecasted production
+- cumulative panel production
+- cumulative forecasted production
+- forecasted and remaining production sensors
 
 ### Screenshot
 
@@ -566,23 +676,6 @@ template:
 ```
 
 ### Dashboard YAML
-The dashboard example below uses the ApexCharts-ready attributes exposed by the forecast sensor, so the chart configuration can stay simple.
-
-For the instant power forecast series:
-
-```yaml
-data_generator: |
-  return entity.attributes.forecast_power_chart || [];
-```
-
-For the cumulative forecast series:
-
-```yaml
-data_generator: |
-  return entity.attributes.forecast_cumulative_chart || [];
-```
-
-In the example below, replace `sensor.fusion_solar_ne_xxxxx_panel_production_forecasted_today` and `sensor.fusion_solar_ne_xxxxx_panel_production_remaining_today` with the actual entity IDs created in your Home Assistant instance.
 
 ```yaml
 type: grid
@@ -731,21 +824,46 @@ cards:
 
 ## FAQ
 
-### I'm not able to login, I'm getting error messages
+### I'm not able to login, or my sensors stop updating
 
-I built this integration figuring out, with Developer Tools from my browser, how the Frontend of Fusion Solar App calls the API (not the OpenAPI, a specific one for Fusion Solar App).
+This integration is based on how the FusionSolar frontend behaves, not on the official OpenAPI.
 
-Unfortunately the way the login is done might differ drastically from region to region. Unless I have accounts credentials for each case, I can't reproduce the behaviour for each scenario.
+Different regions can behave differently, and the frontend login flow can change over time.
 
-If you want to help me solve that, either you provide me with credentials to simulate the authentication flow, or you can help me by using your browser's Developer Tools (usually by pressing F12):
+Recent versions of this integration include improved handling for:
 
-* Go to your Fusion Solar App URL on the browser (mine is [https://eu5.fusionsolar.huawei.com](https://eu5.fusionsolar.huawei.com)) but don't login yet
-* Go to Network tab (in Developer Tools), have the 'Preserve log' checkbox ticked and then click the 'Clear network log'
-* Press Login button and take a screenshot of the sequence and order of requests on Network tab
-* Forward that to me through email; I will ask for more data, like what is on the Request Headers and Response Headers for each request, what is on the payload, etc.
-* I will try to infer the neccessary logic with that info and the Javascript used by the Frontend to make it work
+- region-specific login patterns
+- normalized host input
+- session refresh and stalled session recovery
+- login / API behaviour inferred from HAR captures and real frontend traffic
+
+If you still have trouble, the best way to help is to provide a browser HAR capture or detailed network trace.
+
+### How can I help troubleshoot login or region issues?
+
+You can use your browser's Developer Tools:
+
+- open your FusionSolar web URL
+- press `F12`
+- go to the **Network** tab
+- enable **Preserve log**
+- clear the log
+- perform the login sequence
+- export the network log as **HAR**
+
+That information is often enough to infer the frontend flow and update the integration for additional regions or login patterns.
 
 ## Credits
 
-A big thank you to Mark Parker ([msp1974](https://github.com/msp1974)) for providing the Community with a set of [Home Assistant Integration Templates](https://github.com/msp1974/HAIntegrationExamples) from which I started to create this Integration.
-Another big thank you to Tijs Verkoyen for his [Integration](https://github.com/tijsverkoyen/HomeAssistant-FusionSolar) as I also took inspiration from there.
+A big thank you to Mark Parker ([msp1974](https://github.com/msp1974)) for providing the Community with a set of [Home Assistant Integration Templates](https://github.com/msp1974/HAIntegrationExamples) from which I started to create this integration.
+
+Another big thank you to Tijs Verkoyen for his [FusionSolar integration](https://github.com/tijsverkoyen/HomeAssistant-FusionSolar), which was also an inspiration.
+
+Additional thanks to the community members who shared browser traces, HAR files and real-world frontend behaviour, which helped improve:
+
+- regional login compatibility
+- session handling
+- inverter PV string discovery
+- device and frontend-derived sensor coverage
+
+Also thanks to [FusionSolarPlus](https://github.com/JortvanSchijndel/FusionSolarPlus) for useful ideas around broader frontend coverage, device-oriented signals and regional behaviour analysis.
