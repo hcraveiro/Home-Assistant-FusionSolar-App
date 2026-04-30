@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import unquote, quote, urlparse, urlencode
 from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
-from .const import DOMAIN, PUBKEY_URL, LOGIN_HEADERS_1_STEP_REFERER, LOGIN_HEADERS_2_STEP_REFERER, LOGIN_VALIDATE_USER_URL, LOGIN_VALIDATE_USER_URL_LA5, FINAL_AUTH_URL_LA5, LOGIN_FORM_URL, DATA_URL, STATION_LIST_URL, KEEP_ALIVE_URL, DATA_REFERER_URL, ENERGY_BALANCE_URL, LOGIN_DEFAULT_REDIRECT_URL, CAPTCHA_URL, DEVICE_REALTIME_DATA_URL, DEVICE_REAL_KPI_URL, SOCIAL_CONTRIBUTION_URL
+from .const import DOMAIN, PUBKEY_URL, LOGIN_HEADERS_1_STEP_REFERER, LOGIN_HEADERS_2_STEP_REFERER, LOGIN_VALIDATE_USER_URL, LOGIN_VALIDATE_USER_URL_LA5, FINAL_AUTH_URL_LA5, LOGIN_FORM_URL, DATA_URL, STATION_LIST_URL, KEEP_ALIVE_URL, DATA_REFERER_URL, ENERGY_BALANCE_URL, LOGIN_DEFAULT_REDIRECT_URL, CAPTCHA_URL, DEVICE_REALTIME_DATA_URL, DEVICE_REAL_KPI_URL, SOCIAL_CONTRIBUTION_URL, BATTERY_TYPE_URL, BATTERY_DC_URL, INVERTER_CONFIG_SIGNAL_URL
 from .utils import extract_numeric, encrypt_password, generate_nonce
 
 _LOGGER = logging.getLogger(__name__)
@@ -131,6 +131,66 @@ DEVICES = [
     {"id": "Last Authentication Time", "type": DeviceType.SENSOR_TIME, "icon": "mdi:clock-outline"},
 ]
 
+BATTERY_MODULE_1_SIGNAL_IDS = [
+    230320252,  # [Module 1] No.
+    230320459,  # [Module 1] [DC/DC] Working status
+    230320275,  # [Module 1] [DC/DC] SN
+    230320146,  # [Module 1] [DC/DC] Software version
+    230320463,  # [Module 1] [DC/DC] SOC
+    230320473,  # [Module 1] [DC/DC] Charge and discharge power
+    230320462,  # [Module 1] [DC/DC] Internal temperature
+    230320469,  # [Module 1] [DC/DC] Daily charge energy
+    230320470,  # [Module 1] [DC/DC] Daily discharge energy
+    230320108,  # [Module 1] Total discharge energy
+    230320107,  # [Module 1] Total charge energy
+    230320460,  # [Module 1] [DC/DC] Bus voltage
+    230320461,  # [Module 1] [DC/DC] Bus current
+    230320514,  # [Module 1] Battery pack quantity
+
+    230320265,  # [Module 1] [Battery pack 1] No.
+    230320266,  # [Module 1] [Battery pack 2] No.
+    230320267,  # [Module 1] [Battery pack 3] No.
+    230320148,  # [Module 1] [Battery pack 1] SN
+    230320165,  # [Module 1] [Battery pack 2] SN
+    230320181,  # [Module 1] [Battery pack 3] SN
+    230320147,  # [Module 1] [Battery pack 1] Software version
+    230320164,  # [Module 1] [Battery pack 2] Software version
+    230320180,  # [Module 1] [Battery pack 3] Software version
+    230320151,  # [Module 1] [Battery pack 1] Operating status
+    230320168,  # [Module 1] [Battery pack 2] Operating status
+    230320184,  # [Module 1] [Battery pack 3] Operating status
+    230320159,  # [Module 1] [Battery pack 1] Voltage
+    230320174,  # [Module 1] [Battery pack 2] Voltage
+    230320190,  # [Module 1] [Battery pack 3] Voltage
+    230320158,  # [Module 1] [Battery pack 1] Charge/Discharge power
+    230320173,  # [Module 1] [Battery pack 2] Charge/Discharge power
+    230320189,  # [Module 1] [Battery pack 3] Charge/Discharge power
+    230320446,  # [Module 1] [Battery pack 1] Maximum temperature
+    230320448,  # [Module 1] [Battery pack 2] Maximum temperature
+    230320450,  # [Module 1] [Battery pack 3] Maximum temperature
+    230320447,  # [Module 1] [Battery pack 1] Minimum temperature
+    230320449,  # [Module 1] [Battery pack 2] Minimum temperature
+    230320451,  # [Module 1] [Battery pack 3] Minimum temperature
+    230320152,  # [Module 1] [Battery pack 1] SOC
+    230320169,  # [Module 1] [Battery pack 2] SOC
+    230320185,  # [Module 1] [Battery pack 3] SOC
+    230320163,  # [Module 1] [Battery pack 1] Total discharge energy
+    230320179,  # [Module 1] [Battery pack 2] Total discharge energy
+    230320194,  # [Module 1] [Battery pack 3] Total discharge energy
+    230320492,  # [Module 1] [Battery pack 1] Battery Health Check
+    230320493,  # [Module 1] [Battery pack 2] Battery Health Check
+    230320494,  # [Module 1] [Battery pack 3] Battery Health Check
+    230320498,  # [Module 1] [Battery pack 1] Heating Status
+    230320499,  # [Module 1] [Battery pack 2] Heating Status
+    230320500,  # [Module 1] [Battery pack 3] Heating Status
+    230320154,  # [Module 1] [Battery pack 1] SOH
+    230320170,  # [Module 1] [Battery pack 2] SOH
+    230320186,  # [Module 1] [Battery pack 3] SOH
+    230320663,  # [Module 1] [Battery pack 1] Data collection status
+    230320664,  # [Module 1] [Battery pack 2] Data collection status
+    230320665,  # [Module 1] [Battery pack 3] Data collection status
+]
+
 # Signal ID -> sensor definition for inverter real-time data
 BASE_INVERTER_SIGNAL_MAP = {
     10008: {"id": "Inverter Grid Voltage", "type": DeviceType.SENSOR_VOLTAGE, "icon": "mdi:flash"},
@@ -202,7 +262,16 @@ class FusionSolarAPI:
         self.captcha_input = captcha_input
         self.captcha_img = None
         self.station = None
+        self.station_name = None
         self.inverter_dn = None
+        self.inverter_name = None
+        self.inverter_model = None
+        self.inverter_software_version = None
+        self.inverter_serial_number = None
+        self.battery_dn = None
+        self.battery_model = None
+        self.battery_serial_number = None
+        self.battery_software_version = None
         self.battery_capacity = None
         self.login_host = normalize_fusionsolar_host(login_host)
         self.data_host = None
@@ -215,6 +284,7 @@ class FusionSolarAPI:
         self.csrf_time = None
         self.request_timeout = 20
         self.session = requests.Session()
+        self.session.cookies.set("locale", "en-us")
         self.session.cookies.set("locale", "en-us")
 
     @property
@@ -446,15 +516,7 @@ class FusionSolarAPI:
 
             self.refresh_csrf()
             station_data = self.get_station_list()
-
-            if not self.station:
-                self.station = station_data["data"]["list"][0]["dn"]
-            else:
-                if not any(s["dn"] == self.station for s in station_data["data"]["list"]):
-                    raise APIDataStructureError(f"Station {self.station} not found.")
-
-            if self.battery_capacity is None or self.battery_capacity == 0.0:
-                self.battery_capacity = station_data["data"]["list"][0]["batteryCapacity"]
+            self._update_station_metadata_from_station_list(station_data)
 
             self._start_session_monitor()
             return True, self.station
@@ -552,15 +614,7 @@ class FusionSolarAPI:
             self.refresh_csrf()
     
             station_data = self.get_station_list()
-    
-            if not self.station:
-                self.station = station_data["data"]["list"][0]["dn"]
-            else:
-                if not any(s["dn"] == self.station for s in station_data["data"]["list"]):
-                    raise APIDataStructureError(f"Station {self.station} not found.")
-    
-            if self.battery_capacity is None or self.battery_capacity == 0.0:
-                self.battery_capacity = station_data["data"]["list"][0]["batteryCapacity"]
+            self._update_station_metadata_from_station_list(station_data)
     
             self._start_session_monitor()
     
@@ -860,6 +914,28 @@ class FusionSolarAPI:
         _LOGGER.debug("CSRF refreshed: %s", self.csrf)
 
     
+    def _update_station_metadata_from_station_list(self, station_data: dict) -> None:
+        """Update station metadata such as station DN, station name and battery capacity."""
+        stations = station_data.get("data", {}).get("list", [])
+        if not isinstance(stations, list) or not stations:
+            raise APIDataStructureError("Station list is empty or invalid.")
+    
+        selected_station = None
+    
+        if not self.station:
+            selected_station = stations[0]
+            self.station = selected_station.get("dn")
+        else:
+            selected_station = next((s for s in stations if s.get("dn") == self.station), None)
+            if selected_station is None:
+                raise APIDataStructureError(f"Station {self.station} not found.")
+    
+        if not self.station_name:
+            self.station_name = selected_station.get("name")
+    
+        if self.battery_capacity is None or self.battery_capacity == 0.0:
+            self.battery_capacity = selected_station.get("batteryCapacity")
+
     def get_station_id(self):
         return self.get_station_list()["data"]["list"][0]["dn"]
 
@@ -909,6 +985,279 @@ class FusionSolarAPI:
         _LOGGER.debug("Station info: %s", json_response.get("data"))
         return json_response
 
+    def _create_dynamic_device(
+        self,
+        device_id: str,
+        device_type: DeviceType,
+        raw_value: Any,
+        icon: str,
+    ) -> Device | None:
+        """Create a dynamic device entity from a raw API value."""
+        if device_type == DeviceType.SENSOR_TEXT:
+            if raw_value is None:
+                return None
+            state = str(raw_value)
+        elif device_type == DeviceType.SENSOR_PERCENTAGE:
+            if raw_value in ("", "--", "null", None):
+                return None
+            state = int(round(extract_numeric(raw_value)))
+        else:
+            if raw_value in ("", "--", "null", None):
+                return None
+            state = round(float(extract_numeric(raw_value)), 4)
+    
+        return Device(
+            device_id=device_id,
+            device_unique_id=self.get_device_unique_id(device_id, device_type),
+            device_type=device_type,
+            name=self.get_device_name(device_id),
+            state=state,
+            icon=icon,
+        )
+    
+    def get_battery_type(self) -> dict:
+        """Fetch battery type information."""
+        if not self.battery_dn:
+            return {}
+    
+        self.refresh_csrf()
+    
+        headers = {
+            "Accept": "application/json",
+            "Roarand": self.csrf,
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+        }
+    
+        params = {
+            "deviceDn": self.battery_dn,
+            "_": int(time.time() * 1000),
+        }
+    
+        url = f"https://{self.data_host}{BATTERY_TYPE_URL}"
+        _LOGGER.debug("Getting battery type at: %s", url)
+    
+        _, data = self._request_json(
+            "GET",
+            url,
+            context="FusionSolar battery type",
+            headers=headers,
+            params=params,
+        )
+    
+        battery_type_data = data.get("data", {})
+        module_1_model = battery_type_data.get("module1DevType")
+        module_model = battery_type_data.get("moduleDevType")
+    
+        if module_1_model and module_1_model != "ESS":
+            self.battery_model = module_1_model
+        elif module_model and module_model != "ESS":
+            self.battery_model = module_model
+    
+        return data
+    
+    def get_battery_realtime_data(self) -> dict[int, Any]:
+        """Fetch battery realtime data from the device endpoint."""
+        if not self.battery_dn:
+            return {}
+    
+        self.refresh_csrf()
+    
+        headers = {
+            "Accept": "application/json",
+            "Roarand": self.csrf,
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+        }
+    
+        params = {
+            "deviceDn": self.battery_dn,
+            "displayAccessModel": "true",
+        }
+    
+        url = f"https://{self.data_host}{DEVICE_REALTIME_DATA_URL}"
+        _LOGGER.debug("Getting battery realtime data at: %s", url)
+    
+        _, data = self._request_json(
+            "GET",
+            url,
+            context="FusionSolar battery realtime data",
+            headers=headers,
+            params=params,
+        )
+    
+        if not data.get("success") or not data.get("data"):
+            _LOGGER.warning("Battery realtime data response indicates failure: %s", data)
+            return {}
+    
+        result: dict[int, Any] = {}
+    
+        for entry in data["data"]:
+            if not isinstance(entry, dict) or "signals" not in entry:
+                continue
+    
+            for signal in entry["signals"]:
+                signal_id = signal.get("id")
+                signal_value = signal.get("value", "")
+    
+                if signal_id is None:
+                    continue
+    
+                result[signal_id] = signal_value
+    
+        _LOGGER.debug("Battery realtime data: %s", result)
+        return result
+    
+    def _update_battery_metadata_from_module_1_data(
+        self,
+        module_1_name_map: dict[str, Any],
+    ) -> None:
+        """Update battery metadata from module 1 data when available."""
+        serial_value = module_1_name_map.get("[Module 1] [DC/DC] SN")
+        if serial_value not in (None, "", "--", "null"):
+            self.battery_serial_number = str(serial_value)
+    
+        software_value = module_1_name_map.get("[Module 1] [DC/DC] Software version")
+        if software_value not in (None, "", "--", "null"):
+            self.battery_software_version = str(software_value)
+    
+        _LOGGER.debug(
+            "Battery metadata loaded: model=%s sw=%s sn=%s",
+            self.battery_model,
+            self.battery_software_version,
+            self.battery_serial_number,
+        )
+    
+    def get_battery_module_1_data(self) -> list[dict[str, Any]]:
+        """Fetch extended battery data for module 1."""
+        if not self.battery_dn:
+            return []
+    
+        self.refresh_csrf()
+    
+        headers = {
+            "Accept": "application/json",
+            "Roarand": self.csrf,
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+        }
+    
+        params = {
+            "dn": self.battery_dn,
+            "sigids": ",".join(str(signal_id) for signal_id in BATTERY_MODULE_1_SIGNAL_IDS),
+            "moduleId": 1,
+            "_": int(time.time() * 1000),
+        }
+    
+        url = f"https://{self.data_host}{BATTERY_DC_URL}"
+        _LOGGER.debug("Getting battery module 1 data at: %s", url)
+    
+        _, data = self._request_json(
+            "GET",
+            url,
+            context="FusionSolar battery module 1 data",
+            headers=headers,
+            params=params,
+        )
+    
+        module_data = data.get("data", [])
+        if not isinstance(module_data, list):
+            raise APIDataStructureError("Battery module 1 response did not contain a list")
+    
+        _LOGGER.debug("Battery module 1 data: %s", module_data)
+        return module_data
+    
+    def get_battery_devices(self) -> list[Device]:
+        """Return battery device entities and battery pack diagnostic entities."""
+        if not self.battery_dn:
+            return []
+    
+        devices: list[Device] = []
+    
+        try:
+            self.get_battery_type()
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch battery type: %s", ex)
+    
+        realtime_data: dict[int, Any] = {}
+        try:
+            realtime_data = self.get_battery_realtime_data()
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch battery realtime data: %s", ex)
+    
+        module_1_data: list[dict[str, Any]] = []
+        try:
+            module_1_data = self.get_battery_module_1_data()
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch battery module 1 data: %s", ex)
+    
+        battery_realtime_definitions = [
+            ("Battery Operating Status", DeviceType.SENSOR_TEXT, realtime_data.get(10003), "mdi:battery-heart-variant"),
+            ("Battery Charge/Discharge Mode", DeviceType.SENSOR_TEXT, realtime_data.get(10008), "mdi:battery-sync"),
+            ("Battery Backup Time", DeviceType.SENSOR_TEXT, realtime_data.get(10015), "mdi:clock-outline"),
+            ("Battery Energy Charged Today", DeviceType.SENSOR_KWH, realtime_data.get(10001), "mdi:battery-arrow-up"),
+            ("Battery Energy Discharged Today", DeviceType.SENSOR_KWH, realtime_data.get(10002), "mdi:battery-arrow-down"),
+            ("Battery Charge/Discharge Power", DeviceType.SENSOR_KW, realtime_data.get(10004), "mdi:flash"),
+            ("Battery Bus Voltage", DeviceType.SENSOR_VOLTAGE, realtime_data.get(10005), "mdi:flash"),
+        ]
+    
+        for device_id, device_type, raw_value, icon in battery_realtime_definitions:
+            device = self._create_dynamic_device(device_id, device_type, raw_value, icon)
+            if device is not None:
+                devices.append(device)
+    
+        module_1_name_map: dict[str, Any] = {}
+        for item in module_1_data:
+            name = item.get("name")
+            if not name:
+                continue
+    
+            raw_value = item.get("realValue")
+            if raw_value in (None, ""):
+                raw_value = item.get("value")
+    
+            module_1_name_map[name] = raw_value
+    
+        self._update_battery_metadata_from_module_1_data(module_1_name_map)
+    
+        battery_module_definitions = [
+            ("Battery Bus Current", DeviceType.SENSOR_CURRENT, module_1_name_map.get("[Module 1] [DC/DC] Bus current"), "mdi:current-dc"),
+            ("Battery Internal Temperature", DeviceType.SENSOR_TEMPERATURE, module_1_name_map.get("[Module 1] [DC/DC] Internal temperature"), "mdi:thermometer"),
+            ("Battery Total Charge Energy", DeviceType.SENSOR_KWH, module_1_name_map.get("[Module 1] Total charge energy"), "mdi:battery-arrow-up"),
+            ("Battery Total Discharge Energy", DeviceType.SENSOR_KWH, module_1_name_map.get("[Module 1] Total discharge energy"), "mdi:battery-arrow-down"),
+        ]
+    
+        for device_id, device_type, raw_value, icon in battery_module_definitions:
+            device = self._create_dynamic_device(device_id, device_type, raw_value, icon)
+            if device is not None:
+                devices.append(device)
+    
+        battery_pack_definitions = {
+            "Operating status": (DeviceType.SENSOR_TEXT, "mdi:battery-medium"),
+            "Voltage": (DeviceType.SENSOR_VOLTAGE, "mdi:flash"),
+            "Charge/Discharge power": (DeviceType.SENSOR_KW, "mdi:flash"),
+            "Maximum temperature": (DeviceType.SENSOR_TEMPERATURE, "mdi:thermometer-high"),
+            "Minimum temperature": (DeviceType.SENSOR_TEMPERATURE, "mdi:thermometer-low"),
+            "Total discharge energy": (DeviceType.SENSOR_KWH, "mdi:battery-arrow-down"),
+            "SOH": (DeviceType.SENSOR_PERCENTAGE, "mdi:battery-check"),
+            "Battery Health Check": (DeviceType.SENSOR_TEXT, "mdi:heart-pulse"),
+            "Heating Status": (DeviceType.SENSOR_TEXT, "mdi:radiator"),
+        }
+    
+        for pack_index in range(1, 4):
+            pack_prefix = f"[Module 1] [Battery pack {pack_index}] "
+            pack_status_key = f"{pack_prefix}Operating status"
+    
+            if pack_status_key not in module_1_name_map:
+                continue
+    
+            for metric_name, (device_type, icon) in battery_pack_definitions.items():
+                raw_value = module_1_name_map.get(f"{pack_prefix}{metric_name}")
+                device_id = f"Battery Pack {pack_index} {metric_name}"
+                device = self._create_dynamic_device(device_id, device_type, raw_value, icon)
+                if device is not None:
+                    devices.append(device)
+    
+        _LOGGER.debug("Battery devices created: %s", [device.device_id for device in devices])
+        return devices
+        
     def call_social_contribution(self):
         """Call the social contribution endpoint and return parsed JSON."""
         self.refresh_csrf()
@@ -1004,6 +1353,98 @@ class FusionSolarAPI:
         output["equivalent_trees_planted_this_year"] = int(
             round(extract_numeric(data.get("equivalentTreePlantingByYear", 0)))
         )
+    
+    def get_inverter_config_info(self) -> dict:
+        """Fetch inverter configuration metadata such as model, software version and serial number."""
+        if not self.inverter_dn:
+            return {}
+    
+        self.refresh_csrf()
+    
+        headers = {
+            "Accept": "application/json",
+            "Roarand": self.csrf,
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+        }
+    
+        params = {
+            "dn": self.inverter_dn,
+            "signals": "50009,50010,50012,33595393",
+            "_": int(time.time() * 1000),
+        }
+    
+        url = f"https://{self.data_host}{INVERTER_CONFIG_SIGNAL_URL}"
+        _LOGGER.debug("Getting inverter config info at: %s", url)
+    
+        _, data = self._request_json(
+            "GET",
+            url,
+            context="FusionSolar inverter config info",
+            headers=headers,
+            params=params,
+        )
+    
+        payload = data.get("data", {})
+        entries: list[dict[str, Any]] = []
+    
+        if isinstance(payload, list):
+            entries = [item for item in payload if isinstance(item, dict)]
+        elif isinstance(payload, dict):
+            if isinstance(payload.get("signals"), list):
+                entries = [item for item in payload["signals"] if isinstance(item, dict)]
+            elif isinstance(payload.get("list"), list):
+                entries = [item for item in payload["list"] if isinstance(item, dict)]
+            else:
+                for key, value in payload.items():
+                    if str(key).isdigit():
+                        if isinstance(value, dict):
+                            entries.append({"signal": key, **value})
+                        else:
+                            entries.append({"signal": key, "value": value})
+    
+        parsed: dict[str, Any] = {}
+    
+        for entry in entries:
+            signal_id = str(
+                entry.get("signal")
+                or entry.get("signalId")
+                or entry.get("signal_id")
+                or entry.get("id")
+                or entry.get("sigId")
+                or entry.get("sigid")
+                or ""
+            )
+    
+            raw_value = entry.get("realValue")
+            if raw_value in (None, ""):
+                raw_value = entry.get("value")
+    
+            if raw_value in (None, "", "--", "null"):
+                continue
+    
+            parsed[signal_id] = raw_value
+    
+        if "33595393" in parsed:
+            self.inverter_name = str(parsed["33595393"])
+    
+        if "50009" in parsed:
+            self.inverter_model = str(parsed["50009"])
+    
+        if "50010" in parsed:
+            self.inverter_software_version = str(parsed["50010"])
+    
+        if "50012" in parsed:
+            self.inverter_serial_number = str(parsed["50012"])
+    
+        _LOGGER.debug(
+            "Inverter config info loaded: name=%s model=%s sw=%s sn=%s",
+            self.inverter_name,
+            self.inverter_model,
+            self.inverter_software_version,
+            self.inverter_serial_number,
+        )
+    
+        return data
     
     def get_inverter_realtime_data(self) -> dict:
         """Fetch real-time inverter data and dynamically expose only visible PV inputs."""
@@ -1351,7 +1792,14 @@ class FusionSolarAPI:
                 soc = extract_numeric(node.get("deviceTips", {}).get("SOC", ""))
                 if soc is not None:
                     output["battery_percentage"] = soc
-    
+                    
+                if self.battery_dn is None:
+                    dev_ids = node.get("devIds") or []
+                    dn = dev_ids[0] if dev_ids else node.get("devDn")
+                    if dn:
+                        self.battery_dn = dn
+                        _LOGGER.info("Discovered battery DN: %s", self.battery_dn)
+
                 battery_power = extract_numeric(
                     node.get("deviceTips", {}).get("BATTERY_POWER", "")
                 )
@@ -1395,6 +1843,17 @@ class FusionSolarAPI:
                             node,
                         )
                     break
+                
+        if self.inverter_dn and (
+            self.inverter_name is None
+            or self.inverter_model is None
+            or self.inverter_software_version is None
+            or self.inverter_serial_number is None
+        ):
+            try:
+                self.get_inverter_config_info()
+            except Exception as ex:
+                _LOGGER.warning("Failed to fetch inverter config info: %s", ex)
     
         self.update_output_with_battery_capacity(output)
         self.update_output_with_energy_balance(output)
@@ -1458,6 +1917,11 @@ class FusionSolarAPI:
         except Exception as ex:
             _LOGGER.warning("Failed to fetch inverter realtime data: %s", ex)
     
+        try:
+            devices.extend(self.get_battery_devices())
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch battery devices: %s", ex)
+
         return devices
 
     def _calculate_ratio_percentage(self, numerator: float, denominator: float) -> float:

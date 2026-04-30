@@ -51,6 +51,24 @@ SUPPORTED_SENSOR_DEVICE_TYPES = {
     DeviceType.SENSOR_COUNT,
 }
 
+INVERTER_DEVICE_SENSOR_PREFIX = "Inverter "
+
+BATTERY_DEVICE_SENSOR_IDS = {
+    "Battery Operating Status",
+    "Battery Charge/Discharge Mode",
+    "Battery Backup Time",
+    "Battery Energy Charged Today",
+    "Battery Energy Discharged Today",
+    "Battery Charge/Discharge Power",
+    "Battery Bus Voltage",
+    "Battery Bus Current",
+    "Battery Internal Temperature",
+    "Battery Total Charge Energy",
+    "Battery Total Discharge Energy",
+    "Battery Percentage",
+    "Battery Capacity",
+}
+
 def _get_station_suffix(coordinator: FusionSolarCoordinator) -> str:
     """Return a sanitized station suffix for unique IDs."""
     station_dn = getattr(coordinator.api, "station", None) or "unknown_station"
@@ -63,26 +81,76 @@ def _get_station_suffix(coordinator: FusionSolarCoordinator) -> str:
     )
 
 
-def _build_device_info(coordinator: FusionSolarCoordinator) -> DeviceInfo:
-    """Build device info shared by all Fusion Solar entities."""
+def _build_device_info(
+    coordinator: FusionSolarCoordinator,
+    device: Device | None = None,
+) -> DeviceInfo:
+    """Build device info shared by Fusion Solar entities."""
     station_dn = getattr(coordinator.api, "station", None) or "unknown_station"
+    station_name = getattr(coordinator.api, "station_name", None) or "FusionSolar Plant"
     controller_name = getattr(
         getattr(coordinator, "data", None),
         "controller_name",
         coordinator.api.controller_name,
     )
 
-    return DeviceInfo(
-        name=f"Fusion Solar ({station_dn})",
-        manufacturer="Fusion Solar",
-        model="Fusion Solar Model v1",
-        sw_version="1.0",
-        identifiers={
-            (
-                DOMAIN,
-                f"{controller_name}_{station_dn}",
+    plant_identifier = (
+        DOMAIN,
+        f"{controller_name}_{station_dn}",
+    )
+
+    if device is not None:
+        if device.device_id.startswith(INVERTER_DEVICE_SENSOR_PREFIX):
+            inverter_dn = getattr(coordinator.api, "inverter_dn", None) or "unknown_inverter"
+            inverter_model = getattr(coordinator.api, "inverter_model", None) or "FusionSolar Inverter"
+            inverter_software_version = getattr(coordinator.api, "inverter_software_version", None) or "1.0"
+            inverter_serial_number = getattr(coordinator.api, "inverter_serial_number", None)
+
+            return DeviceInfo(
+                name="Fusion Solar Inverter",
+                manufacturer="Huawei",
+                model=inverter_model,
+                sw_version=inverter_software_version,
+                serial_number=inverter_serial_number,
+                identifiers={
+                    (
+                        DOMAIN,
+                        f"{controller_name}_{station_dn}_inverter_{inverter_dn}",
+                    )
+                },
+                via_device=plant_identifier,
             )
-        },
+
+        if (
+            device.device_id in BATTERY_DEVICE_SENSOR_IDS
+            or device.device_id.startswith("Battery Pack ")
+        ):
+            battery_dn = getattr(coordinator.api, "battery_dn", None) or "unknown_battery"
+            battery_model = getattr(coordinator.api, "battery_model", None) or "FusionSolar Battery"
+            battery_software_version = getattr(coordinator.api, "battery_software_version", None) or "1.0"
+            battery_serial_number = getattr(coordinator.api, "battery_serial_number", None)
+
+            return DeviceInfo(
+                name="Fusion Solar Battery",
+                manufacturer="Huawei",
+                model=battery_model,
+                sw_version=battery_software_version,
+                serial_number=battery_serial_number,
+                identifiers={
+                    (
+                        DOMAIN,
+                        f"{controller_name}_{station_dn}_battery_{battery_dn}",
+                    )
+                },
+                via_device=plant_identifier,
+            )
+
+    return DeviceInfo(
+        name=f"Fusion Solar Installation ({station_dn})",
+        manufacturer="Fusion Solar",
+        model=str(station_name),
+        sw_version="1.0",
+        identifiers={plant_identifier},
     )
 
 
@@ -359,6 +427,7 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         "Inverter Last Shutdown Time",
         "Inverter Startup Time",
         "Last Authentication Time",
+        "Battery Backup Time",
     }
 
     def __init__(self, coordinator: FusionSolarCoordinator, device: Device) -> None:
@@ -398,12 +467,14 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        return _build_device_info(self.coordinator)
+        return _build_device_info(self.coordinator, self.device)
 
     @property
     def entity_category(self) -> EntityCategory | None:
         """Return the entity category."""
         if self.device_id in self.DIAGNOSTIC_SENSOR_IDS:
+            return EntityCategory.DIAGNOSTIC
+        if self.device_id.startswith("Battery Pack "):
             return EntityCategory.DIAGNOSTIC
         return None
 
