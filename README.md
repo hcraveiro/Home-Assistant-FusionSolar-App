@@ -11,6 +11,7 @@ This integration was built for FusionSolar users who only have access to the reg
 
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Forecast configuration](#forecast-configuration)
 - [Supported hosts / regions](#supported-hosts--regions)
 - [Device organization](#device-organization)
 - [Sensors](#sensors)
@@ -27,6 +28,15 @@ This integration was built for FusionSolar users who only have access to the reg
 - [Optional: Home Assistant package example (extra sensors)](#optional-home-assistant-package-example-extra-sensors)
 - [Example Lovelace cards (using the extra sensors)](#example-lovelace-cards-using-the-extra-sensors)
 - [Solar Production Forecast](#solar-production-forecast)
+  - [Forecast providers](#forecast-providers)
+  - [Native forecast provider](#native-forecast-provider)
+  - [Solcast forecast provider](#solcast-forecast-provider)
+  - [Forecast calculation](#forecast-calculation)
+  - [Forecast attributes](#forecast-attributes)
+  - [Forecast cache](#forecast-cache)
+  - [Forecast smoothing and outlier filtering](#forecast-smoothing-and-outlier-filtering)
+  - [Recorder and database usage](#recorder-and-database-usage)
+  - [Notes and limitations](#notes-and-limitations)
 - [Dashboard example](#dashboard-example)
 - [FAQ](#faq)
 - [Credits](#credits)
@@ -56,9 +66,47 @@ The integration logs in using the same credentials you use in the FusionSolar Ap
 The default sensor update interval is **60 seconds**.  
 FusionSolar App data is usually refreshed only every few minutes (commonly around 5 minutes depending on region / account / backend behaviour), but the shorter Home Assistant polling interval ensures the sensors update as soon as new data becomes available.
 
-After configuring the integration, you can open the config entry and press **Configure** to change the update interval.
+After configuring the integration, you can open the config entry and press **Configure** to change:
+
+- update interval
+- forecast provider
+- Solcast forecast sensor, when using Solcast
 
 > Setting a very short interval will not force FusionSolar to provide fresher data than the backend actually exposes, and may generate unnecessary load.
+
+## Forecast configuration
+
+The integration includes a solar production forecast for the current day.
+
+By default, new config entries use the built-in **Native** forecast provider. This provider estimates the current day production using the recent production history stored in Home Assistant Recorder.
+
+You can change the forecast provider from the integration options:
+
+**Settings → Devices & Services → FusionSolar App Integration → Configure**
+
+Available forecast providers:
+
+| Provider | Description |
+|---|---|
+| `Native (last 7 days)` | Built-in statistical forecast based on the last 7 days of local production history |
+| `Solcast` | Uses a Solcast forecast sensor already available in Home Assistant |
+
+When selecting **Solcast**, the options flow will ask you to select the Solcast forecast sensor to use.
+
+The selected Solcast sensor must expose a `detailedHourly` attribute with entries containing:
+
+| Attribute | Description |
+|---|---|
+| `period_start` | Start timestamp for the forecast period |
+| `pv_estimate` | Estimated PV production for that period, in kWh |
+
+Example supported Solcast sensor:
+
+```yaml
+sensor.solcast_pv_forecast_forecast_today
+```
+
+The integration converts the selected Solcast forecast into the same internal forecast format used by the native provider. This means dashboards can keep using the same FusionSolar forecast sensor and the same ApexCharts attributes regardless of the selected provider.
 
 ## Supported hosts / regions
 
@@ -644,13 +692,45 @@ This integration exposes two additional forecast sensors for the current day pan
 | `PV Forecasted Today` | Estimated total panel production for the current day, in kWh |
 | `PV Remaining Today` | Estimated remaining panel production for the current day, in kWh |
 
-The forecast is built from the historical values of the `Panel Production Today` sensor stored in Home Assistant Recorder.
+The forecast provider is configurable from the integration options.
+
+The selected provider is exposed through the forecast sensor attributes, so dashboards and diagnostics can identify whether the current forecast came from the native provider or from Solcast.
+
+### Forecast providers
+
+The integration currently supports two forecast providers:
+
+| Provider | Description |
+|---|---|
+| `Native (last 7 days)` | Uses Home Assistant Recorder history from the local `Panel Production Today` sensor |
+| `Solcast` | Uses an existing Solcast forecast sensor selected by the user |
+
+The forecast provider can be changed from:
+
+**Settings → Devices & Services → FusionSolar App Integration → Configure**
+
+The FusionSolar forecast sensors keep the same entity IDs and attributes regardless of the selected provider.
+
+This means a dashboard can use:
+
+```yaml
+data_generator: |
+  return entity.attributes.forecast_power_chart || [];
+```
+
+and it will work with either the native provider or the Solcast provider.
+
+### Native forecast provider
+
+The native forecast provider is the default.
+
+It builds a local statistical forecast from the historical values of the `Panel Production Today` sensor stored in Home Assistant Recorder.
 
 > This is not a weather-based forecast. It is a local statistical forecast based on your own recent production history.
 
-### How it works
+#### How it works
 
-The forecast model uses the last 7 days of panel production history and applies weighted averages to estimate the expected production curve for the current day.
+The native forecast model uses the last 7 days of panel production history and applies weighted averages to estimate the expected production curve for the current day.
 
 Recent days have more influence than older days:
 
@@ -668,16 +748,72 @@ For each time interval, the integration calculates the historical production del
 
 Because FusionSolar App data is not updated continuously, some days may contain artificial gaps or jumps. For example, if the API skips a few update cycles and then reports the accumulated production later, a single 5-minute interval may appear to contain an unrealistic production spike.
 
-To reduce the impact of this, the forecast uses a robust average for each interval. Very low or very high outliers are filtered out before calculating the weighted average. This helps avoid cases where missing data produces false zero values or delayed API updates produce unrealistic power spikes.
+To reduce the impact of this, the native forecast uses a robust average for each interval. Very low or very high outliers are filtered out before calculating the weighted average. This helps avoid cases where missing data produces false zero values or delayed API updates produce unrealistic power spikes.
 
 The resulting delta curve is then smoothed while preserving the expected total energy.
+
+### Solcast forecast provider
+
+The Solcast forecast provider allows the integration to use an existing Solcast forecast sensor from Home Assistant.
+
+When this provider is selected, the integration options will ask for the Solcast forecast sensor to use.
+
+The selected sensor must expose a `detailedHourly` attribute with items similar to:
+
+```yaml
+detailedHourly:
+  - period_start: "2026-05-05T10:00:00+01:00"
+    pv_estimate: 3.5285
+    pv_estimate10: 2.0755
+    pv_estimate90: 4.1334
+```
+
+The integration reads:
+
+| Solcast attribute | Used for |
+|---|---|
+| `detailedHourly[].period_start` | Forecast timestamp |
+| `detailedHourly[].pv_estimate` | Forecasted hourly energy |
+| `estimate` | Estimated full-day production |
+| `estimate10` | Lower estimate / P10 value |
+| `estimate90` | Upper estimate / P90 value |
+| `analysis.confidence` | Confidence value, when available |
+
+#### Solcast smoothing
+
+Solcast `detailedHourly` data is hourly. To make it useful in the same dashboards as the native 5-minute forecast, the integration converts it into a 5-minute curve.
+
+The conversion:
+
+- treats each hourly `pv_estimate` as the average power shape for that hour
+- interpolates smoothly between hourly forecast centres
+- blends the forecast into the current real panel production power near `now`
+- applies a small moving average smoothing window
+- normalizes the resulting curve so the remaining expected energy is preserved
+
+This avoids a stepped chart while still keeping the Solcast daily energy estimate consistent.
+
+#### Solcast forecast scope
+
+The Solcast forecast generated by this integration is only built from the current moment forward.
+
+In practice:
+
+- past chart data comes from the real FusionSolar sensors
+- the forecast curve starts at `now`
+- future points come from the selected Solcast forecast sensor
+- if the current Solcast hour is already partially elapsed, only the remaining part of that hour is used
+
+This avoids replacing real measured production with forecast values.
+
+When using dashboard offsets to view past days, the Solcast forecast does not reconstruct what the forecast was on those historical days. It only represents the current day forecast available from the selected Solcast sensor.
 
 ### Forecast calculation
 
 During the day, the forecast combines:
 
 - the real production already measured today
-- the remaining forecasted production based on the historical pattern
+- the remaining forecasted production from the selected provider
 
 In simplified terms:
 
@@ -699,6 +835,23 @@ The forecast sensor exposes a raw `curve` attribute. Each point in the curve con
 | `power_w` | Estimated power for that interval, in W |
 | `source` | Either `actual`, `actual_now` or `forecast` |
 
+The sensor also exposes provider and diagnostic attributes:
+
+| Attribute | Description |
+|---|---|
+| `provider` | Forecast provider currently used, for example `native` or `solcast` |
+| `provider_entity_id` | Source entity used by the provider, when applicable |
+| `source_entity_id` | Main source entity used to build the forecast |
+| `actual_now_value` | Current measured daily production, in kWh |
+| `remaining_today` | Estimated remaining production today, in kWh |
+| `correction_factor` | Correction factor used by the forecast provider, when applicable |
+| `generated_at` | Timestamp when the forecast was generated |
+| `step_minutes` | Forecast curve step size |
+| `days` | Number of historical days used by the provider, when applicable |
+| `estimate10_kwh` | Lower estimate from Solcast, when available |
+| `estimate90_kwh` | Upper estimate from Solcast, when available |
+| `confidence` | Confidence value from Solcast, when available |
+
 The sensor also exposes ApexCharts-ready attributes:
 
 | Attribute | Description |
@@ -706,23 +859,36 @@ The sensor also exposes ApexCharts-ready attributes:
 | `forecast_power_chart` | Forecasted instant power series, ready to be used by ApexCharts |
 | `forecast_cumulative_chart` | Forecasted cumulative production series, ready to be used by ApexCharts |
 
+The same attributes are used for both native and Solcast providers.
+
+This allows a dashboard to keep the same ApexCharts configuration when switching forecast provider.
+
 ### Forecast cache
 
-The forecast uses a persistent daily cache.
+The native forecast uses a persistent daily cache.
 
 The historical forecast curve is built once per day and reused during the day. If Home Assistant restarts, the cache is restored when possible. If the cache is missing, outdated or incompatible, it is rebuilt automatically.
 
 The cache may also be rebuilt automatically when the forecast algorithm changes between integration versions.
 
+The Solcast provider does not use the native historical cache. It builds its curve from the selected Solcast sensor attributes each time the coordinator refreshes.
+
 ### Forecast smoothing and outlier filtering
 
 Historical solar production can contain short spikes caused by clouds, shading, API update delays, sensor updates or Recorder sampling intervals.
 
-To make the forecast more useful for dashboards, the integration applies:
+To make the forecast more useful for dashboards, the native provider applies:
 
 - weighted historical averaging
 - robust outlier filtering
 - delta-curve smoothing
+
+The Solcast provider applies:
+
+- smooth interpolation between hourly forecast points
+- blending from current real power to forecasted power
+- moving average smoothing
+- energy normalization
 
 This avoids unrealistic instant power spikes without losing the expected daily production shape.
 
@@ -745,9 +911,11 @@ This means:
 
 ### Notes and limitations
 
-The forecast depends on Home Assistant Recorder history. For best results, make sure the source sensor `Panel Production Today` has at least a few days of history available.
+For the native provider, the forecast depends on Home Assistant Recorder history. For best results, make sure the source sensor `Panel Production Today` has at least a few days of history available.
 
 The first forecast days may be less accurate until enough historical data exists.
+
+For the Solcast provider, the forecast depends on the selected Solcast sensor being available and exposing a valid `detailedHourly` attribute.
 
 FusionSolar App data is usually updated every few minutes, not continuously. Depending on your region, account and API behaviour, updates may arrive roughly every 5 minutes or sometimes slightly later. This can create visible jumps in charts based on cumulative production sensors.
 
@@ -762,6 +930,8 @@ The following dashboard section shows:
 - cumulative panel production
 - cumulative forecasted production
 - forecasted and remaining production sensors
+
+The same dashboard works with either the native forecast provider or the Solcast forecast provider.
 
 ### Screenshot
 
@@ -897,6 +1067,12 @@ cards:
           extend_to: false
           show:
             hidden_by_default: true
+        - entity: sensor.grid_consumption_power
+          name: Grid Consumption
+          type: area
+          extend_to: false
+          show:
+            hidden_by_default: true
         - entity: sensor.battery_consumption_power
           name: Battery Discharge
           type: area
@@ -986,6 +1162,60 @@ You can use your browser's Developer Tools:
 
 That information is often enough to infer the frontend flow and update the integration for additional regions or login patterns.
 
+### How do I use Solcast as the forecast provider?
+
+Install and configure a Solcast integration in Home Assistant first.
+
+Then open the FusionSolar App integration options:
+
+**Settings → Devices & Services → FusionSolar App Integration → Configure**
+
+Select:
+
+```text
+Forecast provider: Solcast
+```
+
+Then select the Solcast sensor that exposes `detailedHourly`, for example:
+
+```text
+sensor.solcast_pv_forecast_forecast_today
+```
+
+After saving the options, the existing FusionSolar forecast sensors will use Solcast data.
+
+### Do I need to change my dashboard when switching between native and Solcast forecast?
+
+No.
+
+The FusionSolar forecast sensor exposes the same ApexCharts-ready attributes for both providers:
+
+```yaml
+forecast_power_chart
+forecast_cumulative_chart
+```
+
+So a dashboard using this continues to work:
+
+```yaml
+data_generator: |
+  return entity.attributes.forecast_power_chart || [];
+```
+
+### Why does the Solcast forecast look smoother than the raw Solcast sensor?
+
+The raw Solcast `detailedHourly` data is hourly. This integration converts it into a 5-minute curve and smooths the transition between hourly values.
+
+This makes it more suitable for live power dashboards where it is displayed alongside real-time FusionSolar production data.
+
+### Does the Solcast provider replace historical chart data?
+
+No.
+
+The Solcast provider only generates forecast points from the current moment forward.
+
+Past chart data should continue to come from the real FusionSolar sensors. The forecast curve starts at `now` and then follows the Solcast-based projection for the rest of the day.
+
 ## Credits
 
 A big thank you to Mark Parker ([msp1974](https://github.com/msp1974)) for providing the Community with a set of [Home Assistant Integration Templates](https://github.com/msp1974/HAIntegrationExamples) from which I started to create this integration.
@@ -1003,3 +1233,5 @@ Additional thanks to the community members who shared browser traces, HAR files 
 - device and frontend-derived sensor coverage
 
 Also thanks to [FusionSolarPlus](https://github.com/JortvanSchijndel/FusionSolarPlus) for useful ideas around broader frontend coverage, device-oriented signals and regional behaviour analysis.
+
+Additional thanks to the Solcast integration ecosystem for making local Solcast forecast sensors available in Home Assistant, which can now be used as an optional forecast source by this integration.
