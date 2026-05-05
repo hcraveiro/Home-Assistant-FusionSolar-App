@@ -52,6 +52,7 @@ SUPPORTED_SENSOR_DEVICE_TYPES = {
 }
 
 INVERTER_DEVICE_SENSOR_PREFIX = "Inverter "
+POWER_SENSOR_DEVICE_SENSOR_PREFIX = "Power Sensor "
 
 BATTERY_DEVICE_SENSOR_IDS = {
     "Battery Operating Status",
@@ -61,10 +62,6 @@ BATTERY_DEVICE_SENSOR_IDS = {
     "Battery Energy Discharged Today",
     "Battery Charge/Discharge Power",
     "Battery Bus Voltage",
-    "Battery Bus Current",
-    "Battery Internal Temperature",
-    "Battery Total Charge Energy",
-    "Battery Total Discharge Energy",
     "Battery Percentage",
     "Battery Capacity",
 }
@@ -121,9 +118,37 @@ def _build_device_info(
                 via_device=plant_identifier,
             )
 
+        if device.device_id.startswith(POWER_SENSOR_DEVICE_SENSOR_PREFIX):
+            power_sensor_dn = getattr(coordinator.api, "power_sensor_dn", None) or "unknown_power_sensor"
+            power_sensor_name = getattr(coordinator.api, "power_sensor_name", None) or "Fusion Solar Power Sensor"
+            power_sensor_model = getattr(coordinator.api, "power_sensor_model", None) or "Power Sensor"
+            power_sensor_software_version = getattr(coordinator.api, "power_sensor_software_version", None)
+            power_sensor_serial_number = getattr(coordinator.api, "power_sensor_serial_number", None)
+
+            device_info = DeviceInfo(
+                name=power_sensor_name,
+                manufacturer="Huawei",
+                model=power_sensor_model,
+                identifiers={
+                    (
+                        DOMAIN,
+                        f"{controller_name}_{station_dn}_power_sensor_{power_sensor_dn}",
+                    )
+                },
+                via_device=plant_identifier,
+            )
+
+            if power_sensor_software_version:
+                device_info["sw_version"] = power_sensor_software_version
+
+            if power_sensor_serial_number:
+                device_info["serial_number"] = power_sensor_serial_number
+
+            return device_info
+
         if (
             device.device_id in BATTERY_DEVICE_SENSOR_IDS
-            or device.device_id.startswith("Battery Pack ")
+            or device.device_id.startswith("Battery Module ")
         ):
             battery_dn = getattr(coordinator.api, "battery_dn", None) or "unknown_battery"
             battery_model = getattr(coordinator.api, "battery_model", None) or "FusionSolar Battery"
@@ -152,7 +177,6 @@ def _build_device_info(
         sw_version="1.0",
         identifiers={plant_identifier},
     )
-
 
 def _forecast_to_dict(forecast: Any) -> dict[str, Any]:
     """Normalize forecast payload into a dictionary."""
@@ -474,8 +498,13 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         """Return the entity category."""
         if self.device_id in self.DIAGNOSTIC_SENSOR_IDS:
             return EntityCategory.DIAGNOSTIC
-        if self.device_id.startswith("Battery Pack "):
+    
+        if self.device_id.startswith("Battery Module "):
             return EntityCategory.DIAGNOSTIC
+    
+        if self.device_id.startswith("Power Sensor "):
+            return EntityCategory.DIAGNOSTIC
+    
         return None
 
     @property

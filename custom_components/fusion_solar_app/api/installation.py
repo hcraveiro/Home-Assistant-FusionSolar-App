@@ -305,23 +305,35 @@ class FusionSolarInstallationMixin:
             _LOGGER.warning("Failed to fetch battery devices: %s", ex)
             return []
 
+    def _build_power_sensor_devices(
+        self,
+        flow_data_nodes: list[dict[str, Any]],
+    ) -> list[Device]:
+        """Build power sensor device entities."""
+        try:
+            return self.get_power_sensor_devices(flow_data_nodes)
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch power sensor devices: %s", ex)
+            return []
+            
     def get_devices(self) -> list[Device]:
         """Fetch all device entities for the configured station."""
         output = self._build_base_output()
-
+    
         flow_data_nodes, flow_data_links = self._get_installation_flow_data()
-
+    
         self._parse_installation_flow_nodes(flow_data_nodes, output)
         self._parse_installation_flow_links(flow_data_links, output)
-
+    
         self._discover_battery_dn_from_flow_nodes(flow_data_nodes)
         self._discover_inverter_dn_from_flow_nodes(flow_data_nodes)
         self._ensure_inverter_metadata_loaded()
-
+    
         self._enrich_installation_output(output)
-
+    
         devices = self._build_installation_devices(output)
         devices.extend(self._build_inverter_devices())
         devices.extend(self._build_battery_devices())
-
+        devices.extend(self._build_power_sensor_devices(flow_data_nodes))
+    
         return devices
