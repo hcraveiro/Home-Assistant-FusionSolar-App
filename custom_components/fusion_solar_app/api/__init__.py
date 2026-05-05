@@ -23,6 +23,7 @@ from .inverter import FusionSolarInverterMixin
 from .models import Device, DeviceType, ENERGY_BALANCE_CALL_TYPE
 from .social import FusionSolarSocialMixin
 from .station import FusionSolarStationMixin
+from .power_sensor import FusionSolarPowerSensorMixin
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class FusionSolarAPI(
     FusionSolarSocialMixin,
     FusionSolarEnergyBalanceMixin,
     FusionSolarInstallationMixin,
+    FusionSolarPowerSensorMixin,
 ):
     """Class for Fusion Solar App API."""
 
@@ -47,16 +49,26 @@ class FusionSolarAPI(
         self.captcha_img = None
         self.station = None
         self.station_name = None
+    
         self.inverter_dn = None
         self.inverter_name = None
         self.inverter_model = None
         self.inverter_software_version = None
         self.inverter_serial_number = None
+    
         self.battery_dn = None
         self.battery_model = None
         self.battery_serial_number = None
         self.battery_software_version = None
         self.battery_capacity = None
+    
+        self.power_sensor_dn = None
+        self.power_sensor_name = None
+        self.power_sensor_model = None
+        self.power_sensor_serial_number = None
+        self.power_sensor_software_version = None
+        self.power_sensor_usage = None
+    
         self.login_host = normalize_fusionsolar_host(login_host)
         self.data_host = None
         self.dp_session = ""
