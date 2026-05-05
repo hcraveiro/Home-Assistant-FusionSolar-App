@@ -50,10 +50,29 @@
     "step": {
       "init": {
         "data": {
-          "scan_interval": "Scan Interval (seconds)"
+          "scan_interval": "Scan Interval (seconds)",
+          "forecast_provider": "Forecast provider"
         },
         "description": "Amend your options.",
         "title": "Integration Options"
+      },
+      "solcast": {
+        "data": {
+          "solcast_forecast_today_entity": "Solcast forecast today sensor"
+        },
+        "description": "Select the Solcast sensor that exposes the detailedHourly forecast attribute.",
+        "title": "Solcast Forecast Options"
+      }
+    },
+    "error": {
+      "invalid_solcast_entity": "The selected entity does not expose a valid detailedHourly Solcast forecast."
+    }
+  },
+  "selector": {
+    "forecast_provider": {
+      "options": {
+        "native": "Native (last 7 days)",
+        "solcast": "Solcast"
       }
     }
   }

@@ -197,10 +197,15 @@ def _forecast_to_dict(forecast: Any) -> dict[str, Any]:
         "curve": getattr(forecast, "curve", None),
         "generated_at": getattr(forecast, "generated_at", None),
         "source_entity_id": getattr(forecast, "source_entity_id", None),
+        "provider": getattr(forecast, "provider", None),
+        "provider_entity_id": getattr(forecast, "provider_entity_id", None),
         "step_minutes": getattr(forecast, "step_minutes", None),
         "days": getattr(forecast, "days", None),
         "start_of_day": getattr(forecast, "start_of_day", None),
         "end_of_day": getattr(forecast, "end_of_day", None),
+        "estimate10_kwh": getattr(forecast, "estimate10_kwh", None),
+        "estimate90_kwh": getattr(forecast, "estimate90_kwh", None),
+        "confidence": getattr(forecast, "confidence", None),
     }
 
     debug = getattr(forecast, "debug", None)
@@ -655,10 +660,15 @@ class FusionSolarForecastedTodaySensor(FusionSolarForecastSensor):
             "correction_factor",
             "generated_at",
             "source_entity_id",
+            "provider",
+            "provider_entity_id",
             "step_minutes",
             "days",
             "start_of_day",
             "end_of_day",
+            "estimate10_kwh",
+            "estimate90_kwh",
+            "confidence",
         ):
             value = payload.get(key)
             if value is not None:
@@ -692,6 +702,11 @@ class FusionSolarRemainingTodaySensor(FusionSolarForecastSensor):
             "actual_now_value",
             "generated_at",
             "source_entity_id",
+            "provider",
+            "provider_entity_id",
+            "estimate10_kwh",
+            "estimate90_kwh",
+            "confidence",
         ):
             value = payload.get(key)
             if value is not None:

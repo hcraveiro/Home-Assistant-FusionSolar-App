@@ -20,9 +20,28 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .api import FusionSolarAPI, APIAuthError, APIConnectionError, APIAuthCaptchaError
-from .const import DEFAULT_SCAN_INTERVAL, DOMAIN, MIN_SCAN_INTERVAL, FUSION_SOLAR_HOST, CAPTCHA_INPUT, CONF_STATION_DN
+from .const import (
+    CAPTCHA_INPUT,
+    CONF_FORECAST_PROVIDER,
+    CONF_SOLCAST_FORECAST_TODAY_ENTITY,
+    CONF_STATION_DN,
+    DEFAULT_FORECAST_PROVIDER,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    FORECAST_PROVIDER_NATIVE,
+    FORECAST_PROVIDER_SOLCAST,
+    FUSION_SOLAR_HOST,
+    MIN_SCAN_INTERVAL,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -472,13 +491,24 @@ class FusionSolarOptionsFlowHandler(OptionsFlow):
         # Keep our own reference instead.
         self._config_entry = config_entry
         self.options = dict(config_entry.options)
+        self._pending_options: dict[str, Any] = dict(config_entry.options)
 
-
-    async def async_step_init(self, user_input=None):
+    async def async_step_init(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
         """Handle options flow."""
         if user_input is not None:
-            options = self._config_entry.options | user_input
-            return self.async_create_entry(title="", data=options)
+            self._pending_options = self._config_entry.options | user_input
+
+            if (
+                self._pending_options.get(CONF_FORECAST_PROVIDER)
+                == FORECAST_PROVIDER_SOLCAST
+            ):
+                return await self.async_step_solcast()
+
+            self._pending_options.pop(CONF_SOLCAST_FORECAST_TODAY_ENTITY, None)
+            return self.async_create_entry(title="", data=self._pending_options)
 
         data_schema = vol.Schema(
             {
@@ -486,10 +516,91 @@ class FusionSolarOptionsFlowHandler(OptionsFlow):
                     CONF_SCAN_INTERVAL,
                     default=self.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
                 ): (vol.All(vol.Coerce(int), vol.Clamp(min=MIN_SCAN_INTERVAL))),
+                vol.Required(
+                    CONF_FORECAST_PROVIDER,
+                    default=self.options.get(
+                        CONF_FORECAST_PROVIDER,
+                        DEFAULT_FORECAST_PROVIDER,
+                    ),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            FORECAST_PROVIDER_NATIVE,
+                            FORECAST_PROVIDER_SOLCAST,
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN,
+                        translation_key="forecast_provider",
+                    )
+                ),
             }
         )
 
         return self.async_show_form(step_id="init", data_schema=data_schema)
+
+    async def async_step_solcast(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Handle Solcast forecast options."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            entity_id = user_input[CONF_SOLCAST_FORECAST_TODAY_ENTITY]
+
+            if not self._is_valid_solcast_forecast_entity(entity_id):
+                errors["base"] = "invalid_solcast_entity"
+            else:
+                self._pending_options[CONF_SOLCAST_FORECAST_TODAY_ENTITY] = entity_id
+                return self.async_create_entry(title="", data=self._pending_options)
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_SOLCAST_FORECAST_TODAY_ENTITY,
+                    default=self.options.get(
+                        CONF_SOLCAST_FORECAST_TODAY_ENTITY,
+                        "",
+                    ),
+                ): EntitySelector(
+                    EntitySelectorConfig(
+                        domain=["sensor"],
+                        multiple=False,
+                    )
+                ),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="solcast",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
+    def _is_valid_solcast_forecast_entity(self, entity_id: str) -> bool:
+        """Return whether an entity exposes the expected Solcast forecast attributes."""
+        state = self.hass.states.get(entity_id)
+
+        if state is None:
+            return False
+
+        detailed_hourly = state.attributes.get("detailedHourly")
+
+        if not isinstance(detailed_hourly, list) or not detailed_hourly:
+            return False
+
+        for item in detailed_hourly:
+            if not isinstance(item, dict):
+                continue
+
+            if item.get("period_start") is None:
+                continue
+
+            if item.get("pv_estimate") is None:
+                continue
+
+            return True
+
+        return False
 
 
 class CannotConnect(HomeAssistantError):

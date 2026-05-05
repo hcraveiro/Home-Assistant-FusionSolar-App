@@ -71,10 +71,19 @@ class FusionSolarStationMixin:
             json=station_payload,
         )
 
-        stations = json_response.get("data", {}).get("list")
+        if json_response.get("success") is False:
+            _LOGGER.warning(
+                "Station list response indicates failure. Body=%s",
+                str(json_response)[:300],
+            )
+            raise APIDataStructureError("Station list response indicates failure")
+
+        data = json_response.get("data")
+        stations = data.get("list") if isinstance(data, dict) else None
+
         if not isinstance(stations, list):
-            _LOGGER.error(
-                "Station list response did not contain the expected data. Body=%s",
+            _LOGGER.warning(
+                "Station list response did not contain the expected data.list structure. Body=%s",
                 str(json_response)[:300],
             )
             raise APIDataStructureError("Station list response did not contain data.list")

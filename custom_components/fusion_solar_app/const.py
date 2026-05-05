@@ -27,3 +27,10 @@ SOCIAL_CONTRIBUTION_URL = "/rest/pvms/web/station/v1/station/social-contribution
 BATTERY_TYPE_URL = "/rest/pvms/web/device/v1/get-battery-type"
 BATTERY_DC_URL = "/rest/pvms/web/device/v1/query-battery-dc"
 INVERTER_CONFIG_SIGNAL_URL = "/rest/neteco/web/config/device/v1/config/query-moc-config-signal"
+
+CONF_FORECAST_PROVIDER = "forecast_provider"
+CONF_SOLCAST_FORECAST_TODAY_ENTITY = "solcast_forecast_today_entity"
+
+FORECAST_PROVIDER_NATIVE = "native"
+FORECAST_PROVIDER_SOLCAST = "solcast"
+DEFAULT_FORECAST_PROVIDER = FORECAST_PROVIDER_NATIVE
