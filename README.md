@@ -1232,6 +1232,5 @@ Additional thanks to the community members who shared browser traces, HAR files 
 - power sensor / power meter coverage
 - device and frontend-derived sensor coverage
 
-Also thanks to [FusionSolarPlus](https://github.com/JortvanSchijndel/FusionSolarPlus) for useful ideas around broader frontend coverage, device-oriented signals and regional behaviour analysis.
 
 Additional thanks to the Solcast integration ecosystem for making local Solcast forecast sensors available in Home Assistant, which can now be used as an optional forecast source by this integration.
