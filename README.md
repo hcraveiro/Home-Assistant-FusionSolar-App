@@ -1,4 +1,3 @@
-
 # Home Assistant FusionSolar App Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
@@ -17,10 +16,12 @@ This integration was built for FusionSolar users who only have access to the reg
 - [Sensors](#sensors)
   - [Plant / energy sensors](#plant--energy-sensors)
   - [Battery sensors](#battery-sensors)
-  - [Battery pack sensors](#battery-pack-sensors)
+  - [Battery module sensors](#battery-module-sensors)
+  - [Battery module pack sensors](#battery-module-pack-sensors)
   - [Built-in ratio sensors](#built-in-ratio-sensors)
   - [Social contribution sensors](#social-contribution-sensors)
   - [Inverter real-time sensors](#inverter-real-time-sensors)
+  - [Power sensor / power meter sensors](#power-sensor--power-meter-sensors)
   - [Diagnostic sensors](#diagnostic-sensors)
 - [Card configuration](#card-configuration)
 - [Optional: Home Assistant package example (extra sensors)](#optional-home-assistant-package-example-extra-sensors)
@@ -79,6 +80,7 @@ It also includes improved handling for:
 - session refresh / reauthentication
 - login flows inferred from real FusionSolar frontend behaviour
 - HAR-based validation of region-specific behaviour
+- improved compatibility with current EU5 frontend login flows, while preserving legacy fallback behaviour where needed
 
 ## Device organization
 
@@ -86,7 +88,8 @@ This integration organizes entities into separate Home Assistant devices when th
 
 - **Fusion Solar Installation**: installation-wide / plant-wide metrics
 - **Fusion Solar Inverter**: inverter-specific realtime and PV string metrics
-- **Fusion Solar Battery**: battery-specific metrics and battery pack diagnostics
+- **Fusion Solar Battery**: battery-specific metrics, module diagnostics and pack diagnostics
+- **Fusion Solar Power Sensor**: power meter / power sensor technical metrics
 
 This makes the entity model cleaner and closer to the real FusionSolar device structure.
 
@@ -96,7 +99,8 @@ After setting up the integration, the entities are organized into multiple Home 
 
 - **Fusion Solar Installation**: plant-wide energy, forecast, social contribution and ratio sensors
 - **Fusion Solar Inverter**: inverter real-time electrical and PV string sensors
-- **Fusion Solar Battery**: battery status, battery metadata and battery pack sensors
+- **Fusion Solar Battery**: battery status, battery metadata, battery module sensors and battery module pack sensors
+- **Fusion Solar Power Sensor**: power meter / power sensor electrical and metering sensors
 
 ### Plant / energy sensors
 
@@ -167,10 +171,6 @@ The battery is exposed as a dedicated Home Assistant device and includes:
 - Battery Energy Discharged Today (kWh)
 - Battery Charge/Discharge Power (kW)
 - Battery Bus Voltage (V)
-- Battery Bus Current (A)
-- Battery Internal Temperature (°C)
-- Battery Total Charge Energy (kWh)
-- Battery Total Discharge Energy (kWh)
 
 The battery device also exposes hardware metadata when available from the FusionSolar frontend / API, including:
 
@@ -178,39 +178,55 @@ The battery device also exposes hardware metadata when available from the Fusion
 - Battery firmware version
 - Battery serial number
 
-### Battery pack sensors
+### Battery module sensors
 
-Battery pack diagnostic sensors are exposed dynamically when available. Depending on your battery system, you may see sensors such as:
+Battery module diagnostic sensors are exposed dynamically when available.
 
-- Battery Pack 1 Operating Status
-- Battery Pack 1 Voltage
-- Battery Pack 1 Charge/Discharge Power
-- Battery Pack 1 Maximum Temperature
-- Battery Pack 1 Minimum Temperature
-- Battery Pack 1 SOH
-- Battery Pack 1 Total Discharge Energy
-- Battery Pack 1 Battery Health Check
-- Battery Pack 1 Heating Status
+Depending on your battery system, you may see sensors such as:
 
-- Battery Pack 2 Operating Status
-- Battery Pack 2 Voltage
-- Battery Pack 2 Charge/Discharge Power
-- Battery Pack 2 Maximum Temperature
-- Battery Pack 2 Minimum Temperature
-- Battery Pack 2 SOH
-- Battery Pack 2 Total Discharge Energy
-- Battery Pack 2 Battery Health Check
-- Battery Pack 2 Heating Status
+- Battery Module 1 Bus Current
+- Battery Module 1 Internal Temperature
+- Battery Module 1 Total Charge Energy
+- Battery Module 1 Total Discharge Energy
 
-- Battery Pack 3 Operating Status
-- Battery Pack 3 Voltage
-- Battery Pack 3 Charge/Discharge Power
-- Battery Pack 3 Maximum Temperature
-- Battery Pack 3 Minimum Temperature
-- Battery Pack 3 SOH
-- Battery Pack 3 Total Discharge Energy
-- Battery Pack 3 Battery Health Check
-- Battery Pack 3 Heating Status
+- Battery Module 2 Bus Current
+- Battery Module 2 Internal Temperature
+- Battery Module 2 Total Charge Energy
+- Battery Module 2 Total Discharge Energy
+
+- ...
+- Battery Module N Bus Current / Internal Temperature / Total Charge Energy / Total Discharge Energy
+
+The integration detects battery modules dynamically instead of assuming a fixed single-module layout.
+
+### Battery module pack sensors
+
+Battery pack diagnostic sensors are also exposed dynamically per module and per pack when available.
+
+Depending on your battery system, you may see sensors such as:
+
+- Battery Module 1 Pack 1 Operating Status
+- Battery Module 1 Pack 1 Voltage
+- Battery Module 1 Pack 1 Charge/Discharge Power
+- Battery Module 1 Pack 1 Maximum Temperature
+- Battery Module 1 Pack 1 Minimum Temperature
+- Battery Module 1 Pack 1 SOH
+- Battery Module 1 Pack 1 Total Discharge Energy
+- Battery Module 1 Pack 1 Battery Health Check
+- Battery Module 1 Pack 1 Heating Status
+
+- Battery Module 1 Pack 2 Operating Status
+- Battery Module 1 Pack 2 Voltage
+- Battery Module 1 Pack 2 Charge/Discharge Power
+- Battery Module 1 Pack 2 Maximum Temperature
+- Battery Module 1 Pack 2 Minimum Temperature
+- Battery Module 1 Pack 2 SOH
+- Battery Module 1 Pack 2 Total Discharge Energy
+- Battery Module 1 Pack 2 Battery Health Check
+- Battery Module 1 Pack 2 Heating Status
+
+- ...
+- Battery Module N Pack P ...
 
 These sensors are grouped under the dedicated battery device.
 
@@ -300,6 +316,25 @@ The inverter device also exposes hardware metadata when available from the Fusio
 - Inverter firmware version
 - Inverter serial number
 
+### Power sensor / power meter sensors
+
+When a FusionSolar power sensor / power meter is available, it is exposed as a dedicated Home Assistant device.
+
+Depending on your system and what the frontend exposes, you may see sensors such as:
+
+- Power Sensor Status
+- Power Sensor Usage
+- Power Sensor Direction
+- Power Sensor Grid Voltage
+- Power Sensor Grid Current
+- Power Sensor Active Power
+- Power Sensor Power Factor
+- Power Sensor Grid Frequency
+- Power Sensor Grid Consumption Total
+- Power Sensor Grid Injection Total
+
+These values are taken directly from the power sensor / meter device endpoints and are intended as technical diagnostics / metering sensors, separate from the installation-wide aggregate energy sensors.
+
 ### Diagnostic sensors
 
 Some sensors are primarily useful for diagnostics and troubleshooting rather than day-to-day dashboards, including:
@@ -309,7 +344,9 @@ Some sensors are primarily useful for diagnostics and troubleshooting rather tha
 - Inverter Last Shutdown Time
 - Inverter Output Mode
 - Battery Backup Time
-- Battery pack diagnostic sensors
+- Battery module diagnostic sensors
+- Battery module pack diagnostic sensors
+- Power sensor / power meter sensors
 
 ## Card configuration
 
@@ -927,6 +964,14 @@ Recent versions of this integration include improved handling for:
 
 If you still have trouble, the best way to help is to provide a browser HAR capture or detailed network trace.
 
+### My website login works, but Home Assistant login does not
+
+This can happen when the FusionSolar frontend in your region uses a slightly different login or redirect flow than the one currently implemented in the integration.
+
+Recent versions include improved compatibility for EU5 and related frontend login patterns, including service-aware login handling and fallback logic, but frontend behaviour can still vary between regions and over time.
+
+If your credentials work in the FusionSolar website but Home Assistant reports invalid authentication or missing redirect information, please capture a HAR file and open an issue.
+
 ### How can I help troubleshoot login or region issues?
 
 You can use your browser's Developer Tools:
@@ -953,6 +998,8 @@ Additional thanks to the community members who shared browser traces, HAR files 
 - session handling
 - inverter PV string discovery
 - battery metadata coverage
+- battery module and pack coverage
+- power sensor / power meter coverage
 - device and frontend-derived sensor coverage
 
 Also thanks to [FusionSolarPlus](https://github.com/JortvanSchijndel/FusionSolarPlus) for useful ideas around broader frontend coverage, device-oriented signals and regional behaviour analysis.
