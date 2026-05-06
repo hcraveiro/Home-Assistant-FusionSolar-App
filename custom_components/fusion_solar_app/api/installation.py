@@ -256,8 +256,13 @@ class FusionSolarInstallationMixin:
         ]
 
     def _build_inverter_devices(self) -> list[Device]:
-        """Build inverter device entities."""
+        """Build inverter realtime, derived and metadata device entities."""
         devices: list[Device] = []
+
+        try:
+            devices.extend(self.get_inverter_metadata_devices())
+        except Exception as ex:
+            _LOGGER.warning("Failed to build inverter metadata devices: %s", ex)
 
         try:
             inverter_data = self.get_inverter_realtime_data()
@@ -268,29 +273,14 @@ class FusionSolarInstallationMixin:
                     continue
 
                 sig = signal_map[signal_id]
-                sig_type = sig["type"]
-
-                if sig_type == DeviceType.SENSOR_TEXT:
-                    state = str(value)
-                else:
-                    try:
-                        state = float(value)
-                    except (ValueError, TypeError):
-                        state = 0.0
-
-                devices.append(
-                    Device(
-                        device_id=sig["id"],
-                        device_unique_id=self.get_device_unique_id(
-                            sig["id"],
-                            sig_type,
-                        ),
-                        device_type=sig_type,
-                        name=sig["id"],
-                        state=state,
-                        icon=sig["icon"],
-                    )
+                device = self._create_dynamic_device(
+                    sig["id"],
+                    sig["type"],
+                    value,
+                    sig["icon"],
                 )
+                if device is not None:
+                    devices.append(device)
 
         except Exception as ex:
             _LOGGER.warning("Failed to fetch inverter realtime data: %s", ex)

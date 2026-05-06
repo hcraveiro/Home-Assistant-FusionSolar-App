@@ -8,9 +8,11 @@ from ..const import (
     DATA_REFERER_URL,
     DEVICE_REALTIME_DATA_URL,
     DEVICE_REAL_KPI_URL,
+    DEVICE_STATUS_QUERY_URL,
     INVERTER_CONFIG_SIGNAL_URL,
 )
 from ..utils import extract_numeric
+from .models import Device, DeviceType
 from .signal_maps import get_inverter_signal_map
 
 
@@ -44,18 +46,29 @@ class FusionSolarInverterMixin:
         if not self.inverter_dn:
             return
 
-        if (
+        config_metadata_loaded = (
             self.inverter_name is not None
             and self.inverter_model is not None
             and self.inverter_software_version is not None
             and self.inverter_serial_number is not None
-        ):
-            return
+        )
 
-        try:
-            self.get_inverter_config_info()
-        except Exception as ex:
-            _LOGGER.warning("Failed to fetch inverter config info: %s", ex)
+        if not config_metadata_loaded:
+            try:
+                self.get_inverter_config_info()
+            except Exception as ex:
+                _LOGGER.warning("Failed to fetch inverter config info: %s", ex)
+
+        status_metadata_loaded = (
+            self.inverter_device_id is not None
+            and self.inverter_parent_dn is not None
+        )
+
+        if not status_metadata_loaded:
+            try:
+                self.get_inverter_status_info()
+            except Exception as ex:
+                _LOGGER.warning("Failed to fetch inverter status info: %s", ex)
 
     def get_inverter_config_info(self) -> dict:
         """Fetch inverter configuration metadata such as model, software version and serial number."""
@@ -149,6 +162,94 @@ class FusionSolarInverterMixin:
 
         return data
 
+    def get_inverter_status_info(self) -> dict:
+        """Fetch inverter status metadata such as numeric device ID and parent station DN."""
+        if not self.inverter_dn:
+            return {}
+
+        self.refresh_csrf()
+
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Roarand": self.csrf,
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+        }
+
+        url = f"https://{self.data_host}{DEVICE_STATUS_QUERY_URL}"
+        _LOGGER.debug("Getting inverter status info at: %s", url)
+
+        _, data = self._request_json(
+            "POST",
+            url,
+            context="FusionSolar inverter status info",
+            headers=headers,
+            data={"dn": self.inverter_dn},
+        )
+
+        payload = data.get("data") or {}
+        if not isinstance(payload, dict):
+            return data
+
+        device_id = payload.get("dnId")
+        if device_id not in (None, "", "--", "null"):
+            self.inverter_device_id = str(device_id)
+
+        dn = payload.get("dn")
+        if dn not in (None, "", "--", "null"):
+            self.inverter_dn = str(dn)
+
+        parent_dn = payload.get("parentDn")
+        if parent_dn not in (None, "", "--", "null"):
+            self.inverter_parent_dn = str(parent_dn)
+
+        name = payload.get("name")
+        if self.inverter_name in (None, "", "--", "null") and name not in (None, "", "--", "null"):
+            self.inverter_name = str(name)
+
+        _LOGGER.debug(
+            "Inverter status info loaded: device_id=%s dn=%s parent_dn=%s name=%s",
+            self.inverter_device_id,
+            self.inverter_dn,
+            self.inverter_parent_dn,
+            self.inverter_name,
+        )
+
+        return data
+
+    def get_inverter_metadata_devices(self) -> list[Device]:
+        """Return diagnostic inverter metadata entities."""
+        if not self.inverter_dn:
+            return []
+
+        self._ensure_inverter_metadata_loaded()
+
+        station_dn = self.station or self.inverter_parent_dn
+
+        metadata_definitions = [
+            ("Inverter Name", self.inverter_name, "mdi:label-outline"),
+            ("Inverter Model", self.inverter_model, "mdi:solar-power-variant"),
+            ("Inverter Firmware", self.inverter_software_version, "mdi:chip"),
+            ("Inverter Serial", self.inverter_serial_number, "mdi:barcode"),
+            ("Inverter Device ID", self.inverter_device_id, "mdi:identifier"),
+            ("Inverter Station", self.station_name, "mdi:home-lightning-bolt-outline"),
+            ("Inverter Station DN", station_dn, "mdi:identifier"),
+            ("Inverter DN", self.inverter_dn, "mdi:identifier"),
+        ]
+
+        devices: list[Device] = []
+        for device_id, raw_value, icon in metadata_definitions:
+            device = self._create_dynamic_device(
+                device_id,
+                DeviceType.SENSOR_TEXT,
+                raw_value,
+                icon,
+            )
+            if device is not None:
+                devices.append(device)
+
+        return devices
+
     def get_inverter_realtime_data(self) -> dict:
         """Fetch real-time inverter data and dynamically expose only visible PV inputs."""
         if not self.inverter_dn:
@@ -206,54 +307,69 @@ class FusionSolarInverterMixin:
             current_id = voltage_id + 1
             pv_voltage_current_signal_ids.extend([voltage_id, current_id])
 
-        pv_signal_meta: dict[int, dict[str, Any]] = {}
+        kpi_signal_ids = [10022, *pv_voltage_current_signal_ids]
+        kpi_signal_meta: dict[int, dict[str, Any]] = {}
 
-        if pv_voltage_current_signal_ids:
-            try:
-                self.refresh_csrf()
-                headers["Roarand"] = self.csrf
-                signal_str = "&".join(
-                    f"signalIds={signal_id}"
-                    for signal_id in pv_voltage_current_signal_ids
-                )
-                kpi_url = (
-                    f"https://{self.data_host}{DEVICE_REAL_KPI_URL}"
-                    f"?deviceDn={self.inverter_dn}&{signal_str}"
-                )
-                _LOGGER.debug("Getting inverter PV KPI data at: %s", kpi_url)
+        try:
+            self.refresh_csrf()
+            headers["Roarand"] = self.csrf
+            signal_str = "&".join(
+                f"signalIds={signal_id}"
+                for signal_id in kpi_signal_ids
+            )
+            kpi_url = (
+                f"https://{self.data_host}{DEVICE_REAL_KPI_URL}"
+                f"?deviceDn={self.inverter_dn}&{signal_str}"
+            )
+            _LOGGER.debug("Getting inverter KPI data at: %s", kpi_url)
 
-                _, kpi_data = self._request_json(
-                    "GET",
-                    kpi_url,
-                    context="FusionSolar inverter PV KPI data",
-                    headers=headers,
-                )
+            _, kpi_data = self._request_json(
+                "GET",
+                kpi_url,
+                context="FusionSolar inverter KPI data",
+                headers=headers,
+            )
 
-                if kpi_data.get("success") and kpi_data.get("data", {}).get("signals"):
-                    for sid_str, val in kpi_data["data"]["signals"].items():
-                        sid = int(sid_str)
+            if kpi_data.get("success") and kpi_data.get("data", {}).get("signals"):
+                for sid_str, val in kpi_data["data"]["signals"].items():
+                    sid = int(sid_str)
 
-                        if sid not in signal_map:
-                            continue
+                    if sid not in signal_map:
+                        continue
 
-                        raw_value = val.get("value", "")
-                        if raw_value in ("", "--", "null", None):
-                            continue
+                    raw_value = val.get("value", "")
+                    if raw_value in ("", "--", "null", None):
+                        continue
 
-                        pv_signal_meta[sid] = {
-                            "value": raw_value,
-                            "latestTime": val.get("latestTime"),
-                        }
-            except Exception as ex:
-                _LOGGER.warning("Failed to fetch PV string KPI data: %s", ex)
+                    kpi_signal_meta[sid] = {
+                        "value": raw_value,
+                        "latestTime": val.get("latestTime"),
+                    }
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch inverter KPI data: %s", ex)
+
+        pv_signal_meta = {
+            sid: meta
+            for sid, meta in kpi_signal_meta.items()
+            if sid in pv_voltage_current_signal_ids
+        }
 
         visible_pv_indexes = self._get_visible_pv_indexes_from_signal_meta(pv_signal_meta)
+
+        for sid, meta in kpi_signal_meta.items():
+            if sid in pv_voltage_current_signal_ids:
+                continue
+
+            result[sid] = meta["value"]
 
         for sid, meta in pv_signal_meta.items():
             pv_index = ((sid - 11001) // 3) + 1
             if pv_index not in visible_pv_indexes:
                 continue
             result[sid] = meta["value"]
+
+        mppt_total_input_power = 0.0
+        has_visible_pv_power = False
 
         for pv_index in visible_pv_indexes:
             voltage_id = 11001 + ((pv_index - 1) * 3)
@@ -265,7 +381,13 @@ class FusionSolarInverterMixin:
 
             voltage_value = extract_numeric(result[voltage_id])
             current_value = extract_numeric(result[current_id])
-            result[power_id] = round(voltage_value * current_value / 1000, 4)
+            pv_power = round(voltage_value * current_value / 1000, 4)
+            result[power_id] = pv_power
+            mppt_total_input_power += pv_power
+            has_visible_pv_power = True
+
+        if has_visible_pv_power:
+            result[30017] = round(mppt_total_input_power, 4)
 
         _LOGGER.debug(
             "Inverter realtime data after PV filtering: visible_pv_indexes=%s result=%s",

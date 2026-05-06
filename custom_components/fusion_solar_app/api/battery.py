@@ -3,7 +3,14 @@ import logging
 import time
 from typing import Any
 
-from ..const import BATTERY_DC_URL, BATTERY_TYPE_URL, DATA_REFERER_URL, DEVICE_REALTIME_DATA_URL
+from ..const import (
+    BATTERY_DC_URL,
+    BATTERY_TYPE_URL,
+    DATA_REFERER_URL,
+    DEVICE_REALTIME_DATA_URL,
+    DEVICE_REAL_KPI_URL,
+)
+from ..utils import extract_numeric
 from .exceptions import APIDataStructureError
 from .models import Device, DeviceType
 from .signal_maps import BATTERY_MODULE_1_SIGNAL_IDS
@@ -106,6 +113,33 @@ class FusionSolarBatteryMixin:
                     continue
 
                 result[signal_id] = signal_value
+
+        try:
+            self.refresh_csrf()
+            headers["Roarand"] = self.csrf
+            kpi_url = (
+                f"https://{self.data_host}{DEVICE_REAL_KPI_URL}"
+                f"?deviceDn={self.battery_dn}&signalIds=10007"
+            )
+            _LOGGER.debug("Getting battery SOH KPI data at: %s", kpi_url)
+
+            _, kpi_data = self._request_json(
+                "GET",
+                kpi_url,
+                context="FusionSolar battery SOH KPI data",
+                headers=headers,
+            )
+
+            signal_data = (
+                kpi_data.get("data", {})
+                .get("signals", {})
+                .get("10007", {})
+            )
+            soh_value = signal_data.get("value", "")
+            if soh_value not in ("", "--", "null", None):
+                result[10007] = soh_value
+        except Exception as ex:
+            _LOGGER.debug("Failed to fetch battery SOH KPI data: %s", ex)
 
         _LOGGER.debug("Battery realtime data: %s", result)
         return result
@@ -238,6 +272,23 @@ class FusionSolarBatteryMixin:
                 "mdi:flash",
             ),
         ]
+
+        battery_soh_raw = realtime_data.get(10007)
+        if battery_soh_raw not in (None, "", "--", "null"):
+            try:
+                battery_soh_value = extract_numeric(battery_soh_raw)
+            except (TypeError, ValueError):
+                battery_soh_value = 0.0
+
+            if battery_soh_value > 0:
+                battery_realtime_definitions.append(
+                    (
+                        "Battery SOH",
+                        DeviceType.SENSOR_RATIO,
+                        battery_soh_value,
+                        "mdi:battery-check",
+                    )
+                )
     
         for device_id, device_type, raw_value, icon in battery_realtime_definitions:
             device = self._create_dynamic_device(device_id, device_type, raw_value, icon)

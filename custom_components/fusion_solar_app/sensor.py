@@ -46,6 +46,7 @@ SUPPORTED_SENSOR_DEVICE_TYPES = {
     DeviceType.SENSOR_TEMPERATURE,
     DeviceType.SENSOR_RESISTANCE,
     DeviceType.SENSOR_POWER_FACTOR,
+    DeviceType.SENSOR_VAR,
     DeviceType.SENSOR_TEXT,
     DeviceType.SENSOR_KG,
     DeviceType.SENSOR_COUNT,
@@ -62,6 +63,7 @@ BATTERY_DEVICE_SENSOR_IDS = {
     "Battery Energy Discharged Today",
     "Battery Charge/Discharge Power",
     "Battery Bus Voltage",
+    "Battery SOH",
     "Battery Percentage",
     "Battery Capacity",
 }
@@ -448,6 +450,7 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         DeviceType.SENSOR_FREQUENCY: UnitOfFrequency.HERTZ,
         DeviceType.SENSOR_TEMPERATURE: UnitOfTemperature.CELSIUS,
         DeviceType.SENSOR_RESISTANCE: "MΩ",
+        DeviceType.SENSOR_VAR: "var",
         DeviceType.SENSOR_KG: "kg",
     }
 
@@ -455,8 +458,17 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         "Inverter Output Mode",
         "Inverter Last Shutdown Time",
         "Inverter Startup Time",
+        "Inverter Name",
+        "Inverter Model",
+        "Inverter Firmware",
+        "Inverter Serial",
+        "Inverter Device ID",
+        "Inverter Station",
+        "Inverter Station DN",
+        "Inverter DN",
         "Last Authentication Time",
         "Battery Backup Time",
+        "Battery SOH",
     }
 
     def __init__(self, coordinator: FusionSolarCoordinator, device: Device) -> None:
@@ -491,6 +503,9 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_class(self) -> str | None:
         """Return device class."""
+        if self._device_type == DeviceType.SENSOR_VAR:
+            return getattr(SensorDeviceClass, "REACTIVE_POWER", None)
+
         return self.DEVICE_CLASS_MAP.get(self._device_type)
 
     @property

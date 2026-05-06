@@ -33,6 +33,11 @@ POWER_SENSOR_SIGNAL_MAP = {
         "type": DeviceType.SENSOR_KW,
         "icon": "mdi:flash",
     },
+    10005: {
+        "id": "Power Sensor Reactive Power",
+        "type": DeviceType.SENSOR_VAR,
+        "icon": "mdi:flash-triangle-outline",
+    },
     10006: {
         "id": "Power Sensor Power Factor",
         "type": DeviceType.SENSOR_POWER_FACTOR,
@@ -44,15 +49,58 @@ POWER_SENSOR_SIGNAL_MAP = {
         "icon": "mdi:sine-wave",
     },
     10008: {
-        "id": "Power Sensor Grid Consumption Total",
+        "id": "Power Sensor Grid Injection Total",
         "type": DeviceType.SENSOR_KWH,
         "icon": "mdi:transmission-tower-export",
     },
     10009: {
-        "id": "Power Sensor Grid Injection Total",
+        "id": "Power Sensor Grid Consumption Total",
         "type": DeviceType.SENSOR_KWH,
         "icon": "mdi:transmission-tower-import",
     },
+    10010: {
+        "id": "Power Sensor Phase B Voltage",
+        "type": DeviceType.SENSOR_VOLTAGE,
+        "icon": "mdi:flash",
+    },
+    10011: {
+        "id": "Power Sensor Phase C Voltage",
+        "type": DeviceType.SENSOR_VOLTAGE,
+        "icon": "mdi:flash",
+    },
+    10012: {
+        "id": "Power Sensor Phase B Current",
+        "type": DeviceType.SENSOR_CURRENT,
+        "icon": "mdi:current-ac",
+    },
+    10013: {
+        "id": "Power Sensor Phase C Current",
+        "type": DeviceType.SENSOR_CURRENT,
+        "icon": "mdi:current-ac",
+    },
+    10019: {
+        "id": "Power Sensor Phase A Active Power",
+        "type": DeviceType.SENSOR_KW,
+        "icon": "mdi:flash",
+    },
+    10020: {
+        "id": "Power Sensor Phase B Active Power",
+        "type": DeviceType.SENSOR_KW,
+        "icon": "mdi:flash",
+    },
+    10021: {
+        "id": "Power Sensor Phase C Active Power",
+        "type": DeviceType.SENSOR_KW,
+        "icon": "mdi:flash",
+    },
+}
+
+
+POWER_SENSOR_WATT_SIGNAL_IDS = {
+    10004,
+    10019,
+    10020,
+    10021,
 }
 
 
@@ -117,7 +165,7 @@ class FusionSolarPowerSensorMixin:
         if raw_value in (None, "", "--", "null"):
             return None
 
-        if signal_id == 10004:
+        if signal_id in POWER_SENSOR_WATT_SIGNAL_IDS:
             return round(float(extract_numeric(raw_value)) / 1000, 4)
 
         return raw_value
@@ -126,24 +174,24 @@ class FusionSolarPowerSensorMixin:
         """Fetch power sensor metadata such as name, model, firmware, serial number and usage."""
         if not self.power_sensor_dn:
             return {}
-    
+
         self.refresh_csrf()
-    
+
         headers = {
             "Accept": "application/json",
             "Roarand": self.csrf,
             "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
         }
-    
+
         params = {
             "dn": self.power_sensor_dn,
             "signals": "50009,50010,50012,33595393,20004",
             "_": int(time.time() * 1000),
         }
-    
+
         url = f"https://{self.data_host}{INVERTER_CONFIG_SIGNAL_URL}"
         _LOGGER.debug("Getting power sensor config info at: %s", url)
-    
+
         _, data = self._request_json(
             "GET",
             url,
@@ -151,10 +199,10 @@ class FusionSolarPowerSensorMixin:
             headers=headers,
             params=params,
         )
-    
+
         payload = data.get("data", {})
         entries: list[dict[str, Any]] = []
-    
+
         if isinstance(payload, list):
             entries = [item for item in payload if isinstance(item, dict)]
         elif isinstance(payload, dict):
@@ -169,9 +217,9 @@ class FusionSolarPowerSensorMixin:
                             entries.append({"signal": key, **value})
                         else:
                             entries.append({"signal": key, "value": value})
-    
+
         parsed: dict[str, Any] = {}
-    
+
         for entry in entries:
             signal_id = str(
                 entry.get("signal")
@@ -182,31 +230,31 @@ class FusionSolarPowerSensorMixin:
                 or entry.get("sigid")
                 or ""
             )
-    
+
             raw_value = entry.get("realValue")
             if raw_value in (None, ""):
                 raw_value = entry.get("value")
-    
+
             if raw_value in (None, "", "--", "null"):
                 continue
-    
+
             parsed[signal_id] = raw_value
-    
+
         if "33595393" in parsed:
             self.power_sensor_name = str(parsed["33595393"])
-    
+
         if "50009" in parsed:
             self.power_sensor_model = str(parsed["50009"])
-    
+
         if "50010" in parsed:
             self.power_sensor_software_version = str(parsed["50010"])
-    
+
         if "50012" in parsed:
             self.power_sensor_serial_number = str(parsed["50012"])
-    
+
         if "20004" in parsed:
             self.power_sensor_usage = self._normalize_power_sensor_usage(parsed["20004"])
-    
+
         _LOGGER.debug(
             "Power sensor config info loaded: name=%s model=%s sw=%s sn=%s usage=%s",
             self.power_sensor_name,
@@ -215,7 +263,7 @@ class FusionSolarPowerSensorMixin:
             self.power_sensor_serial_number,
             self.power_sensor_usage,
         )
-    
+
         return data
 
     def get_power_sensor_realtime_data(self) -> dict[int, Any]:
@@ -283,28 +331,28 @@ class FusionSolarPowerSensorMixin:
         """Return power sensor device entities."""
         if self.power_sensor_dn is None and flow_data_nodes:
             self._discover_power_sensor_dn_from_flow_nodes(flow_data_nodes)
-    
+
         if not self.power_sensor_dn:
             return []
-    
+
         devices: list[Device] = []
-    
+
         try:
             self.get_power_sensor_config_info()
         except Exception as ex:
             _LOGGER.warning("Failed to fetch power sensor config info: %s", ex)
-    
+
         try:
             self.get_power_sensor_type_name()
         except Exception as ex:
             _LOGGER.warning("Failed to fetch power sensor type name: %s", ex)
-    
+
         realtime_data: dict[int, Any] = {}
         try:
             realtime_data = self.get_power_sensor_realtime_data()
         except Exception as ex:
             _LOGGER.warning("Failed to fetch power sensor realtime data: %s", ex)
-    
+
         if self.power_sensor_usage not in (None, "", "--", "null"):
             usage_device = self._create_dynamic_device(
                 "Power Sensor Usage",
@@ -314,7 +362,7 @@ class FusionSolarPowerSensorMixin:
             )
             if usage_device is not None:
                 devices.append(usage_device)
-    
+
         active_power = realtime_data.get(10004)
         if active_power not in (None, "", "--", "null"):
             direction_device = self._create_dynamic_device(
@@ -325,7 +373,7 @@ class FusionSolarPowerSensorMixin:
             )
             if direction_device is not None:
                 devices.append(direction_device)
-    
+
         for signal_id, signal_info in POWER_SENSOR_SIGNAL_MAP.items():
             raw_value = realtime_data.get(signal_id)
             device = self._create_dynamic_device(
@@ -336,7 +384,7 @@ class FusionSolarPowerSensorMixin:
             )
             if device is not None:
                 devices.append(device)
-    
+
         _LOGGER.debug(
             "Power sensor devices created: %s",
             [device.device_id for device in devices],
@@ -347,23 +395,23 @@ class FusionSolarPowerSensorMixin:
         """Fetch the power sensor type name."""
         if not self.power_sensor_dn:
             return None
-    
+
         self.refresh_csrf()
-    
+
         headers = {
             "Accept": "application/json",
             "Roarand": self.csrf,
             "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
         }
-    
+
         params = {
             "deviceDn": self.power_sensor_dn,
             "_": int(time.time() * 1000),
         }
-    
+
         url = f"https://{self.data_host}/rest/neteco/web/config/device/v1/moc-type-name"
         _LOGGER.debug("Getting power sensor type name at: %s", url)
-    
+
         _, data = self._request_json(
             "GET",
             url,
@@ -371,21 +419,21 @@ class FusionSolarPowerSensorMixin:
             headers=headers,
             params=params,
         )
-    
+
         type_name = data.get("data")
         if type_name:
             self.power_sensor_model = str(type_name)
-    
+
         return self.power_sensor_model
-    
+
     def _get_power_sensor_direction(self, active_power: Any) -> str:
         """Return the power sensor direction from signed active power."""
         power_value = extract_numeric(active_power)
-    
+
         if power_value > 0:
             return "exporting"
-    
+
         if power_value < 0:
             return "importing"
-    
+
         return "idle"

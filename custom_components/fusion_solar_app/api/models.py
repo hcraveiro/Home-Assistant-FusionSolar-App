@@ -17,6 +17,7 @@ class DeviceType(StrEnum):
     SENSOR_TEMPERATURE = "sensor_temperature"
     SENSOR_RESISTANCE = "sensor_resistance"
     SENSOR_POWER_FACTOR = "sensor_power_factor"
+    SENSOR_VAR = "sensor_var"
     SENSOR_TEXT = "sensor_text"
     SENSOR_KG = "sensor_kg"
     SENSOR_COUNT = "sensor_count"
