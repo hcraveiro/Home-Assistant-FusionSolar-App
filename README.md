@@ -22,6 +22,8 @@ This integration was built for FusionSolar users who only have access to the reg
   - [Built-in ratio sensors](#built-in-ratio-sensors)
   - [Social contribution sensors](#social-contribution-sensors)
   - [Inverter real-time sensors](#inverter-real-time-sensors)
+  - [Dynamic PV string sensors](#dynamic-pv-string-sensors)
+  - [Inverter metadata sensors](#inverter-metadata-sensors)
   - [Power sensor / power meter sensors](#power-sensor--power-meter-sensors)
   - [Diagnostic sensors](#diagnostic-sensors)
 - [Card configuration](#card-configuration)
@@ -135,7 +137,7 @@ It also includes improved handling for:
 This integration organizes entities into separate Home Assistant devices when the corresponding hardware is available:
 
 - **Fusion Solar Installation**: installation-wide / plant-wide metrics
-- **Fusion Solar Inverter**: inverter-specific realtime and PV string metrics
+- **Fusion Solar Inverter**: inverter-specific realtime, PV string, derived MPPT and metadata metrics
 - **Fusion Solar Battery**: battery-specific metrics, module diagnostics and pack diagnostics
 - **Fusion Solar Power Sensor**: power meter / power sensor technical metrics
 
@@ -146,7 +148,7 @@ This makes the entity model cleaner and closer to the real FusionSolar device st
 After setting up the integration, the entities are organized into multiple Home Assistant devices:
 
 - **Fusion Solar Installation**: plant-wide energy, forecast, social contribution and ratio sensors
-- **Fusion Solar Inverter**: inverter real-time electrical and PV string sensors
+- **Fusion Solar Inverter**: inverter real-time electrical, PV string, derived MPPT and metadata sensors
 - **Fusion Solar Battery**: battery status, battery metadata, battery module sensors and battery module pack sensors
 - **Fusion Solar Power Sensor**: power meter / power sensor electrical and metering sensors
 
@@ -219,12 +221,15 @@ The battery is exposed as a dedicated Home Assistant device and includes:
 - Battery Energy Discharged Today (kWh)
 - Battery Charge/Discharge Power (kW)
 - Battery Bus Voltage (V)
+- Battery SOH (%), when FusionSolar returns a valid non-zero global SOH value
 
 The battery device also exposes hardware metadata when available from the FusionSolar frontend / API, including:
 
 - Battery model
 - Battery firmware version
 - Battery serial number
+
+> Note: some FusionSolar systems expose battery SOH only at battery pack level. In those cases, the global `Battery SOH` sensor may not be created if the frontend returns an empty, invalid or zero value for the global SOH signal.
 
 ### Battery module sensors
 
@@ -319,7 +324,7 @@ These values are taken from the same FusionSolar frontend endpoint used by the o
 
 The inverter is exposed as a dedicated Home Assistant device.
 
-The following sensors are fetched directly from the inverter device and require the inverter to be reachable through the API:
+The following sensors are fetched from FusionSolar frontend device endpoints when available:
 
 - Inverter Grid Voltage (V)
 - Inverter Grid Current (A, phase A on 3-phase systems)
@@ -332,12 +337,22 @@ The following sensors are fetched directly from the inverter device and require 
 - Inverter Internal Temperature (°C)
 - Inverter Insulation Resistance (MΩ)
 - Inverter Power Factor
+- Inverter Efficiency (%)
 - Inverter Status
 - Inverter Startup Time
 - Inverter Last Shutdown Time
 - Inverter Output Mode
+- Inverter MPPT Total Input Power (kW)
 
-#### Dynamic PV string sensors
+`Inverter MPPT Total Input Power` is a derived sensor calculated from the visible PV string voltage/current pairs exposed by FusionSolar:
+
+```text
+sum(PVn voltage * PVn current) / 1000
+```
+
+This makes it useful even when the FusionSolar App frontend does not expose a dedicated raw MPPT total input power signal.
+
+### Dynamic PV string sensors
 
 PV string sensors are discovered dynamically based on what the FusionSolar frontend / API actually exposes for the inverter.
 
@@ -358,11 +373,22 @@ Depending on your inverter and API response, you may see sensors such as:
 
 The integration uses both real-time inverter endpoints and HAR-validated FusionSolar frontend behaviour to avoid exposing placeholder PV inputs that do not really exist for the device.
 
-The inverter device also exposes hardware metadata when available from the FusionSolar frontend / API, including:
+### Inverter metadata sensors
 
-- Inverter model
-- Inverter firmware version
-- Inverter serial number
+The inverter device also exposes hardware and installation metadata when available from the FusionSolar frontend / API.
+
+Depending on what FusionSolar returns for your installation, you may see diagnostic text sensors such as:
+
+- Inverter Name
+- Inverter Model
+- Inverter Firmware
+- Inverter Serial
+- Inverter Device ID
+- Inverter Station
+- Inverter Station DN
+- Inverter DN
+
+Some of this information may also be present in the Home Assistant device information panel. The dedicated sensors are useful for dashboards, diagnostics, automations and issue reporting.
 
 ### Power sensor / power meter sensors
 
@@ -376,10 +402,36 @@ Depending on your system and what the frontend exposes, you may see sensors such
 - Power Sensor Grid Voltage
 - Power Sensor Grid Current
 - Power Sensor Active Power
+- Power Sensor Reactive Power
 - Power Sensor Power Factor
 - Power Sensor Grid Frequency
 - Power Sensor Grid Consumption Total
 - Power Sensor Grid Injection Total
+
+`Power Sensor Direction` is derived from the signed active power value exposed by the FusionSolar power meter:
+
+- `importing`: the system is importing / consuming from the grid
+- `exporting`: the system is exporting / injecting into the grid
+- `idle`: no meaningful import/export is detected
+
+`Power Sensor Grid Consumption Total` represents imported energy from the grid.  
+`Power Sensor Grid Injection Total` represents exported energy to the grid.
+
+#### Dynamic three-phase power meter sensors
+
+On systems where FusionSolar exposes three-phase power meter data, additional sensors may be created dynamically.
+
+Depending on the meter and payload, you may see sensors such as:
+
+- Power Sensor Phase B Voltage (V)
+- Power Sensor Phase C Voltage (V)
+- Power Sensor Phase B Current (A)
+- Power Sensor Phase C Current (A)
+- Power Sensor Phase A Active Power (kW)
+- Power Sensor Phase B Active Power (kW)
+- Power Sensor Phase C Active Power (kW)
+
+These sensors are only created when the FusionSolar frontend endpoint actually returns the corresponding signal IDs. Single-phase installations will usually not expose these entities.
 
 These values are taken directly from the power sensor / meter device endpoints and are intended as technical diagnostics / metering sensors, separate from the installation-wide aggregate energy sensors.
 
@@ -391,10 +443,20 @@ Some sensors are primarily useful for diagnostics and troubleshooting rather tha
 - Inverter Startup Time
 - Inverter Last Shutdown Time
 - Inverter Output Mode
+- Inverter Name
+- Inverter Model
+- Inverter Firmware
+- Inverter Serial
+- Inverter Device ID
+- Inverter Station
+- Inverter Station DN
+- Inverter DN
 - Battery Backup Time
+- Battery SOH, when exposed as a valid global value
 - Battery module diagnostic sensors
 - Battery module pack diagnostic sensors
 - Power sensor / power meter sensors
+- Dynamic three-phase power meter sensors, when available
 
 ## Card configuration
 
@@ -546,7 +608,7 @@ template:
           {% set load = states('sensor.house_load_power')|float(0) %}
           {% set imp = states('sensor.grid_consumption_power')|float(0) %}
           {% if load > 0 %}
-            {{ ((1 - min(1, imp/load)) * 100) | round(0) }}
+            {{ ((1 - min(1, imp/load)) * 100) | 100) | round(0) }}
           {% else %}
             0
           {% endif %}
@@ -1227,10 +1289,8 @@ Additional thanks to the community members who shared browser traces, HAR files 
 - regional login compatibility
 - session handling
 - inverter PV string discovery
+- inverter metadata coverage
 - battery metadata coverage
 - battery module and pack coverage
 - power sensor / power meter coverage
 - device and frontend-derived sensor coverage
-
-
-Additional thanks to the Solcast integration ecosystem for making local Solcast forecast sensors available in Home Assistant, which can now be used as an optional forecast source by this integration.
