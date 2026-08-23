@@ -220,17 +220,13 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             forecast,
         )
 
-    def get_device_by_id(
-        self,
-        device_type: DeviceType,
-        device_id: str,
-    ) -> Device | None:
-        """Return device by device id."""
+    def get_device_by_unique_id(self, device_unique_id: str) -> Device | None:
+        """Return device by its unique id."""
         try:
             return [
                 device
                 for device in self.data.devices
-                if device.device_type == device_type and device.device_id == device_id
+                if device.device_unique_id == device_unique_id
             ][0]
         except IndexError:
             return None
