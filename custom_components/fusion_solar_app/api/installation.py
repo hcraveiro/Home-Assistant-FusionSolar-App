@@ -256,34 +256,36 @@ class FusionSolarInstallationMixin:
         ]
 
     def _build_inverter_devices(self) -> list[Device]:
-        """Build inverter realtime, derived and metadata device entities."""
+        """Build inverter realtime, derived and metadata device entities for every inverter."""
         devices: list[Device] = []
 
-        try:
-            devices.extend(self.get_inverter_metadata_devices())
-        except Exception as ex:
-            _LOGGER.warning("Failed to build inverter metadata devices: %s", ex)
+        for dn in self.inverters:
+            try:
+                devices.extend(self.get_inverter_metadata_devices(dn))
+            except Exception as ex:
+                _LOGGER.warning("Failed to build inverter metadata devices for %s: %s", dn, ex)
 
-        try:
-            inverter_data = self.get_inverter_realtime_data()
-            signal_map = get_inverter_signal_map()
+            try:
+                inverter_data = self.get_inverter_realtime_data(dn)
+                signal_map = get_inverter_signal_map()
 
-            for signal_id, value in inverter_data.items():
-                if signal_id not in signal_map:
-                    continue
+                for signal_id, value in inverter_data.items():
+                    if signal_id not in signal_map:
+                        continue
 
-                sig = signal_map[signal_id]
-                device = self._create_dynamic_device(
-                    sig["id"],
-                    sig["type"],
-                    value,
-                    sig["icon"],
-                )
-                if device is not None:
-                    devices.append(device)
+                    sig = signal_map[signal_id]
+                    device = self._create_dynamic_device(
+                        sig["id"],
+                        sig["type"],
+                        value,
+                        sig["icon"],
+                        dn=dn,
+                    )
+                    if device is not None:
+                        devices.append(device)
 
-        except Exception as ex:
-            _LOGGER.warning("Failed to fetch inverter realtime data: %s", ex)
+            except Exception as ex:
+                _LOGGER.warning("Failed to fetch inverter realtime data for %s: %s", dn, ex)
 
         return devices
 
@@ -316,8 +318,9 @@ class FusionSolarInstallationMixin:
         self._parse_installation_flow_links(flow_data_links, output)
     
         self._discover_battery_dn_from_flow_nodes(flow_data_nodes)
-        self._discover_inverter_dn_from_flow_nodes(flow_data_nodes)
-        self._ensure_inverter_metadata_loaded()
+        self._discover_inverter_dns_from_flow_nodes(flow_data_nodes)
+        for inverter_dn in self.inverters:
+            self._ensure_inverter_metadata_loaded(inverter_dn)
     
         self._enrich_installation_output(output)
     
