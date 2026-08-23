@@ -24,6 +24,7 @@ This integration was built for FusionSolar users who only have access to the reg
   - [Inverter real-time sensors](#inverter-real-time-sensors)
   - [Dynamic PV string sensors](#dynamic-pv-string-sensors)
   - [Inverter metadata sensors](#inverter-metadata-sensors)
+  - [Plants with multiple inverters](#plants-with-multiple-inverters)
   - [Power sensor / power meter sensors](#power-sensor--power-meter-sensors)
   - [Diagnostic sensors](#diagnostic-sensors)
 - [Card configuration](#card-configuration)
@@ -137,7 +138,7 @@ It also includes improved handling for:
 This integration organizes entities into separate Home Assistant devices when the corresponding hardware is available:
 
 - **Fusion Solar Installation**: installation-wide / plant-wide metrics
-- **Fusion Solar Inverter**: inverter-specific realtime, PV string, derived MPPT and metadata metrics
+- **Inverter** (one device per inverter): inverter-specific realtime, PV string, derived MPPT and metadata metrics
 - **Fusion Solar Battery**: battery-specific metrics, module diagnostics and pack diagnostics
 - **Fusion Solar Power Sensor**: power meter / power sensor technical metrics
 
@@ -148,7 +149,7 @@ This makes the entity model cleaner and closer to the real FusionSolar device st
 After setting up the integration, the entities are organized into multiple Home Assistant devices:
 
 - **Fusion Solar Installation**: plant-wide energy, forecast, social contribution and ratio sensors
-- **Fusion Solar Inverter**: inverter real-time electrical, PV string, derived MPPT and metadata sensors
+- **Inverter** (one device per inverter): inverter real-time electrical, PV string, derived MPPT and metadata sensors
 - **Fusion Solar Battery**: battery status, battery metadata, battery module sensors and battery module pack sensors
 - **Fusion Solar Power Sensor**: power meter / power sensor electrical and metering sensors
 
@@ -322,7 +323,9 @@ These values are taken from the same FusionSolar frontend endpoint used by the o
 
 ### Inverter real-time sensors
 
-The inverter is exposed as a dedicated Home Assistant device.
+Every inverter of the plant is exposed as its own dedicated Home Assistant device.
+See [Plants with multiple inverters](#plants-with-multiple-inverters) for how additional
+inverters are named.
 
 The following sensors are fetched from FusionSolar frontend device endpoints when available:
 
@@ -389,6 +392,32 @@ Depending on what FusionSolar returns for your installation, you may see diagnos
 - Inverter DN
 
 Some of this information may also be present in the Home Assistant device information panel. The dedicated sensors are useful for dashboards, diagnostics, automations and issue reporting.
+
+### Plants with multiple inverters
+
+Plants with more than one inverter are fully supported: every inverter reported by
+FusionSolar gets its own Home Assistant device, with its own real-time, PV string and
+metadata sensors. The device is named after the inverter as FusionSolar knows it
+(for example `INV-ES2180049879`).
+
+Sensors are named the same on every inverter (`Inverter Internal Temperature`); the
+inverter they belong to is the Home Assistant device they are attached to. Entity IDs of
+newly discovered inverters are prefixed with the device name by Home Assistant, so they
+stay distinct (`sensor.inv_es2180049879_inverter_internal_temperature`). Entities that
+already existed keep their current entity IDs.
+
+Note that plant-level sensors such as production and yield already aggregate all
+inverters — the per-inverter devices add equipment-level visibility (temperature,
+insulation resistance, per-string voltages and currents, status), not extra production.
+
+**Upgrading from a single-inverter version:** inverter entity unique IDs now include the
+inverter DN. The integration migrates existing inverter entities automatically on the
+first start after the update, so entity IDs, history and dashboards are preserved. No
+action is needed.
+
+**Polling cost:** each inverter adds roughly three HTTP requests per refresh. On plants
+with several inverters, consider raising the scan interval in the integration options if
+FusionSolar starts rate-limiting.
 
 ### Power sensor / power meter sensors
 

@@ -20,7 +20,7 @@ from .exceptions import (
 )
 from .installation import FusionSolarInstallationMixin
 from .inverter import FusionSolarInverterMixin
-from .models import Device, DeviceType, ENERGY_BALANCE_CALL_TYPE
+from .models import Device, DeviceType, ENERGY_BALANCE_CALL_TYPE, InverterInfo
 from .social import FusionSolarSocialMixin
 from .station import FusionSolarStationMixin
 from .power_sensor import FusionSolarPowerSensorMixin
@@ -50,13 +50,8 @@ class FusionSolarAPI(
         self.station = None
         self.station_name = None
 
-        self.inverter_dn = None
-        self.inverter_device_id = None
-        self.inverter_parent_dn = None
-        self.inverter_name = None
-        self.inverter_model = None
-        self.inverter_software_version = None
-        self.inverter_serial_number = None
+        # Inverters keyed by DN, in discovery order.
+        self.inverters: Dict[str, InverterInfo] = {}
 
         self.battery_dn = None
         self.battery_model = None
@@ -95,6 +90,7 @@ class FusionSolarAPI(
         device_type: DeviceType,
         raw_value: Any,
         icon: str,
+        dn: str | None = None,
     ) -> Device | None:
         """Create a dynamic device entity from a raw API value."""
         if device_type == DeviceType.SENSOR_TEXT:
@@ -112,27 +108,48 @@ class FusionSolarAPI(
 
         return Device(
             device_id=device_id,
-            device_unique_id=self.get_device_unique_id(device_id, device_type),
+            device_unique_id=self.get_device_unique_id(device_id, device_type, dn=dn),
             device_type=device_type,
             name=self.get_device_name(device_id),
             state=state,
             icon=icon,
+            dn=dn,
         )
 
-    def get_device_unique_id(self, device_id: str, device_type: DeviceType) -> str:
-        """Return the unique ID for a device."""
+    @staticmethod
+    def sanitize_id_segment(value: str) -> str:
+        """Sanitize a value for use as a unique ID segment."""
+        return (
+            str(value)
+            .lower()
+            .replace(" ", "_")
+            .replace(":", "_")
+            .replace("/", "_")
+        )
+
+    def get_device_unique_id(
+        self,
+        device_id: str,
+        device_type: DeviceType,
+        dn: str | None = None,
+    ) -> str:
+        """Return the unique ID for a device.
+
+        When a device DN is given, it is inserted as an ``inv_<dn>`` scope so
+        the same device_id stays unique across multiple inverters.
+        """
         station_suffix = ""
         if self.station:
-            safe = (
-                str(self.station)
-                .lower()
-                .replace(" ", "_")
-                .replace(":", "_")
-                .replace("/", "_")
-            )
-            station_suffix = f"_{safe}"
+            station_suffix = f"_{self.sanitize_id_segment(self.station)}"
 
-        return f"{self.controller_name}{station_suffix}_{device_id.lower().replace(' ', '_')}"
+        dn_suffix = ""
+        if dn:
+            dn_suffix = f"_inv_{self.sanitize_id_segment(dn)}"
+
+        return (
+            f"{self.controller_name}{station_suffix}{dn_suffix}"
+            f"_{device_id.lower().replace(' ', '_')}"
+        )
 
     def get_device_name(self, device_id: str) -> str:
         """Return the device name."""

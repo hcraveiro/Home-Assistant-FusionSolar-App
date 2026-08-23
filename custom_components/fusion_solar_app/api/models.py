@@ -43,3 +43,21 @@ class Device:
     name: str
     state: float | int | datetime | str
     icon: str
+    dn: str | None = None
+
+
+@dataclass
+class InverterInfo:
+    """Metadata for a single inverter, keyed by its DN."""
+
+    dn: str
+    # DN as reported by the device status endpoint. Usually identical to `dn`
+    # (discovered from the flow nodes); kept separate because it is what the
+    # Home Assistant device identifier has always been built from.
+    canonical_dn: str | None = None
+    device_id: str | None = None
+    parent_dn: str | None = None
+    name: str | None = None
+    model: str | None = None
+    software_version: str | None = None
+    serial_number: str | None = None
