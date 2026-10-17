@@ -325,5 +325,9 @@ class FusionSolarInstallationMixin:
         devices.extend(self._build_inverter_devices())
         devices.extend(self._build_battery_devices())
         devices.extend(self._build_power_sensor_devices(flow_data_nodes))
+        try:
+            devices.extend(self._build_charger_devices())
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Charger data not available: %s", err)
     
         return devices

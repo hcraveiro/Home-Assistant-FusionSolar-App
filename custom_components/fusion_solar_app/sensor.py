@@ -54,6 +54,7 @@ SUPPORTED_SENSOR_DEVICE_TYPES = {
 
 INVERTER_DEVICE_SENSOR_PREFIX = "Inverter "
 POWER_SENSOR_DEVICE_SENSOR_PREFIX = "Power Sensor "
+CHARGER_DEVICE_SENSOR_PREFIX = "Charger "
 
 BATTERY_DEVICE_SENSOR_IDS = {
     "Battery Operating Status",
@@ -119,6 +120,20 @@ def _build_device_info(
                 },
                 via_device=plant_identifier,
             )
+
+        if device.device_id.startswith(CHARGER_DEVICE_SENSOR_PREFIX):
+            charger_dn = getattr(coordinator.api, "charger_dn", None) or "unknown_charger"
+            info = DeviceInfo(
+                name="Fusion Solar Charger",
+                manufacturer="Huawei",
+                model=getattr(coordinator.api, "charger_model", None) or "SCharger",
+                serial_number=getattr(coordinator.api, "charger_name", None),
+                identifiers={(DOMAIN, f"{controller_name}_{station_dn}_charger_{charger_dn}")},
+                via_device=plant_identifier,
+            )
+            if getattr(coordinator.api, "charger_software_version", None):
+                info["sw_version"] = coordinator.api.charger_software_version
+            return info
 
         if device.device_id.startswith(POWER_SENSOR_DEVICE_SENSOR_PREFIX):
             power_sensor_dn = getattr(coordinator.api, "power_sensor_dn", None) or "unknown_power_sensor"

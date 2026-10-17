@@ -140,6 +140,7 @@ This integration organizes entities into separate Home Assistant devices when th
 - **Fusion Solar Inverter**: inverter-specific realtime, PV string, derived MPPT and metadata metrics
 - **Fusion Solar Battery**: battery-specific metrics, module diagnostics and pack diagnostics
 - **Fusion Solar Power Sensor**: power meter / power sensor technical metrics
+- **Fusion Solar Charger**: Huawei SCharger wallbox (live charging power, energy counter, status, working mode, phase currents)
 
 This makes the entity model cleaner and closer to the real FusionSolar device structure.
 
@@ -434,6 +435,22 @@ Depending on the meter and payload, you may see sensors such as:
 These sensors are only created when the FusionSolar frontend endpoint actually returns the corresponding signal IDs. Single-phase installations will usually not expose these entities.
 
 These values are taken directly from the power sensor / meter device endpoints and are intended as technical diagnostics / metering sensors, separate from the installation-wide aggregate energy sensors.
+
+### Charger (wallbox) sensors
+
+When the plant contains a Huawei SCharger wallbox, it is discovered automatically (device tree, mocId 60080) together with its charging connector (mocId 60081) and exposed as a dedicated Home Assistant device. All values are read-only.
+
+- Charger Power (kW, live)
+- Charger Status (`charging` / `idle`, derived from the live power)
+- Charger Total Energy (kWh, lifetime counter – suitable for utility meters / the Energy dashboard)
+- Charger Working Status (e.g. `No Car Connected`, `Charging`)
+- Charger Working Mode (e.g. `PV Power` = "prefer green power" in the FusionSolar app)
+- Charger Reported Status, Charger Lock
+- Charger Current L1 / L2 / L3 (A), Charger Temperature (°C)
+- Charger Dynamic Power / Charger Max Power (kW, configured limits)
+- Charger Data Time
+
+The values come from the same endpoints as the charger page of the FusionSolar web portal and are refreshed with the normal polling interval. Tested with a SCharger-22KT-S0 on an owner account.
 
 ### Diagnostic sensors
 
