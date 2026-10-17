@@ -438,7 +438,7 @@ These values are taken directly from the power sensor / meter device endpoints a
 
 ### Charger (wallbox) sensors
 
-When the plant contains a Huawei SCharger wallbox, it is discovered automatically (device tree, mocId 60080) together with its charging connector (mocId 60081) and exposed as a dedicated Home Assistant device. All values are read-only.
+When the plant contains a Huawei SCharger wallbox, it is discovered automatically (device tree, mocId 60080) together with its charging connector (mocId 60081) and exposed as a dedicated Home Assistant device. All sensors are read-only; the working mode can be changed via a select entity.
 
 - Charger Power (kW, live)
 - Charger Status (`charging` / `idle`, derived from the live power)
@@ -449,6 +449,7 @@ When the plant contains a Huawei SCharger wallbox, it is discovered automaticall
 - Charger Current L1 / L2 / L3 (A), Charger Temperature (°C)
 - Charger Dynamic Power / Charger Max Power (kW, configured limits)
 - Charger Data Time
+- **Charger Working Mode Setting** (select, writable): `Normal charge` / `PV Power Preferred` – the "prefer green power" switch of the FusionSolar app (connector config signal 20002, written via `deviceExt/set-config-signals`)
 
 The values come from the same endpoints as the charger page of the FusionSolar web portal and are refreshed with the normal polling interval. Tested with a SCharger-22KT-S0 on an owner account.
 

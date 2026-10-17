@@ -69,6 +69,7 @@ class FusionSolarAPI(
         self.charger_dn = None
         self.charger_id = None
         self.charger_connector_id = None
+        self.charger_connector_dn = None
         self.charger_name = None
         self.charger_model = None
         self.charger_software_version = None

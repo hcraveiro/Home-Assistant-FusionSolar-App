@@ -18,7 +18,7 @@ from .coordinator import FusionSolarCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT]
 
 
 @dataclass

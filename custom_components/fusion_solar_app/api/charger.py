@@ -45,6 +45,10 @@ SIG_TEMPERATURE = 2101271
 # config signals
 CFG_DYNAMIC_POWER = 20001
 CFG_MAX_POWER = 538976598
+# connector config signal (writable): 0 = Normal charge, 1 = PV Power Preferred
+CFG_WORKING_MODE = 20002
+CHARGER_SET_CONFIG_URL = "/rest/pvms/web/device/v1/deviceExt/set-config-signals"
+WORKING_MODES = {"0": "Normal charge", "1": "PV Power Preferred"}
 
 CHARGER_OFFSET = 1_000_000_000  # keeps charger signal ids apart from connector ids
 
@@ -113,6 +117,7 @@ class FusionSolarChargerMixin:
         )
         if connector is not None:
             self.charger_connector_id = connector.get("elementId")
+            self.charger_connector_dn = connector.get("elementDn")
         _LOGGER.info("Charger %s (%s), connector %s", self.charger_name, self.charger_dn, self.charger_connector_id)
 
     def _charger_live(self) -> dict[int, dict[str, Any]]:
@@ -203,3 +208,26 @@ class FusionSolarChargerMixin:
         devices.append(Device(device_id="Charger Data Time", device_unique_id=self.get_device_unique_id("Charger Data Time", DeviceType.SENSOR_TIME),
                               device_type=DeviceType.SENSOR_TIME, name="Charger Data Time", state=values_time, icon="mdi:clock-outline"))
         return devices
+
+    def set_charger_working_mode(self, mode: str) -> bool:
+        """Set the connector working mode ("0" Normal charge / "1" PV Power Preferred)."""
+        if mode not in WORKING_MODES:
+            raise ValueError(f"Unknown working mode {mode!r}")
+        if not self.charger_connector_dn:
+            raise RuntimeError("No charging connector discovered")
+        self.refresh_csrf()
+        response = self.session.post(
+            f"https://{self.data_host}{CHARGER_SET_CONFIG_URL}",
+            data={
+                "dn": self.charger_connector_dn,
+                "changeValues": json.dumps([{"id": str(CFG_WORKING_MODE), "value": mode}], separators=(",", ":")),
+            },
+            headers={**self._charger_headers(), "Roarand": self.csrf or ""},
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json()
+        ok = result.get("code") == 0 and all(item.get("code") == 0 for item in result.get("data") or [])
+        if not ok:
+            _LOGGER.warning("Setting charger working mode failed: %s", result)
+        return ok
