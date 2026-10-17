@@ -81,6 +81,25 @@ def _get_station_suffix(coordinator: FusionSolarCoordinator) -> str:
     )
 
 
+def build_charger_device_info(coordinator: FusionSolarCoordinator) -> DeviceInfo:
+    """Device info of the charger (wallbox); shared by sensor and select entities."""
+    station_dn = getattr(coordinator.api, "station", None) or "unknown_station"
+    controller_name = getattr(getattr(coordinator, "data", None), "controller_name", coordinator.api.controller_name)
+    charger_dn = getattr(coordinator.api, "charger_dn", None) or "unknown_charger"
+    info = DeviceInfo(
+        name="Fusion Solar Charger",
+        manufacturer="Huawei",
+        model=getattr(coordinator.api, "charger_model", None) or "SCharger",
+        identifiers={(DOMAIN, f"{controller_name}_{station_dn}_charger_{charger_dn}")},
+        via_device=(DOMAIN, f"{controller_name}_{station_dn}"),
+    )
+    if getattr(coordinator.api, "charger_software_version", None):
+        info["sw_version"] = coordinator.api.charger_software_version
+    if getattr(coordinator.api, "charger_serial_number", None):
+        info["serial_number"] = coordinator.api.charger_serial_number
+    return info
+
+
 def _build_device_info(
     coordinator: FusionSolarCoordinator,
     device: Device | None = None,
@@ -122,18 +141,7 @@ def _build_device_info(
             )
 
         if device.device_id.startswith(CHARGER_DEVICE_SENSOR_PREFIX):
-            charger_dn = getattr(coordinator.api, "charger_dn", None) or "unknown_charger"
-            info = DeviceInfo(
-                name="Fusion Solar Charger",
-                manufacturer="Huawei",
-                model=getattr(coordinator.api, "charger_model", None) or "SCharger",
-                serial_number=getattr(coordinator.api, "charger_name", None),
-                identifiers={(DOMAIN, f"{controller_name}_{station_dn}_charger_{charger_dn}")},
-                via_device=plant_identifier,
-            )
-            if getattr(coordinator.api, "charger_software_version", None):
-                info["sw_version"] = coordinator.api.charger_software_version
-            return info
+            return build_charger_device_info(coordinator)
 
         if device.device_id.startswith(POWER_SENSOR_DEVICE_SENSOR_PREFIX):
             power_sensor_dn = getattr(coordinator.api, "power_sensor_dn", None) or "unknown_power_sensor"
@@ -484,6 +492,12 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         "Last Authentication Time",
         "Battery Backup Time",
         "Battery SOH",
+        "Charger Reported Status",
+        "Charger Lock",
+        "Charger Temperature",
+        "Charger Data Time",
+        "Charger Dynamic Power",
+        "Charger Max Power",
     }
 
     def __init__(self, coordinator: FusionSolarCoordinator, device: Device) -> None:

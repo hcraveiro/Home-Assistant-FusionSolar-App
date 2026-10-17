@@ -140,7 +140,7 @@ This integration organizes entities into separate Home Assistant devices when th
 - **Fusion Solar Inverter**: inverter-specific realtime, PV string, derived MPPT and metadata metrics
 - **Fusion Solar Battery**: battery-specific metrics, module diagnostics and pack diagnostics
 - **Fusion Solar Power Sensor**: power meter / power sensor technical metrics
-- **Fusion Solar Charger**: Huawei SCharger wallbox (live charging power, energy counter, status, working mode, phase currents)
+- **Fusion Solar Charger**: Huawei SCharger wallbox (live charging power, energy counter, status, phase currents, working mode select)
 
 This makes the entity model cleaner and closer to the real FusionSolar device structure.
 
@@ -438,20 +438,19 @@ These values are taken directly from the power sensor / meter device endpoints a
 
 ### Charger (wallbox) sensors
 
-When the plant contains a Huawei SCharger wallbox, it is discovered automatically (device tree, mocId 60080) together with its charging connector (mocId 60081) and exposed as a dedicated Home Assistant device. All sensors are read-only; the working mode can be changed via a select entity.
+When the plant contains a Huawei SCharger wallbox, it is discovered automatically (device tree, mocId 60080) together with its charging connector (mocId 60081) and exposed as a dedicated Home Assistant device **Fusion Solar Charger**.
 
 - Charger Power (kW, live)
 - Charger Status (`charging` / `idle`, derived from the live power)
 - Charger Total Energy (kWh, lifetime counter – suitable for utility meters / the Energy dashboard)
 - Charger Working Status (e.g. `No Car Connected`, `Charging`)
-- Charger Working Mode (e.g. `PV Power` = "prefer green power" in the FusionSolar app)
-- Charger Reported Status, Charger Lock
-- Charger Current L1 / L2 / L3 (A), Charger Temperature (°C)
-- Charger Dynamic Power / Charger Max Power (kW, configured limits)
-- Charger Data Time
-- **Charger Working Mode Setting** (select, writable): `Normal charge` / `PV Power Preferred` – the "prefer green power" switch of the FusionSolar app (connector config signal 20002, written via `deviceExt/set-config-signals`)
+- Charger Working Mode (as reported for the last charging session, e.g. `PV Power`)
+- Charger Current L1 / L2 / L3 (A)
+- Diagnostic: Charger Reported Status, Charger Lock, Charger Temperature, Charger Dynamic Power / Charger Max Power (configured limits), Charger Data Time
 
-The values come from the same endpoints as the charger page of the FusionSolar web portal and are refreshed with the normal polling interval. Tested with a SCharger-22KT-S0 on an owner account.
+**Working mode select:** *Charger Working Mode Setting* (`Normal charge` / `PV Power Preferred`) is the "prefer green power" switch of the FusionSolar app. It reads and writes the connector configuration signal 20002 (`deviceExt/get-config-signals` / `deviceExt/set-config-signals`). Changes made in the app are picked up as well. This is the only write the integration performs.
+
+The values come from the same endpoints as the charger page of the FusionSolar web portal. Live values are refreshed with the normal polling interval; configuration values are cached for 15 minutes. Discovery is retried automatically if it fails (e.g. expired session). Tested with a SCharger-22KT-S0 on an owner account.
 
 ### Diagnostic sensors
 

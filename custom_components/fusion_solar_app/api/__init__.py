@@ -70,10 +70,14 @@ class FusionSolarAPI(
         self.charger_id = None
         self.charger_connector_id = None
         self.charger_connector_dn = None
-        self.charger_name = None
         self.charger_model = None
         self.charger_software_version = None
+        self.charger_serial_number = None
+        self.charger_working_mode_setting = None
         self.charger_checked = False
+        self._charger_retry_at = 0.0
+        self._charger_config_cache = {}
+        self._charger_config_time = 0.0
 
         self.power_sensor_dn = None
         self.power_sensor_name = None
