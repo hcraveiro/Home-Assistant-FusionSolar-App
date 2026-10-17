@@ -61,6 +61,7 @@ WORKING_MODES = {"0": "Normal charge", "1": "PV Power Preferred"}
 CHARGER_OFFSET = 1_000_000_000     # keeps charger signal ids apart from connector ids
 CONFIG_CACHE_SECONDS = 900         # limits / working mode change rarely
 DISCOVERY_RETRY_SECONDS = 600
+WRITE_CONFIRM_SECONDS = 180        # after a write the working mode is re-read on every poll for this long
 
 
 def _sig_id(signal: dict[str, Any]) -> int | None:
@@ -133,7 +134,7 @@ class FusionSolarChargerMixin:
                 chargers = self._charger_tree(self.station, CHARGER_MOC_ID)
                 self.charger_checked = True
                 if not chargers:
-                    _LOGGER.debug("No charger found in station %s", self.station)
+                    _LOGGER.debug("No charger found in this station")
                     return
                 self.charger_dn = chargers[0]["elementDn"]
                 self.charger_id = int(chargers[0]["elementId"])
@@ -149,7 +150,7 @@ class FusionSolarChargerMixin:
             self._charger_retry_at = time.monotonic() + DISCOVERY_RETRY_SECONDS
             _LOGGER.warning("Charger discovery incomplete, retrying later: %s", err)
             return
-        _LOGGER.debug("Charger %s, connector %s", self.charger_dn, self.charger_connector_dn)
+        _LOGGER.debug("Charger and charging connector discovered")
 
     def _charger_live(self) -> dict[int, dict[str, Any]]:
         """Live signals of connector and charger, keyed by signal id (charger ids offset)."""
@@ -170,6 +171,20 @@ class FusionSolarChargerMixin:
                 if sig_id is not None:
                     live[offset + sig_id] = signal
         return live
+
+    def _charger_read_working_mode(self) -> None:
+        """Read the connector working mode (config signal 20002) fresh, bypassing the cache."""
+        data = self._charger_get(
+            CONNECTOR_GET_CONFIG_URL, {"dn": self.charger_connector_dn, "_": int(time.time() * 1000)}, "Charger connector config"
+        )
+        for group in data.get("data") or []:
+            for signal in group.get("configSignalDisplayList") or []:
+                if _sig_id(signal) == CFG_WORKING_MODE and signal.get("value") is not None:
+                    self.charger_working_mode_setting = str(signal.get("value"))
+                    self.charger_config_read_at = time.monotonic()
+                    if self._charger_config_cache:
+                        self._charger_config_cache[CFG_WORKING_MODE] = self.charger_working_mode_setting
+                    return
 
     def _charger_config(self) -> dict[int, Any]:
         """Configured limits (charger) and working mode (connector), cached; only updated on a successful read."""
@@ -268,6 +283,9 @@ class FusionSolarChargerMixin:
 
         try:
             cfg = self._charger_config()
+            if self.charger_connector_dn and time.monotonic() < self._charger_mode_confirm_until:
+                # a write is awaiting confirmation: re-read the mode on every poll, limits stay cached
+                self._charger_read_working_mode()
             values["Charger Dynamic Power"] = (DeviceType.SENSOR_KW, cfg.get(CFG_DYNAMIC_POWER), "mdi:tune-variant")
             values["Charger Max Power"] = (DeviceType.SENSOR_KW, cfg.get(CFG_MAX_POWER), "mdi:speedometer")
         except APIAuthError:
@@ -318,7 +336,7 @@ class FusionSolarChargerMixin:
                 isinstance(i, dict) and i.get("code") == 0 for i in items
             )
             if ok:
-                self._charger_config_time = 0.0      # read back on the next poll
+                self._charger_mode_confirm_until = time.monotonic() + WRITE_CONFIRM_SECONDS
             else:
                 _LOGGER.warning(
                     "Charger working mode change not accepted (code=%s, description=%s)",
