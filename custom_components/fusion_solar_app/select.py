@@ -1,12 +1,12 @@
 """Select entities for Fusion Solar App (charger working mode)."""
 
-import logging
 import time
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -14,8 +14,6 @@ from .api.charger import WORKING_MODES
 from .const import DOMAIN
 from .coordinator import FusionSolarCoordinator
 from .sensor import build_charger_device_info
-
-_LOGGER = logging.getLogger(__name__)
 
 PENDING_TIMEOUT_SECONDS = 180
 
@@ -25,10 +23,19 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ):
-    """Set up the charger working mode select (only if a charging connector was found)."""
+    """Set up the charger working mode select as soon as a charging connector is known."""
     coordinator: FusionSolarCoordinator = hass.data[DOMAIN][config_entry.entry_id].coordinator
-    if getattr(coordinator.api, "charger_connector_dn", None):
-        async_add_entities([FusionSolarChargerWorkingModeSelect(coordinator)])
+    added = False
+
+    @callback
+    def _add_select() -> None:
+        nonlocal added
+        if not added and getattr(coordinator.api, "charger_connector_dn", None):
+            added = True
+            async_add_entities([FusionSolarChargerWorkingModeSelect(coordinator)])
+
+    _add_select()
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_select))
 
 
 class FusionSolarChargerWorkingModeSelect(CoordinatorEntity, SelectEntity):
@@ -36,6 +43,7 @@ class FusionSolarChargerWorkingModeSelect(CoordinatorEntity, SelectEntity):
 
     _attr_icon = "mdi:leaf"
     _attr_options = list(WORKING_MODES.values())
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: FusionSolarCoordinator) -> None:
         super().__init__(coordinator)
@@ -75,9 +83,10 @@ class FusionSolarChargerWorkingModeSelect(CoordinatorEntity, SelectEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        if self._pending is not None and (
-            self.coordinator.api.charger_working_mode_setting == self._pending
-            or time.monotonic() - self._pending_since > PENDING_TIMEOUT_SECONDS
-        ):
-            self._pending = None
+        if self._pending is not None:
+            api = self.coordinator.api
+            confirmed = api.charger_config_read_at > self._pending_since and api.charger_working_mode_setting == self._pending
+            if confirmed or time.monotonic() - self._pending_since > PENDING_TIMEOUT_SECONDS:
+                # confirmed by a read-back after the write, or timed out -> show the observed mode again
+                self._pending = None
         super()._handle_coordinator_update()

@@ -6,7 +6,7 @@ from urllib.parse import unquote
 
 from ..const import DATA_URL
 from ..utils import extract_numeric
-from .exceptions import APIDataStructureError
+from .exceptions import APIAuthError, APIDataStructureError
 from .models import Device, DeviceType
 from .signal_maps import DEVICES, get_inverter_signal_map
 
@@ -327,6 +327,8 @@ class FusionSolarInstallationMixin:
         devices.extend(self._build_power_sensor_devices(flow_data_nodes))
         try:
             devices.extend(self._build_charger_devices())
+        except APIAuthError:
+            raise  # let the coordinator re-login and retry
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("Charger data not available: %s", err)
     

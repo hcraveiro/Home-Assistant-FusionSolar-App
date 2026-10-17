@@ -448,6 +448,28 @@ async def async_setup_entry(
 
     async_add_entities(sensors)
 
+    # Charger entities may appear later (discovery retry, signals missing in the first poll)
+    known_charger_ids = {
+        device.device_id
+        for device in coordinator.data.devices
+        if device.device_id.startswith(CHARGER_DEVICE_SENSOR_PREFIX)
+    }
+
+    @callback
+    def _add_new_charger_sensors() -> None:
+        new = [
+            device
+            for device in (coordinator.data.devices if coordinator.data else [])
+            if device.device_id.startswith(CHARGER_DEVICE_SENSOR_PREFIX)
+            and device.device_id not in known_charger_ids
+            and device.device_type in SUPPORTED_SENSOR_DEVICE_TYPES
+        ]
+        if new:
+            known_charger_ids.update(device.device_id for device in new)
+            async_add_entities([FusionSolarSensor(coordinator, device) for device in new])
+
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_new_charger_sensors))
+
 
 class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     """Implementation of a standard Fusion Solar sensor."""
@@ -520,6 +542,9 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
 
         if updated_device is not None:
             self.device = updated_device
+        elif self.device_id.startswith(CHARGER_DEVICE_SENSOR_PREFIX):
+            # charger values missing in the current poll -> unavailable instead of a stale value
+            self.device = None
 
         _LOGGER.debug("Device: %s", self.device)
         self.async_write_ha_state()

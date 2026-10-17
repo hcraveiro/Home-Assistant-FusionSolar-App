@@ -448,9 +448,9 @@ When the plant contains a Huawei SCharger wallbox, it is discovered automaticall
 - Charger Current L1 / L2 / L3 (A)
 - Diagnostic: Charger Reported Status, Charger Lock, Charger Temperature, Charger Dynamic Power / Charger Max Power (configured limits), Charger Data Time
 
-**Working mode select:** *Charger Working Mode Setting* (`Normal charge` / `PV Power Preferred`) is the "prefer green power" switch of the FusionSolar app. It reads and writes the connector configuration signal 20002 (`deviceExt/get-config-signals` / `deviceExt/set-config-signals`). Changes made in the app are picked up as well. This is the only write the integration performs.
+**Working mode select:** *Charger Working Mode Setting* (`Normal charge` / `PV Power Preferred`) is the "prefer green power" switch of the FusionSolar app. It reads and writes the connector configuration signal 20002 (`deviceExt/get-config-signals` / `deviceExt/set-config-signals`). Changes made in the app are picked up with the next configuration refresh. This is the only write the integration performs.
 
-The values come from the same endpoints as the charger page of the FusionSolar web portal. Live values are refreshed with the normal polling interval; configuration values are cached for 15 minutes. Discovery is retried automatically if it fails (e.g. expired session). Tested with a SCharger-22KT-S0 on an owner account.
+The values come from the same endpoints as the charger page of the FusionSolar web portal. Live values are refreshed with the normal polling interval; configuration values are cached for 15 minutes (refreshed right after a write). Discovery is retried automatically if it fails (e.g. expired session) and the entities are added as soon as the charger is found. Only the first charger and its first charging connector of a plant are supported. Tested with a SCharger-22KT-S0 on an owner account.
 
 ### Diagnostic sensors
 

@@ -78,6 +78,8 @@ class FusionSolarAPI(
         self._charger_retry_at = 0.0
         self._charger_config_cache = {}
         self._charger_config_time = 0.0
+        self.charger_config_read_at = 0.0
+        self._charger_lock = threading.Lock()
 
         self.power_sensor_dn = None
         self.power_sensor_name = None
