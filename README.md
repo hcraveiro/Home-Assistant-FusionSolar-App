@@ -140,6 +140,7 @@ This integration organizes entities into separate Home Assistant devices when th
 - **Fusion Solar Inverter**: inverter-specific realtime, PV string, derived MPPT and metadata metrics
 - **Fusion Solar Battery**: battery-specific metrics, module diagnostics and pack diagnostics
 - **Fusion Solar Power Sensor**: power meter / power sensor technical metrics
+- **Fusion Solar Charger**: Huawei SCharger wallbox (live charging power, energy counter, status, phase currents, working mode select)
 
 This makes the entity model cleaner and closer to the real FusionSolar device structure.
 
@@ -434,6 +435,22 @@ Depending on the meter and payload, you may see sensors such as:
 These sensors are only created when the FusionSolar frontend endpoint actually returns the corresponding signal IDs. Single-phase installations will usually not expose these entities.
 
 These values are taken directly from the power sensor / meter device endpoints and are intended as technical diagnostics / metering sensors, separate from the installation-wide aggregate energy sensors.
+
+### Charger (wallbox) sensors
+
+When the plant contains a Huawei SCharger wallbox, it is discovered automatically (device tree, mocId 60080) together with its charging connector (mocId 60081) and exposed as a dedicated Home Assistant device **Fusion Solar Charger**.
+
+- Charger Power (kW, live)
+- Charger Status (`charging` / `idle`, derived from the live power)
+- Charger Total Energy (kWh, lifetime counter – suitable for utility meters / the Energy dashboard)
+- Charger Working Status (e.g. `No Car Connected`, `Charging`)
+- Charger Working Mode (as reported for the last charging session, e.g. `PV Power`)
+- Charger Current L1 / L2 / L3 (A)
+- Diagnostic: Charger Reported Status, Charger Lock, Charger Temperature, Charger Dynamic Power / Charger Max Power (configured limits), Charger Data Time
+
+**Working mode select:** *Charger Working Mode Setting* (`Normal charge` / `PV Power Preferred`) is the "prefer green power" switch of the FusionSolar app. It reads and writes the connector configuration signal 20002 (`deviceExt/get-config-signals` / `deviceExt/set-config-signals`). Changes made in the app are picked up with the next configuration refresh. This is the only write the integration performs.
+
+The values come from the same endpoints as the charger page of the FusionSolar web portal. Live values are refreshed with the normal polling interval; configuration values are cached for 15 minutes (refreshed right after a write). Discovery is retried automatically if it fails (e.g. expired session) and the entities are added as soon as the charger is found. Only the first charger and its first charging connector of a plant are supported. Tested with a SCharger-22KT-S0 on an owner account.
 
 ### Diagnostic sensors
 

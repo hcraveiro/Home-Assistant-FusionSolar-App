@@ -24,6 +24,7 @@ from .models import Device, DeviceType, ENERGY_BALANCE_CALL_TYPE
 from .social import FusionSolarSocialMixin
 from .station import FusionSolarStationMixin
 from .power_sensor import FusionSolarPowerSensorMixin
+from .charger import FusionSolarChargerMixin
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class FusionSolarAPI(
     FusionSolarEnergyBalanceMixin,
     FusionSolarInstallationMixin,
     FusionSolarPowerSensorMixin,
+    FusionSolarChargerMixin,
 ):
     """Class for Fusion Solar App API."""
 
@@ -63,6 +65,22 @@ class FusionSolarAPI(
         self.battery_serial_number = None
         self.battery_software_version = None
         self.battery_capacity = None
+
+        self.charger_dn = None
+        self.charger_id = None
+        self.charger_connector_id = None
+        self.charger_connector_dn = None
+        self.charger_model = None
+        self.charger_software_version = None
+        self.charger_serial_number = None
+        self.charger_working_mode_setting = None
+        self.charger_checked = False
+        self._charger_retry_at = 0.0
+        self._charger_config_cache = {}
+        self._charger_config_time = 0.0
+        self.charger_config_read_at = 0.0
+        self._charger_mode_confirm_until = 0.0
+        self._charger_lock = threading.Lock()
 
         self.power_sensor_dn = None
         self.power_sensor_name = None

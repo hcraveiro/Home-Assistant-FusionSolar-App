@@ -54,6 +54,7 @@ SUPPORTED_SENSOR_DEVICE_TYPES = {
 
 INVERTER_DEVICE_SENSOR_PREFIX = "Inverter "
 POWER_SENSOR_DEVICE_SENSOR_PREFIX = "Power Sensor "
+CHARGER_DEVICE_SENSOR_PREFIX = "Charger "
 
 BATTERY_DEVICE_SENSOR_IDS = {
     "Battery Operating Status",
@@ -78,6 +79,25 @@ def _get_station_suffix(coordinator: FusionSolarCoordinator) -> str:
         .replace(":", "_")
         .replace("/", "_")
     )
+
+
+def build_charger_device_info(coordinator: FusionSolarCoordinator) -> DeviceInfo:
+    """Device info of the charger (wallbox); shared by sensor and select entities."""
+    station_dn = getattr(coordinator.api, "station", None) or "unknown_station"
+    controller_name = getattr(getattr(coordinator, "data", None), "controller_name", coordinator.api.controller_name)
+    charger_dn = getattr(coordinator.api, "charger_dn", None) or "unknown_charger"
+    info = DeviceInfo(
+        name="Fusion Solar Charger",
+        manufacturer="Huawei",
+        model=getattr(coordinator.api, "charger_model", None) or "SCharger",
+        identifiers={(DOMAIN, f"{controller_name}_{station_dn}_charger_{charger_dn}")},
+        via_device=(DOMAIN, f"{controller_name}_{station_dn}"),
+    )
+    if getattr(coordinator.api, "charger_software_version", None):
+        info["sw_version"] = coordinator.api.charger_software_version
+    if getattr(coordinator.api, "charger_serial_number", None):
+        info["serial_number"] = coordinator.api.charger_serial_number
+    return info
 
 
 def _build_device_info(
@@ -119,6 +139,9 @@ def _build_device_info(
                 },
                 via_device=plant_identifier,
             )
+
+        if device.device_id.startswith(CHARGER_DEVICE_SENSOR_PREFIX):
+            return build_charger_device_info(coordinator)
 
         if device.device_id.startswith(POWER_SENSOR_DEVICE_SENSOR_PREFIX):
             power_sensor_dn = getattr(coordinator.api, "power_sensor_dn", None) or "unknown_power_sensor"
@@ -425,6 +448,28 @@ async def async_setup_entry(
 
     async_add_entities(sensors)
 
+    # Charger entities may appear later (discovery retry, signals missing in the first poll)
+    known_charger_ids = {
+        device.device_id
+        for device in coordinator.data.devices
+        if device.device_id.startswith(CHARGER_DEVICE_SENSOR_PREFIX)
+    }
+
+    @callback
+    def _add_new_charger_sensors() -> None:
+        new = [
+            device
+            for device in (coordinator.data.devices if coordinator.data else [])
+            if device.device_id.startswith(CHARGER_DEVICE_SENSOR_PREFIX)
+            and device.device_id not in known_charger_ids
+            and device.device_type in SUPPORTED_SENSOR_DEVICE_TYPES
+        ]
+        if new:
+            known_charger_ids.update(device.device_id for device in new)
+            async_add_entities([FusionSolarSensor(coordinator, device) for device in new])
+
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_new_charger_sensors))
+
 
 class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     """Implementation of a standard Fusion Solar sensor."""
@@ -469,6 +514,12 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         "Last Authentication Time",
         "Battery Backup Time",
         "Battery SOH",
+        "Charger Reported Status",
+        "Charger Lock",
+        "Charger Temperature",
+        "Charger Data Time",
+        "Charger Dynamic Power",
+        "Charger Max Power",
     }
 
     def __init__(self, coordinator: FusionSolarCoordinator, device: Device) -> None:
@@ -491,6 +542,9 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
 
         if updated_device is not None:
             self.device = updated_device
+        elif self.device_id.startswith(CHARGER_DEVICE_SENSOR_PREFIX):
+            # charger values missing in the current poll -> unavailable instead of a stale value
+            self.device = None
 
         _LOGGER.debug("Device: %s", self.device)
         self.async_write_ha_state()
