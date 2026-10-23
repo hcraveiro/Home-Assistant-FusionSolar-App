@@ -471,11 +471,22 @@ class FusionSolarInverterMixin:
         if cutoff_index is None:
             cutoff_index = pv_pairs[-1]["pv_index"]
 
+        # Preserve inputs confirmed in earlier polls when the inverter is idle.
+        # A cold start with only zero-value placeholders remains inconclusive;
+        # the sensor platform will discover actual inputs on a later update.
+        known_indexes = getattr(self, "_known_visible_pv_indexes", set())
         visible_indexes = {
             pair["pv_index"]
             for pair in pv_pairs
             if pair["pv_index"] <= cutoff_index
         }
+        visible_indexes.update(
+            index
+            for index in known_indexes
+            if any(pair["pv_index"] == index for pair in pv_pairs)
+        )
+        if cutoff_index > 0:
+            self._known_visible_pv_indexes = known_indexes | visible_indexes
 
         _LOGGER.debug(
             "Visible PV indexes determined from signal metadata: %s (cutoff=%s, pairs=%s)",
