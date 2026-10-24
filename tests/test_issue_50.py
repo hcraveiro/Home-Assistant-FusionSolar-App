@@ -31,7 +31,8 @@ def load_validator():
 class MonthlyProductionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.validator, cls.namespace = load_validator()
+        validator, cls.namespace = load_validator()
+        cls.validator = staticmethod(validator)
 
     def setUp(self):
         self.api = SimpleNamespace()
