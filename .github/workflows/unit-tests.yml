@@ -1,0 +1,26 @@
+name: Unit tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Check Python syntax
+        run: python -m compileall -q custom_components/fusion_solar_app tests
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
