@@ -230,7 +230,72 @@ class FusionSolarEnergyBalanceMixin:
             )
             output["battery_consumption_lifetime"] = lifetime_total_discharge_power
 
+        self._validate_monthly_production_at_midnight(output, month_data["data"].get("productPower"))
         self._update_output_with_self_consumption_ratios(output)
+
+    def _validate_monthly_production_at_midnight(
+        self, output: Dict[str, Optional[float | str]], daily_production: list | None = None
+    ) -> None:
+        """Cross-check transient monthly spikes against daily and cumulative totals."""
+        now = datetime.now()
+        monthly = output.get("panel_production_month")
+        yearly = output.get("panel_production_year")
+        lifetime = output.get("panel_production_lifetime")
+        if any(not isinstance(value, (int, float)) for value in (monthly, yearly, lifetime)):
+            return
+
+        # The daily breakdown can validate an initial poll after a nighttime restart.
+        # Restrict this reconciliation to midnight; elsewhere the API may still
+        # be updating its daily aggregates.
+        if now.hour == 0 and now.minute < 15 and isinstance(daily_production, list):
+            day_values = daily_production[:now.day]
+            valid_values = [
+                extract_numeric(value)
+                for value in day_values
+                if value not in (None, "", "--", "null")
+            ]
+            # Do not infer a monthly total from incomplete or missing daily data.
+            if len(valid_values) >= now.day - 1 and len(valid_values) > 0:
+                daily_total = round(sum(valid_values), 2)
+                if monthly - daily_total > 1.0:
+                    _LOGGER.warning(
+                        "Ignoring inconsistent monthly production at midnight: "
+                        "monthly=%.2f daily_total=%.2f",
+                        monthly, daily_total,
+                    )
+                    output["panel_production_month"] = daily_total
+                    self._production_total_reference = (
+                        (now.year, now.month, now.day),
+                        daily_total, yearly, lifetime,
+                    )
+                    return
+
+        previous = getattr(self, "_production_total_reference", None)
+        if previous is not None:
+            previous_day, previous_monthly, previous_yearly, previous_lifetime = previous
+            same_month = previous_day[:2] == (now.year, now.month)
+            close_to_midnight = now.hour == 0 and now.minute < 15
+            monthly_delta = monthly - previous_monthly
+            yearly_delta = yearly - previous_yearly
+            lifetime_delta = lifetime - previous_lifetime
+            if (
+                same_month
+                and close_to_midnight
+                and monthly_delta > 1.0
+                and monthly_delta - max(yearly_delta, lifetime_delta) > 1.0
+                and abs(yearly_delta - lifetime_delta) < 1.0
+            ):
+                _LOGGER.warning(
+                    "Ignoring inconsistent midnight monthly production: "
+                    "monthly=%.2f previous=%.2f yearly_delta=%.2f lifetime_delta=%.2f",
+                    monthly, previous_monthly, yearly_delta, lifetime_delta,
+                )
+                output["panel_production_month"] = previous_monthly
+                return
+
+        self._production_total_reference = (
+            (now.year, now.month, now.day), monthly, yearly, lifetime
+        )
 
     def call_energy_balance(
         self,
