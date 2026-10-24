@@ -23,6 +23,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -98,6 +99,9 @@ def _build_device_info(
         f"{controller_name}_{station_dn}",
     )
 
+    # The installation device is registered before the entities are added.
+    parent_device_id = getattr(coordinator, "_plant_device_registry_id", None)
+
     if device is not None:
         if device.device_id.startswith(INVERTER_DEVICE_SENSOR_PREFIX):
             inverter_dn = getattr(coordinator.api, "inverter_dn", None) or "unknown_inverter"
@@ -117,7 +121,7 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_inverter_{inverter_dn}",
                     )
                 },
-                via_device=plant_identifier,
+                via_device_id=parent_device_id,
             )
 
         if device.device_id.startswith(POWER_SENSOR_DEVICE_SENSOR_PREFIX):
@@ -137,7 +141,7 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_power_sensor_{power_sensor_dn}",
                     )
                 },
-                via_device=plant_identifier,
+                via_device_id=parent_device_id,
             )
 
             if power_sensor_software_version:
@@ -169,7 +173,7 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_battery_{battery_dn}",
                     )
                 },
-                via_device=plant_identifier,
+                via_device_id=parent_device_id,
             )
 
     return DeviceInfo(
@@ -422,6 +426,25 @@ async def async_setup_entry(
             FusionSolarRemainingTodaySensor(coordinator),
         ]
     )
+
+    # Register the parent explicitly so child devices can reference its stable
+    # registry ID, rather than the deprecated identifier-based via_device.
+    station_dn = getattr(coordinator.api, "station", None) or "unknown_station"
+    station_name = getattr(coordinator.api, "station_name", None) or "FusionSolar Plant"
+    controller_name = getattr(
+        getattr(coordinator, "data", None),
+        "controller_name",
+        coordinator.api.controller_name,
+    )
+    plant = dr.async_get(hass).async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={(DOMAIN, f"{controller_name}_{station_dn}")},
+        name=f"Fusion Solar Installation ({station_dn})",
+        manufacturer="Fusion Solar",
+        model=str(station_name),
+        sw_version="1.0",
+    )
+    coordinator._plant_device_registry_id = plant.id
 
     async_add_entities(sensors)
 
