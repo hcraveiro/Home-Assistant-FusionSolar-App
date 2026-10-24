@@ -230,7 +230,46 @@ class FusionSolarEnergyBalanceMixin:
             )
             output["battery_consumption_lifetime"] = lifetime_total_discharge_power
 
+        self._validate_monthly_production_at_midnight(output)
         self._update_output_with_self_consumption_ratios(output)
+
+    def _validate_monthly_production_at_midnight(
+        self, output: Dict[str, Optional[float | str]]
+    ) -> None:
+        """Hold a transient monthly spike if yearly and lifetime totals disagree."""
+        now = datetime.now()
+        monthly = output.get("panel_production_month")
+        yearly = output.get("panel_production_year")
+        lifetime = output.get("panel_production_lifetime")
+        if any(not isinstance(value, (int, float)) for value in (monthly, yearly, lifetime)):
+            return
+
+        previous = getattr(self, "_production_total_reference", None)
+        if previous is not None:
+            previous_day, previous_monthly, previous_yearly, previous_lifetime = previous
+            same_month = previous_day[:2] == (now.year, now.month)
+            close_to_midnight = now.hour == 0 and now.minute < 15
+            monthly_delta = monthly - previous_monthly
+            yearly_delta = yearly - previous_yearly
+            lifetime_delta = lifetime - previous_lifetime
+            if (
+                same_month
+                and close_to_midnight
+                and monthly_delta > 1.0
+                and monthly_delta - max(yearly_delta, lifetime_delta) > 1.0
+                and abs(yearly_delta - lifetime_delta) < 1.0
+            ):
+                _LOGGER.warning(
+                    "Ignoring inconsistent midnight monthly production: "
+                    "monthly=%.2f previous=%.2f yearly_delta=%.2f lifetime_delta=%.2f",
+                    monthly, previous_monthly, yearly_delta, lifetime_delta,
+                )
+                output["panel_production_month"] = previous_monthly
+                return
+
+        self._production_total_reference = (
+            (now.year, now.month, now.day), monthly, yearly, lifetime
+        )
 
     def call_energy_balance(
         self,
