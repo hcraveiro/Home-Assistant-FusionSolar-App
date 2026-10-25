@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import nullcontext
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
@@ -126,7 +127,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             "Trying to auto-select the first available station."
         )
     
-        station_data = await self.hass.async_add_executor_job(self.api.get_station_list)
+        station_data = await self.hass.async_add_executor_job(self._call_api_serialized, self.api.get_station_list)
         stations = station_data.get("data", {}).get("list") or []
     
         if not stations:
@@ -153,16 +154,23 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             "Auto-selected FusionSolar station DN and stored it in the config entry"
         )
         
+    def _call_api_serialized(self, method):
+        """Prevent session renewal from replacing HTTP state during a request."""
+        lock = getattr(self.api, "_session_lock", None)
+        with lock if lock is not None else nullcontext():
+            return method()
+
     async def _fetch_devices_with_connection_retry(self) -> list[Device]:
         """Retry a transient connection failure once without resetting the session."""
         try:
-            return await self.hass.async_add_executor_job(self.api.get_devices)
+            return await self.hass.async_add_executor_job(self._call_api_serialized, self.api.get_devices)
         except APIConnectionError as err:
             _LOGGER.warning(
                 "Transient FusionSolar device fetch failure; retrying once: %s",
                 err,
             )
-            return await self.hass.async_add_executor_job(self.api.get_devices)
+            await self.hass.async_add_executor_job(time.sleep, 1)
+            return await self.hass.async_add_executor_job(self._call_api_serialized, self.api.get_devices)
 
     async def async_update_data(self) -> FusionSolarAPIData:
         """Fetch data from API endpoint."""
@@ -171,7 +179,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
         try:
             if not self.api.connected:
                 _LOGGER.info("FusionSolar session not connected. Performing login.")
-                await self.hass.async_add_executor_job(self.api.login)
+                await self.hass.async_add_executor_job(self._call_api_serialized, self.api.login)
     
             await self._ensure_station_dn()
             devices = await self._fetch_devices_with_connection_retry()
@@ -189,10 +197,10 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             )
             try:
                 self.api.reset_session()
-                await self.hass.async_add_executor_job(self.api.login)
+                await self.hass.async_add_executor_job(self._call_api_serialized, self.api.login)
     
                 await self._ensure_station_dn()
-                devices = await self.hass.async_add_executor_job(self.api.get_devices)
+                devices = await self.hass.async_add_executor_job(self._call_api_serialized, self.api.get_devices)
             except APIAuthCaptchaError as captcha_err:
                 raise ConfigEntryAuthFailed(
                     "Login requires CAPTCHA. Please reconfigure the integration."
