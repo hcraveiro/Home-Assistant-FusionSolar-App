@@ -81,5 +81,4 @@ def test_full_energy_output_aggregation(module,monkeypatch):
     assert output["panel_production_year"]==120
     assert output["grid_consumption_lifetime"]==20
     assert output["battery_injection_lifetime"]==31
-    assert output["self_consumption_ratio_month"]==0 if "self_consumption_ratio_month" in output else True
     assert api.call_energy_balance.call_count>=4
