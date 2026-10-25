@@ -33,7 +33,7 @@ jobs:
         run: >-
           python -m pytest tests -v
           --cov=custom_components/fusion_solar_app
-          --cov-fail-under=6
+          --cov-fail-under=15
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
           --junitxml=test-results.xml
