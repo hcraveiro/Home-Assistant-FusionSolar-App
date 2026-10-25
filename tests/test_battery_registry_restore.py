@@ -32,7 +32,7 @@ def _coordinator(registry_devices, battery_dn=None, station="plant-1"):
 
 def _device(identifier, entry="entry-A", domain="fusion_solar_app"):
     return SimpleNamespace(
-        config_entries={entry},
+        config_entry_id=entry,
         identifiers={(domain, identifier)},
     )
 
@@ -43,7 +43,7 @@ def test_restore_battery_from_same_entry_and_station():
     coordinator, registry = _coordinator({
         "one": _device("fusion_solar_app_plant-1_battery_" + expected)
     })
-    restore.__globals__["dr"] = SimpleNamespace(async_get=lambda hass: registry)
+    restore.__globals__["dr"] = SimpleNamespace(async_get=lambda hass: registry, async_entries_for_config_entry=lambda registry, entry_id: [device for device in registry.devices.values() if device.config_entry_id == entry_id])
     restore.__globals__["_LOGGER"] = SimpleNamespace(debug=lambda *args: None)
     restore(coordinator)
     assert coordinator.api.battery_dn == expected
@@ -56,7 +56,7 @@ def test_do_not_restore_from_different_entry_or_station():
         "two": _device("fusion_solar_app_plant-2_battery_other"),
         "three": _device("fusion_solar_app_plant-1_battery_unknown_battery"),
     })
-    restore.__globals__["dr"] = SimpleNamespace(async_get=lambda hass: registry)
+    restore.__globals__["dr"] = SimpleNamespace(async_get=lambda hass: registry, async_entries_for_config_entry=lambda registry, entry_id: [device for device in registry.devices.values() if device.config_entry_id == entry_id])
     restore(coordinator)
     assert coordinator.api.battery_dn is None
 
@@ -66,6 +66,6 @@ def test_existing_battery_identity_is_never_overwritten():
     coordinator, registry = _coordinator({
         "one": _device("fusion_solar_app_plant-1_battery_other")
     }, battery_dn="already-known")
-    restore.__globals__["dr"] = SimpleNamespace(async_get=lambda hass: registry)
+    restore.__globals__["dr"] = SimpleNamespace(async_get=lambda hass: registry, async_entries_for_config_entry=lambda registry, entry_id: [device for device in registry.devices.values() if device.config_entry_id == entry_id])
     restore(coordinator)
     assert coordinator.api.battery_dn == "already-known"
