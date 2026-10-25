@@ -151,3 +151,106 @@ def test_inverter_known_pv_kept_after_nightfall(modules):
     api._known_visible_pv_indexes = {1}
     pairs = {11001: {"value": 0, "latestTime": 50}, 11002: {"value": 0, "latestTime": 50}}
     assert api._get_visible_pv_indexes_from_signal_meta(pairs, 1) == {1}
+
+
+def make_api_for_fetch(module, dn_attribute, dn):
+    api = (module.FusionSolarBatteryMixin() if dn_attribute == "battery_dn" else
+           module.FusionSolarPowerSensorMixin() if dn_attribute == "power_sensor_dn" else
+           module.FusionSolarInverterMixin())
+    setattr(api, dn_attribute, dn)
+    api.data_host = "eu5.fusionsolar.huawei.com"
+    api.csrf = "dummy"
+    api.refresh_csrf = Mock()
+    api._request_json = Mock()
+    return api
+
+
+@pytest.mark.parametrize(("module_index", "attribute", "method"), [
+    (0, "power_sensor_dn", "get_power_sensor_realtime_data"),
+    (1, "battery_dn", "get_battery_realtime_data"),
+    (2, "inverter_dn", "get_inverter_config_info"),
+    (1, "battery_dn", "get_battery_type"),
+])
+def test_device_endpoints_skip_missing_dn(modules, module_index, attribute, method):
+    api = make_api_for_fetch(modules[module_index], attribute, None)
+    assert getattr(api, method)() == {}
+    api.refresh_csrf.assert_not_called()
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"success": False, "data": []}, {}),
+    ({"success": True, "data": []}, {}),
+    ({"success": True, "data": [
+        {"signals": [{"id": 10001, "value": "online"}, {"id": 10004, "value": "2000 W"}]},
+        {"signals": [{"id": 9999999, "value": "ignore"}]},
+        {"invalid": 1},
+    ]}, {10001: "online", 10004: 2.0}),
+])
+def test_meter_realtime_parses_known_signals(modules, payload, expected):
+    api = make_api_for_fetch(modules[0], "power_sensor_dn", "meter-1")
+    api._request_json.return_value = (None, payload)
+    assert api.get_power_sensor_realtime_data() == expected
+
+
+def test_battery_type_model_discovery(modules):
+    api = make_api_for_fetch(modules[1], "battery_dn", "battery-1")
+    api.battery_model = None
+    api._request_json.return_value = (None, {"data": {"module1DevType": "ESS", "module2DevType": "LUNA2000"}})
+    api.get_battery_type()
+    assert api.battery_model == "LUNA2000"
+
+
+def test_battery_realtime_and_optional_kpi(modules):
+    api = make_api_for_fetch(modules[1], "battery_dn", "battery-1")
+    api._request_json.side_effect = [
+        (None, {"success": True, "data": [{"signals": [
+            {"id": 10001, "value": "42"}, {"id": None, "value": "ignore"}
+        ]}]}),
+        (None, {"data": {"signals": {"10007": {"value": "95"}}}}),
+    ]
+    result = api.get_battery_realtime_data()
+    assert result[10001] == "42"
+    assert result[10007] == "95"
+
+
+def test_battery_optional_kpi_failure_does_not_discard_data(modules):
+    api = make_api_for_fetch(modules[1], "battery_dn", "battery-1")
+    api._request_json.side_effect = [
+        (None, {"success": True, "data": [{"signals": [{"id": 10001, "value": "50"}]}]}),
+        RuntimeError("kpi unavailable"),
+    ]
+    assert api.get_battery_realtime_data() == {10001: "50"}
+
+
+def test_inverter_config_uses_real_metadata_parser(modules):
+    api = make_api_for_fetch(modules[2], "inverter_dn", "inverter-1")
+    api.inverter_name = None
+    api.inverter_model = None
+    api.inverter_software_version = None
+    api.inverter_serial_number = None
+    api._request_json.return_value = (None, {"data": {
+        "signals": [
+            {"signal": 33595393, "value": "Inverter"},
+            {"signal": 50009, "value": "SUN2000"},
+            {"signal": 50010, "realValue": "1.2"},
+            {"signal": 50012, "value": "redacted"},
+        ]
+    }})
+    api.get_inverter_config_info()
+    assert api.inverter_model == "SUN2000"
+    assert api.inverter_name == "Inverter"
+    assert api.inverter_serial_number == "redacted"
+
+
+def test_meter_config_metadata_parser(modules):
+    api = make_api_for_fetch(modules[0], "power_sensor_dn", "meter-1")
+    for attribute in ("power_sensor_name", "power_sensor_model", "power_sensor_software_version",
+                      "power_sensor_serial_number", "power_sensor_usage"):
+        setattr(api, attribute, None)
+    api._request_json.return_value = (None, {"data": {
+        "33595393": "Meter", "50009": "DTSU666", "50010": "1.2",
+        "50012": "redacted", "20004": "1"
+    }})
+    api.get_power_sensor_config_info()
+    assert api.power_sensor_name == "Meter"
+    assert api.power_sensor_usage == "Export+import meter"
