@@ -4,6 +4,8 @@ import ast
 import asyncio
 import logging
 import time
+import threading
+from contextlib import nullcontext
 import types
 import unittest
 from pathlib import Path
@@ -47,6 +49,41 @@ def load_retry_method():
     }
     exec(compile(module, str(SOURCE), "exec"), namespace)
     return namespace[method.name]
+
+
+class SessionSerializationTests(unittest.TestCase):
+    def test_api_call_uses_shared_session_lock(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+        methods = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_call_api_serialized"
+        ]
+        self.assertEqual(len(methods), 1)
+        module = ast.fix_missing_locations(ast.Module(body=[methods[0]], type_ignores=[]))
+        namespace = {"nullcontext": nullcontext}
+        exec(compile(module, str(SOURCE), "exec"), namespace)
+        serialize = namespace["_call_api_serialized"]
+        lock = threading.RLock()
+        coordinator = types.SimpleNamespace(api=types.SimpleNamespace(_session_lock=lock))
+        observed = []
+        def callback():
+            observed.append(lock._is_owned())
+            return "ok"
+        self.assertEqual(serialize(coordinator, callback), "ok")
+        self.assertEqual(observed, [True])
+
+    def test_api_call_without_lock_uses_safe_fallback(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+        method = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_call_api_serialized"
+        )
+        module = ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[]))
+        namespace = {"nullcontext": nullcontext}
+        exec(compile(module, str(SOURCE), "exec"), namespace)
+        coordinator = types.SimpleNamespace(api=types.SimpleNamespace())
+        self.assertEqual(namespace["_call_api_serialized"](coordinator, lambda: 42), 42)
 
 
 class ConnectionRetryTests(unittest.TestCase):
