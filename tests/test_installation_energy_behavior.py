@@ -258,3 +258,125 @@ def test_week_data_calls_daily_endpoint_without_waiting(modules, monkeypatch):
     assert api.call_energy_balance.call_count == len(result)
     assert all(call.args[0] == energy_module.ENERGY_BALANCE_CALL_TYPE.DAY
                for call in api.call_energy_balance.call_args_list)
+
+
+@pytest.mark.parametrize(("frozen_time", "period", "expected_date", "expected_dim"), [
+    ("2026-10-31T23:59:00", "MONTH", "2026-10-01 00:00:00", "4"),
+    ("2026-11-01T00:01:00", "MONTH", "2026-11-01 00:00:00", "4"),
+    ("2026-11-01T00:01:00", "PREVIOUS_MONTH", "2026-10-01 00:00:00", "4"),
+    ("2026-12-31T23:59:00", "YEAR", "2026-01-01 00:00:00", "5"),
+    ("2027-01-01T00:01:00", "YEAR", "2027-01-01 00:00:00", "5"),
+    ("2027-01-01T00:01:00", "LIFETIME", "2027-01-01 00:00:00", "6"),
+])
+def test_energy_balance_request_date_boundaries(
+    modules, monkeypatch, frozen_time, period, expected_date, expected_dim
+):
+    """Lock down current date-selection behavior without altering source totals."""
+    from datetime import datetime
+    from urllib.parse import parse_qs, urlsplit
+
+    energy_module = modules[1]
+    fixed = datetime.fromisoformat(frozen_time)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed if tz is None else fixed.replace(tzinfo=tz)
+
+    monkeypatch.setattr(energy_module, "datetime", FrozenDatetime)
+    api = energy_module.FusionSolarEnergyBalanceMixin()
+    api.station = "station-id"
+    api.data_host = "example.com"
+    api.csrf = "test-csrf"
+    api.refresh_csrf = Mock()
+    api._request_json = Mock(return_value=(None, {"data": {"totalProductPower": "99 kWh"}}))
+    call_type = energy_module.ENERGY_BALANCE_CALL_TYPE[period]
+    result = api.call_energy_balance(call_type)
+    params = parse_qs(urlsplit(api._request_json.call_args.args[1]).query)
+    assert params["dateStr"] == [expected_date]
+    assert params["timeDim"] == [expected_dim]
+    assert int(params["queryTime"][0]) > 0
+    assert result["data"]["totalProductPower"] == "99 kWh"
+
+
+def test_energy_balance_explicit_day_across_year_boundary(modules, monkeypatch):
+    """A requested day must not change when a new calendar year starts."""
+    from datetime import datetime
+    from urllib.parse import parse_qs, urlsplit
+
+    energy_module = modules[1]
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2027, 1, 1, 0, 1)
+
+    monkeypatch.setattr(energy_module, "datetime", FrozenDatetime)
+    api = energy_module.FusionSolarEnergyBalanceMixin()
+    api.station = "station-id"
+    api.data_host = "example.com"
+    api.csrf = "test-csrf"
+    api.refresh_csrf = Mock()
+    api._request_json = Mock(return_value=(None, {"data": {}}))
+    api.call_energy_balance(
+        energy_module.ENERGY_BALANCE_CALL_TYPE.DAY,
+        specific_date=datetime(2026, 12, 31),
+    )
+    params = parse_qs(urlsplit(api._request_json.call_args.args[1]).query)
+    assert params["dateStr"] == ["2026-12-31 00:00:00"]
+    assert params["timeDim"] == ["2"]
+
+
+@pytest.mark.parametrize(("date_text", "expected_offset"), [
+    ("2026-03-29T00:30:00+00:00", 0),
+    ("2026-03-29T02:30:00+01:00", 3600),
+    ("2026-10-25T00:30:00+01:00", 3600),
+    ("2026-10-25T02:30:00+00:00", 0),
+])
+def test_lisbon_dst_offset_at_boundaries(date_text, expected_offset):
+    """Document real Europe/Lisbon DST transitions independently of the API."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    instant = datetime.fromisoformat(date_text)
+    localized = instant.astimezone(ZoneInfo("Europe/Lisbon"))
+    assert int(localized.utcoffset().total_seconds()) == expected_offset
+
+
+def test_same_instant_can_have_different_local_calendar_days():
+    """Host and station time zones can disagree around local midnight."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    instant = datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc)
+    lisbon = instant.astimezone(ZoneInfo("Europe/Lisbon"))
+    utc = instant.astimezone(timezone.utc)
+    assert lisbon.date().isoformat() == "2026-10-25"
+    assert utc.date().isoformat() == "2026-10-25"
+
+    instant = datetime(2026, 7, 1, 23, 30, tzinfo=timezone.utc)
+    assert instant.astimezone(ZoneInfo("Europe/Lisbon")).date().isoformat() == "2026-07-02"
+    assert instant.date().isoformat() == "2026-07-01"
+
+
+def test_upstream_lifetime_spike_is_not_silently_clamped(modules):
+    """Keep the upstream spike visible until its root cause is confirmed."""
+    from unittest.mock import Mock
+
+    energy_module = modules[1]
+    api = energy_module.FusionSolarEnergyBalanceMixin()
+    api.station = "station-id"
+    api.data_host = "example.com"
+    api.csrf = "test-csrf"
+    api.refresh_csrf = Mock()
+    upstream_values = ["1000 kWh", "1009.9 kWh", "1000 kWh"]
+    api._request_json = Mock(
+        side_effect=[(None, {"data": {"totalProductPower": value}})
+                     for value in upstream_values]
+    )
+    actual = [
+        api.call_energy_balance(
+            energy_module.ENERGY_BALANCE_CALL_TYPE.LIFETIME
+        )["data"]["totalProductPower"]
+        for _ in upstream_values
+    ]
+    assert actual == upstream_values
