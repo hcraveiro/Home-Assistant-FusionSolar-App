@@ -264,3 +264,62 @@ async def test_cache_is_persisted_when_historical_profile_is_usable(builder):
     assert result["date"] == "2026-10-25"
     assert result["delta_curve"][1]["delta_kwh"] == 0.5
     builder._forecast_store.async_save.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_midnight_rollover_rebuilds_forecast_cache_for_new_day(builder):
+    """A cache generated yesterday must not be reused after midnight."""
+    previous_day = datetime(2026, 10, 24, 23, 55, tzinfo=timezone.utc)
+    new_day = previous_day + timedelta(minutes=10)
+    builder._forecast_cache_loaded = True
+    builder._forecast_cache = {
+        "date": previous_day.date().isoformat(),
+        "source_entity_id": "sensor.solar",
+        "step_minutes": builder.step_minutes,
+        "days": builder.days,
+        "algorithm_version": 5,
+        "delta_curve": [{"delta_kwh": 0.2}],
+    }
+    builder._build_forecast_delta_cache = Mock(return_value=[
+        {"delta_kwh": 0.0}, {"delta_kwh": 0.3}
+    ])
+    new_start = new_day.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    cache = await builder._async_ensure_forecast_cache(
+        "sensor.solar", new_day, new_start,
+        new_start + timedelta(days=1), [], []
+    )
+
+    assert cache["date"] == "2026-10-25"
+    assert cache["generated_at"] == new_day.isoformat()
+    assert cache["delta_curve"][1]["delta_kwh"] == 0.3
+    builder._build_forecast_delta_cache.assert_called_once()
+    builder._forecast_store.async_save.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_midnight_rollover_does_not_preserve_yesterday_cache_without_valid_history(builder):
+    """When a new day has no usable samples, stale forecast energy is not persisted."""
+    previous_day = datetime(2026, 10, 24, 23, 55, tzinfo=timezone.utc)
+    current_day = previous_day + timedelta(minutes=10)
+    start = current_day.replace(hour=0, minute=0, second=0, microsecond=0)
+    builder._forecast_cache_loaded = True
+    builder._forecast_cache = {
+        "date": previous_day.date().isoformat(),
+        "source_entity_id": "sensor.solar",
+        "step_minutes": builder.step_minutes,
+        "days": builder.days,
+        "algorithm_version": 5,
+        "delta_curve": [{"delta_kwh": 3.0}],
+    }
+    builder._build_forecast_delta_cache = Mock(return_value=[
+        {"delta_kwh": 0.0}, {"delta_kwh": 0.0}
+    ])
+
+    result = await builder._async_ensure_forecast_cache(
+        "sensor.solar", current_day, start, start + timedelta(days=1), [], []
+    )
+
+    assert result is None
+    assert builder._forecast_cache is None
+    builder._forecast_store.async_save.assert_not_awaited()
