@@ -24,14 +24,13 @@ class FusionSolarInverterMixin:
 
     def _discover_inverter_dns_from_flow_nodes(self, flow_data_nodes: list[dict[str, Any]]) -> None:
         """Discover all inverter DNs from installation flow nodes."""
-        if self.inverters:
-            return
-
         for node in flow_data_nodes:
             if node.get("name") != "neteco.pvms.devTypeLangKey.inverter":
                 continue
 
             dev_ids = node.get("devIds") or []
+            if not isinstance(dev_ids, list):
+                dev_ids = []
             if not dev_ids and node.get("devDn"):
                 dev_ids = [node["devDn"]]
 
@@ -43,8 +42,10 @@ class FusionSolarInverterMixin:
                 continue
 
             for dn in dev_ids:
-                if dn and dn not in self.inverters:
-                    self.inverters[dn] = InverterInfo(dn=dn)
+                if isinstance(dn, (str, int)) and str(dn).strip():
+                    dn = str(dn)
+                    if dn not in self.inverters:
+                        self.inverters[dn] = InverterInfo(dn=dn)
 
         if self.inverters:
             _LOGGER.info("Discovered inverter DNs: %s", list(self.inverters))
