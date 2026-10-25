@@ -153,6 +153,17 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             "Auto-selected FusionSolar station DN and stored it in the config entry"
         )
         
+    async def _fetch_devices_with_connection_retry(self) -> list[Device]:
+        """Retry a transient connection failure once without resetting the session."""
+        try:
+            return await self.hass.async_add_executor_job(self.api.get_devices)
+        except APIConnectionError as err:
+            _LOGGER.warning(
+                "Transient FusionSolar device fetch failure; retrying once: %s",
+                err,
+            )
+            return await self.hass.async_add_executor_job(self.api.get_devices)
+
     async def async_update_data(self) -> FusionSolarAPIData:
         """Fetch data from API endpoint."""
         started_at = time.monotonic()
@@ -163,7 +174,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 await self.hass.async_add_executor_job(self.api.login)
     
             await self._ensure_station_dn()
-            devices = await self.hass.async_add_executor_job(self.api.get_devices)
+            devices = await self._fetch_devices_with_connection_retry()
     
         except APIAuthCaptchaError as err:
             raise ConfigEntryAuthFailed(
