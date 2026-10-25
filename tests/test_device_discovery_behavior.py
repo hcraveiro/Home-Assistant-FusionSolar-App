@@ -132,6 +132,34 @@ def test_inverter_dn_discovery(modules, nodes, expected):
     assert api.inverter_dn == expected
 
 
+@pytest.mark.parametrize(("nodes", "expected"), [
+    ([], []),
+    ([{"name": "other", "devIds": ["ignored"]}], []),
+    ([{"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": ["primary", "secondary"]}],
+     ["primary", "secondary"]),
+    ([{"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": ["primary"]},
+      {"name": "neteco.pvms.devTypeLangKey.inverter", "devDn": "secondary"},
+      {"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": ["primary", None, "  "]}],
+     ["primary", "secondary"]),
+])
+def test_extract_multiple_inverter_dns(modules, nodes, expected):
+    api = modules[2].FusionSolarInverterMixin()
+    assert api._extract_inverter_dns_from_flow_nodes(nodes) == expected
+
+
+def test_multi_inverter_discovery_preserves_existing_primary(modules):
+    api = modules[2].FusionSolarInverterMixin()
+    api.inverter_dn = None
+    nodes = [{"name": "neteco.pvms.devTypeLangKey.inverter",
+              "devIds": ["primary", "secondary"]}]
+    api._discover_inverter_dn_from_flow_nodes(nodes)
+    assert api.inverter_dn == "primary"
+    api._discover_inverter_dn_from_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": ["another"]}
+    ])
+    assert api.inverter_dn == "primary"
+
+
 def test_inverter_pv_placeholders_trimmed(modules):
     api = modules[2].FusionSolarInverterMixin()
     pairs = {
