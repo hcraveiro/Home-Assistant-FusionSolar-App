@@ -458,3 +458,47 @@ def test_grid_direction_requires_complete_power_inputs(modules):
     }], output)
     assert output["grid_injection_power"] is None
     assert output["grid_consumption_power"] is None
+
+
+def test_grid_inference_confirmed_no_battery(modules):
+    """Known zero installed capacity permits a battery-free energy balance."""
+    api = make_installation(modules)
+    api.battery_capacity = 0
+    api.battery_dn = None
+    output = api._build_base_output()
+    output.update(panel_production_power=5.0, house_load_power=2.0)
+    api._parse_installation_flow_links([{
+        "description": {"label": "neteco.pvms.energy.flow.buy.power", "value": "3 kW"}
+    }], output)
+    assert output["grid_injection_power"] == 3.0
+    assert output["grid_consumption_power"] == 0.0
+    assert output["battery_consumption_power"] == 0.0
+
+
+def test_previously_discovered_battery_requires_telemetry(modules):
+    """A missing battery flow node cannot erase a known battery device."""
+    api = make_installation(modules)
+    api.battery_dn = "previously-discovered-battery"
+    api.battery_capacity = 0
+    output = api._build_base_output()
+    output.update(panel_production_power=5.0, house_load_power=2.0)
+    api._parse_installation_flow_links([{
+        "description": {"label": "neteco.pvms.energy.flow.buy.power", "value": "3 kW"}
+    }], output)
+    assert output["grid_injection_power"] is None
+    assert output["grid_consumption_power"] is None
+    assert output["battery_consumption_power"] is None
+
+
+def test_unknown_battery_presence_does_not_invent_zero(modules):
+    """No battery DN alone does not prove an installation has no battery."""
+    api = make_installation(modules)
+    api.battery_dn = None
+    api.battery_capacity = None
+    output = api._build_base_output()
+    output.update(panel_production_power=5.0, house_load_power=2.0)
+    api._parse_installation_flow_links([{
+        "description": {"label": "neteco.pvms.energy.flow.buy.power", "value": "3 kW"}
+    }], output)
+    assert output["grid_injection_power"] is None
+    assert output["grid_consumption_power"] is None
