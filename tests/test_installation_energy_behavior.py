@@ -220,7 +220,7 @@ def test_installation_entities_created_from_output(modules):
     api = make_installation(modules)
     api.get_device_unique_id = lambda device_id, kind: "unique_" + device_id
     api.get_device_name = lambda device_id: device_id
-    api.get_device_value = lambda device_id, kind, output: output[device_id.lower().replace(" ", "_")]
+    api.get_device_value = lambda device_id, kind, output: output.get(device_id.lower().replace(" ", "_"), 0)
     devices = api._build_installation_devices(api._build_base_output())
     assert devices
     assert all(device.device_unique_id.startswith("unique_") for device in devices)
