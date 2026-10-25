@@ -92,8 +92,8 @@ async def _async_migrate_inverter_unique_ids(
     Before multi-inverter support, inverter entities were keyed on the station
     only (``…_<station>_inverter_<signal>``). They now carry the inverter DN
     (``…_<station>_inv_<dn>_inverter_<signal>``). Existing entities belong to
-    the first-discovered inverter, which is the one the integration exposed
-    until now. The rewrite is prefix-anchored and therefore idempotent.
+    its registered Home Assistant device. Ambiguous multi-inverter identities
+    are left untouched to protect dashboards and history.
     """
     api = coordinator.api
     inverter_dns = list(getattr(api, "inverters", {}))
@@ -148,15 +148,47 @@ async def _async_migrate_inverter_unique_ids(
             )
             return None
 
+        registry = er.async_get(hass)
+    devices = dr.async_get(hass)
+    valid_dns = {api.sanitize_id_segment(dn): dn for dn in inverter_dns}
+
+    @callback
+    def _migrate(entity_entry: er.RegistryEntry) -> dict[str, str] | None:
+        if not entity_entry.unique_id.startswith(old_prefix):
+            return None
+
+        # Match the existing HA device to the inverter it represented before
+        # multi-inverter discovery. The first flow node is not stable.
+        matched_dn = None
+        if entity_entry.device_id:
+            device = devices.async_get(entity_entry.device_id)
+            if device:
+                for identifier_domain, identifier in device.identifiers:
+                    if identifier_domain != DOMAIN:
+                        continue
+                    for safe_dn, original_dn in valid_dns.items():
+                        if identifier.endswith(f"_inverter_{original_dn}"):
+                            matched_dn = original_dn
+                            break
+                    if matched_dn:
+                        break
+
+        if matched_dn is None and len(inverter_dns) == 1:
+            matched_dn = inverter_dns[0]
+
+        if matched_dn is None:
+            _LOGGER.warning(
+                "Skipping ambiguous inverter migration for %s: no matching "
+                "registered device DN; preserved original unique ID",
+                entity_entry.entity_id,
+            )
+            return None
+
         new_prefix = (
             f"{DOMAIN}-{api.controller_name}{station_suffix}"
-            f"_inv_{api.sanitize_id_segment(existing_dn)}_inverter_"
+            f"_inv_{api.sanitize_id_segment(matched_dn)}_inverter_"
         )
         new_unique_id = new_prefix + entity_entry.unique_id[len(old_prefix):]
-
-        # Renaming onto an existing unique ID raises and would abort the rest
-        # of the migration, so leave such entries alone. This only happens if
-        # a migrated entity already exists, e.g. after a downgrade/upgrade.
         if registry.async_get_entity_id(
             entity_entry.domain, entity_entry.platform, new_unique_id
         ):
