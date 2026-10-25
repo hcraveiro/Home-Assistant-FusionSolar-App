@@ -63,12 +63,15 @@ class ConnectionRetryTests(unittest.TestCase):
                 raise result
             return result
 
-        async def run_in_executor(func):
-            return func()
+        async def run_in_executor(func, *args):
+            if func is __import__('time').sleep:
+                return None
+            return func(*args)
 
         coordinator = types.SimpleNamespace(
             api=types.SimpleNamespace(get_devices=get_devices),
             hass=types.SimpleNamespace(async_add_executor_job=run_in_executor),
+            _call_api_serialized=lambda method: method(),
         )
         return coordinator, calls
 
