@@ -21,7 +21,7 @@ def solcast():
     h=add("homeassistant");h.__path__=[]
     add("homeassistant.core",HomeAssistant=object)
     util=add("homeassistant.util");util.__path__=[]
-    add("homeassistant.util.dt",now=lambda:NOW,parse_datetime=lambda s:datetime.fromisoformat(s.replace("Z","+00:00")),as_local=lambda dt:dt)
+    add("homeassistant.util.dt",now=lambda:NOW,parse_datetime=lambda s:None if s=="invalid" else datetime.fromisoformat(s.replace("Z","+00:00")),as_local=lambda dt:dt)
     parent=add(PREFIX);parent.__path__=[str(ROOT)]
     api=add(PREFIX+".api",Device=object);api.__path__=[str(ROOT/"api")]
     for sub,path in (("const",ROOT/"const.py"),("forecast.models",ROOT/"forecast"/"models.py"),("forecast.solcast",ROOT/"forecast"/"solcast.py")):
