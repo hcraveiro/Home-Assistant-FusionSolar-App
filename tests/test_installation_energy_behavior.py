@@ -51,6 +51,7 @@ def make_installation(modules):
     instance.session = Mock()
     instance.session.cookies.get_dict.return_value = {}
     instance.battery_dn = None
+    instance.inverters = {"inverter-1": object()}
     return instance
 
 
@@ -230,7 +231,7 @@ def test_installation_entities_created_from_output(modules):
 def test_complete_device_orchestration_preserves_order(modules):
     api = make_installation(modules)
     api._get_installation_flow_data = Mock(return_value=([], []))
-    api._discover_inverter_dn_from_flow_nodes = Mock()
+    api._discover_inverter_dns_from_flow_nodes = Mock()
     api._ensure_inverter_metadata_loaded = Mock()
     api._enrich_installation_output = Mock()
     api._build_installation_devices = Mock(return_value=["plant"])
@@ -238,8 +239,8 @@ def test_complete_device_orchestration_preserves_order(modules):
     api._build_battery_devices = Mock(return_value=["battery"])
     api._build_power_sensor_devices = Mock(return_value=["meter"])
     assert api.get_devices() == ["plant", "inverter", "battery", "meter"]
-    api._discover_inverter_dn_from_flow_nodes.assert_called_once_with([])
-    api._ensure_inverter_metadata_loaded.assert_called_once()
+    api._discover_inverter_dns_from_flow_nodes.assert_called_once_with([])
+    api._ensure_inverter_metadata_loaded.assert_called_once_with("inverter-1")
 
 
 def test_week_energy_ignores_missing_markers(modules):
