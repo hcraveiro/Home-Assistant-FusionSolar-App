@@ -254,3 +254,75 @@ def test_meter_config_metadata_parser(modules):
     api.get_power_sensor_config_info()
     assert api.power_sensor_name == "Meter"
     assert api.power_sensor_usage == "Export+import meter"
+
+
+def test_inverter_realtime_pv_kpi_and_power(modules):
+    api = make_api_for_fetch(modules[2], "inverter_dn", "inverter-1")
+    api._request_json.side_effect = [
+        (None, {"success": True, "data": [{"signals": [{"id": 10001, "value": "running"}]}]}),
+        (None, {"success": True, "data": {"signals": {
+            "11001": {"value": "400 V", "latestTime": 100},
+            "11002": {"value": "5 A", "latestTime": 100},
+            "11004": {"value": "0", "latestTime": 50},
+            "11005": {"value": "0", "latestTime": 50},
+            "11007": {"value": "0", "latestTime": 50},
+            "11008": {"value": "0", "latestTime": 50},
+        }}}),
+    ]
+    result = api.get_inverter_realtime_data()
+    assert 11001 in result
+    assert 11002 in result
+
+
+def test_inverter_realtime_kpi_failure_keeps_initial_values(modules):
+    api = make_api_for_fetch(modules[2], "inverter_dn", "inverter-1")
+    api._request_json.side_effect = [
+        (None, {"success": True, "data": [{"signals": [{"id": 11001, "value": "400 V"}]}]}),
+        RuntimeError("KPI offline"),
+    ]
+    assert isinstance(api.get_inverter_realtime_data(), dict)
+
+
+def test_meter_type_name_and_entities(modules):
+    api = make_api_for_fetch(modules[0], "power_sensor_dn", "meter-1")
+    api.power_sensor_model = None
+    api._request_json.return_value = (None, {"data": "Smart meter"})
+    assert api.get_power_sensor_type_name() == "Smart meter"
+    api.get_power_sensor_config_info = Mock(side_effect=RuntimeError("config offline"))
+    api.get_power_sensor_type_name = Mock(side_effect=RuntimeError("type offline"))
+    api.get_power_sensor_realtime_data = Mock(return_value={10004: "-1 kW", 10001: "online"})
+    api.power_sensor_usage = "Consumption meter"
+    api._create_dynamic_device = lambda identifier, kind, value, icon: (
+        type("FakeDevice", (), {"device_id": identifier})() if value not in (None, "", "--") else None
+    )
+    names = [device.device_id for device in api.get_power_sensor_devices()]
+    assert "Power Sensor Direction" in names
+    assert "Power Sensor Usage" in names
+
+
+def test_battery_device_assembly_with_partial_module_failure(modules):
+    api = make_api_for_fetch(modules[1], "battery_dn", "battery-1")
+    api.get_battery_type = Mock(return_value={"data": {"module1DevType": "LUNA", "module2DevType": "LUNA"}})
+    api.get_battery_realtime_data = Mock(return_value={10003: "running", 10007: "95"})
+    api.get_battery_module_data = Mock(side_effect=lambda n: [
+        {"name": "[Module 1] [DC/DC] Bus current", "realValue": "2 A"}] if n == 1 else [])
+    api.battery_serial_number = None
+    api.battery_software_version = None
+    api.battery_model = "LUNA"
+    api._create_dynamic_device = lambda identifier, kind, value, icon: (
+        type("FakeDevice", (), {"device_id": identifier})() if value is not None else None
+    )
+    devices = api.get_battery_devices()
+    names = [device.device_id for device in devices]
+    assert "Battery SOH" in names
+    assert "Battery Operating Status" in names
+    assert "Battery Module 1 Bus Current" in names
+
+
+def test_battery_device_assembly_handles_fetch_errors(modules):
+    api = make_api_for_fetch(modules[1], "battery_dn", "battery-1")
+    api.get_battery_type = Mock(side_effect=RuntimeError("offline"))
+    api.get_battery_realtime_data = Mock(side_effect=RuntimeError("offline"))
+    api.get_battery_module_data = Mock(side_effect=RuntimeError("offline"))
+    api._create_dynamic_device = Mock(return_value=None)
+    assert api.get_battery_devices() == []
