@@ -230,3 +230,91 @@ def test_no_forecast_future_returns_empty_chart(sensor_module):
     payload = {"curve": [{"source": "actual", "time": "2026-10-25T10:00:00+00:00", "value": 5}]}
     assert sensor_module._build_forecast_power_chart(payload) == []
     assert sensor_module._build_forecast_cumulative_chart(payload) == []
+
+
+@pytest.mark.asyncio
+async def test_late_sensor_discovery_adds_only_new_supported_entities(
+    coordinator, sensor_module
+):
+    """A sensor appearing after setup must be added without duplicating old entities."""
+    from unittest.mock import Mock
+
+    hass = types.SimpleNamespace(
+        data={sensor_module.DOMAIN: {"entry-1": types.SimpleNamespace(coordinator=coordinator)}}
+    )
+    entry = Mock()
+    entry.entry_id = "entry-1"
+    added = []
+    add_entities = lambda items: added.append(items)
+    coordinator.data.devices = [device(sensor_module, "First Meter")]
+    coordinator.async_add_listener = Mock()
+
+    await sensor_module.async_setup_entry(hass, entry, add_entities)
+
+    assert len(added) == 2
+    assert len(added[0]) == 1
+    assert len(added[1]) == 2
+    assert isinstance(added[0][0], sensor_module.FusionSolarSensor)
+    registry_id = coordinator._plant_device_registry_id
+    assert registry_id is not None
+
+    listener = coordinator.async_add_listener.call_args.args[0]
+    coordinator.data.devices = [
+        device(sensor_module, "First Meter"),
+        device(sensor_module, "Second Meter"),
+    ]
+    listener()
+
+    assert len(added) == 3
+    assert [sensor.device_id for sensor in added[-1]] == ["Second Meter"]
+    listener()
+    assert len(added) == 3
+    entry.async_on_unload.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_sensor_discovery_ignores_unsupported_device_types(
+    coordinator, sensor_module
+):
+    from unittest.mock import Mock
+
+    hass = types.SimpleNamespace(
+        data={sensor_module.DOMAIN: {"entry-2": types.SimpleNamespace(coordinator=coordinator)}}
+    )
+    entry = Mock(entry_id="entry-2")
+    added = []
+    coordinator.data.devices = [
+        device(sensor_module, "Invalid", kind="unsupported_device"),
+        device(sensor_module, "Valid"),
+    ]
+    coordinator.async_add_listener = Mock()
+
+    await sensor_module.async_setup_entry(hass, entry, lambda items: added.append(items))
+
+    assert len(added[0]) == 1
+    assert added[0][0].device_id == "Valid"
+
+
+@pytest.mark.asyncio
+async def test_late_device_with_same_name_but_different_type_is_distinct(
+    coordinator, sensor_module
+):
+    from unittest.mock import Mock
+
+    hass = types.SimpleNamespace(
+        data={sensor_module.DOMAIN: {"entry-3": types.SimpleNamespace(coordinator=coordinator)}}
+    )
+    entry = Mock(entry_id="entry-3")
+    initial = device(sensor_module, "Energy Reading", kind=sensor_module.DeviceType.SENSOR_KW)
+    coordinator.data.devices = [initial]
+    coordinator.async_add_listener = Mock()
+    added = []
+
+    await sensor_module.async_setup_entry(hass, entry, lambda items: added.append(items))
+    listener = coordinator.async_add_listener.call_args.args[0]
+    coordinator.data.devices = [initial, device(sensor_module, "Energy Reading",
+        kind=sensor_module.DeviceType.SENSOR_KWH)]
+    listener()
+
+    assert len(added) == 3
+    assert added[-1][0]._device_type == sensor_module.DeviceType.SENSOR_KWH
