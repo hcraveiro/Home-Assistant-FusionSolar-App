@@ -104,13 +104,21 @@ def _build_device_info(
 
     if device is not None:
         if device.device_id.startswith(INVERTER_DEVICE_SENSOR_PREFIX):
-            inverter_dn = getattr(coordinator.api, "inverter_dn", None) or "unknown_inverter"
-            inverter_model = getattr(coordinator.api, "inverter_model", None) or "FusionSolar Inverter"
-            inverter_software_version = getattr(coordinator.api, "inverter_software_version", None) or "1.0"
-            inverter_serial_number = getattr(coordinator.api, "inverter_serial_number", None)
+            inverter_dn = device.dn or "unknown_inverter"
+            info = getattr(coordinator.api, "inverters", {}).get(inverter_dn)
+
+            inverter_name = getattr(info, "name", None)
+            inverter_model = getattr(info, "model", None) or "FusionSolar Inverter"
+            inverter_software_version = getattr(info, "software_version", None) or "1.0"
+            inverter_serial_number = getattr(info, "serial_number", None)
+
+            if not inverter_name:
+                inverter_name = f"Fusion Solar Inverter ({inverter_serial_number or inverter_dn})"
+
+            identifier_dn = getattr(info, "canonical_dn", None) or inverter_dn
 
             return DeviceInfo(
-                name="Fusion Solar Inverter",
+                name=inverter_name,
                 manufacturer="Huawei",
                 model=inverter_model,
                 sw_version=inverter_software_version,
@@ -118,7 +126,7 @@ def _build_device_info(
                 identifiers={
                     (
                         DOMAIN,
-                        f"{controller_name}_{station_dn}_inverter_{inverter_dn}",
+                        f"{controller_name}_{station_dn}_inverter_{identifier_dn}",
                     )
                 },
                 via_device_id=parent_device_id,
@@ -520,9 +528,8 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Update sensor with latest data from coordinator."""
-        updated_device = self.coordinator.get_device_by_id(
-            self._device_type,
-            self.device_id,
+        updated_device = self.coordinator.get_device_by_unique_id(
+            self._device_unique_id,
         )
 
         if updated_device is not None:
