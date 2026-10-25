@@ -136,7 +136,8 @@ def test_installation_node_power_sign(modules, power, expected_charge, expected_
 def test_grid_flow_direction(modules, load, expected_injection, expected_consumption):
     api = make_installation(modules)
     output = api._build_base_output()
-    output.update(panel_production_power=5.0, house_load_power=load)
+    output.update(panel_production_power=5.0, house_load_power=load,
+                  battery_consumption_power=0.0, battery_injection_power=0.0)
     api._parse_installation_flow_links([{
         "description": {"label": "neteco.pvms.energy.flow.buy.power", "value": "3 kW"}
     }], output)
