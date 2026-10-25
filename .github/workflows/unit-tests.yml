@@ -23,8 +23,26 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-test.txt
+
       - name: Compile integration and tests
         run: python -m compileall -q custom_components/fusion_solar_app tests
 
-      - name: Run regression tests
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Run complete test suite with coverage
+        run: >-
+          python -m pytest tests -v
+          --cov=custom_components/fusion_solar_app
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --junitxml=test-results.xml
+
+      - name: Upload coverage and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-and-coverage-results
+          path: |
+            coverage.xml
+            test-results.xml
+          if-no-files-found: ignore
