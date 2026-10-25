@@ -7,9 +7,9 @@ python -m pip install -r requirements-test.txt
 python -m pytest tests -v --cov=custom_components/fusion_solar_app --cov-report=term-missing
 ```
 
-The CI runs all `tests/test_*.py` discovered by pytest, including `unittest` tests, and fails on any failure, collection error, zero collected tests, or overall coverage below **76%**.
+The CI runs all `tests/test_*.py` discovered by pytest, including `unittest` tests, and fails on any failure, collection error, zero collected tests, or overall coverage below **78%**.
 
-**Initial measurement:** 23 passing tests and approximately **3%** overall integration line coverage at the initial PR #60 baseline; improved to **6.65%** with the behavioral tests in PR #61 on Python 3.13. The 76% minimum is a regression guard, **not** an adequate final production-quality target. It should be increased with additional behavioral tests, especially authentication, CAPTCHA, session renewal, installation discovery, sensor state and config flows. Most existing tests compile selected functions from AST nodes rather than importing and exercising the running integration; consequently coverage is low despite green tests.
+**Initial measurement:** 23 passing tests and approximately **3%** overall integration line coverage at the initial PR #60 baseline; improved to **6.65%** with the behavioral tests in PR #61 on Python 3.13. The 78% minimum is a regression guard, **not** an adequate final production-quality target. It should be increased with additional behavioral tests, especially authentication, CAPTCHA, session renewal, installation discovery, sensor state and config flows. Most existing tests compile selected functions from AST nodes rather than importing and exercising the running integration; consequently coverage is low despite green tests.
 
 `coverage.xml` and `test-results.xml` are uploaded by the workflow to support further reporting. GitHub branch protection must separately require the **PV discovery regression tests** check on `main` if merging should be blocked by failing CI.
 
@@ -24,3 +24,6 @@ The CI runs all `tests/test_*.py` discovered by pytest, including `unittest` tes
 **PR #74 milestone:** 278 passing tests, 71.47% line coverage. Production Home Assistant entry lifecycle now has 100% line coverage (setup, session persistence cleanup, initial failure handling, options reload, unload success/failure). No runtime changes.\n
 
 **PR #75 milestone:** 299 tests passing with 76.95% integration line coverage. Real Config Flow functions are exercised with mocked Home Assistant/HTTP boundaries: login errors, CAPTCHA, station selection, session update/reload, reconfiguration guards, and Solcast/native options. Config Flow line coverage reaches 67%. No runtime changes.
+
+
+**PR #76 milestone:** 314 passed, 1 xfailed, 78.81% line coverage. Added production-flow CAPTCHA and reauth/reconfigure tests, dynamic sensor discovery/deduplication tests, and midnight native forecast-cache rollover tests. Expected failure tracks issue #78: station-list failure after successful CAPTCHA is mislabeled invalid CAPTCHA. No runtime changes.
