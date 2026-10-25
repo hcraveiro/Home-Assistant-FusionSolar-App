@@ -380,3 +380,37 @@ def test_upstream_lifetime_spike_is_not_silently_clamped(modules):
         for _ in upstream_values
     ]
     assert actual == upstream_values
+
+
+def test_missing_isitepower_soc_is_not_reported_as_zero(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    assert output["battery_percentage"] is None
+    api._parse_installation_flow_nodes([{
+        "name": "neteco.pvms.devTypeLangKey.energy_store",
+        "description": {"value": "--"},
+        "deviceTips": {"SOC": "--", "BATTERY_POWER": "--"},
+    }], output)
+    assert output["battery_percentage"] is None
+
+
+def test_isitepower_null_battery_tips_remain_unknown(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([{
+        "name": "neteco.pvms.devTypeLangKey.energy_store",
+        "description": {"value": "--"},
+        "deviceTips": None,
+    }], output)
+    assert output["battery_percentage"] is None
+
+
+def test_valid_battery_soc_zero_is_retained(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([{
+        "name": "neteco.pvms.devTypeLangKey.energy_store",
+        "description": {"value": "0 kW"},
+        "deviceTips": {"SOC": "0 %", "BATTERY_POWER": "0 kW"},
+    }], output)
+    assert output["battery_percentage"] == 0.0
