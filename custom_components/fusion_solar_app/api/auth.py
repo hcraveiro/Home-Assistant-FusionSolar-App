@@ -449,34 +449,30 @@ class FusionSolarAuthMixin:
         if response.status_code != 200:
             return False
 
-        invalid_markers = (
-            "false",
-            "fail",
-            "failed",
-            "failure",
-            "incorrect",
-            "invalid",
-            "error",
-            "411",
-        )
+        # Accept only explicit success responses; unknown responses are not proof
+        # that a CAPTCHA was validated.
+        try:
+            result = response.json()
+        except (ValueError, TypeError):
+            result = normalized_response
 
-        valid_markers = (
-            "true",
-            "success",
-            "successful",
-            "correct",
-            "valid",
-            "ok",
-            "1",
-        )
+        if isinstance(result, bool):
+            return result
 
-        if any(marker in normalized_response for marker in invalid_markers):
-            return False
+        if isinstance(result, dict):
+            if result.get("success") is True:
+                return True
+            if result.get("success") is False:
+                return False
+            result = result.get("data")
 
-        if any(marker in normalized_response for marker in valid_markers):
-            return True
+        if isinstance(result, str):
+            return result.strip().lower() in ("true", "success", "ok", "1")
 
-        return True
+        if isinstance(result, int):
+            return result == 1
+
+        return False
 
     def restore_session(self, dp_session: str, data_host: str) -> None:
         """Restore an authenticated session without requiring login.
