@@ -296,3 +296,86 @@ def test_solcast_attribute_schema(config, hass, samples, expected):
     flow.hass = hass
     hass.states.get.return_value = types.SimpleNamespace(attributes={"detailedHourly": samples})
     assert flow._is_valid_solcast_forecast_entity("sensor.solcast") == expected
+
+
+@pytest.mark.asyncio
+async def test_reauth_captcha_preserves_existing_station_and_updates_entry(config, hass, credentials, api, monkeypatch):
+    entry = Mock()
+    entry.entry_id = "existing-entry"
+    entry.data = dict(credentials, station_dn="original-station")
+    hass.config_entries.async_get_entry.return_value = entry
+    api.login.side_effect = [config.APIAuthCaptchaError("captcha"), None]
+    api.captcha_img = "data:image/png;base64,example"
+    monkeypatch.setattr(config, "FusionSolarAPI", Mock(return_value=api))
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow.context = {"entry_id": "existing-entry", "source": "reauth"}
+    first = await flow.async_step_reauth({})
+    assert first["step_id"] == "reauth_confirm"
+    challenge = await flow.async_step_reauth_confirm(credentials)
+    assert challenge["step_id"] == "captcha"
+    assert flow._captcha_credentials[config.CONF_STATION_DN] == "original-station"
+    result = await flow.async_step_captcha({config.CAPTCHA_INPUT: " 1234 "})
+    assert result["reason"] == "reauth_successful"
+    assert api.captcha_input == "1234"
+    saved = hass.config_entries.async_update_entry.call_args.kwargs["data"]
+    assert saved[config.CONF_STATION_DN] == "original-station"
+    assert saved["dp_session"] == "dummy-session"
+    hass.config_entries.async_reload.assert_awaited_once_with("existing-entry")
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_captcha_uses_correct_abort_reason(config, hass, credentials, api, monkeypatch):
+    entry = Mock()
+    entry.entry_id = "existing-entry"
+    entry.data = dict(credentials, station_dn="plant-original")
+    hass.config_entries.async_get_entry.return_value = entry
+    api.login.side_effect = [config.APIAuthCaptchaError("captcha"), None]
+    monkeypatch.setattr(config, "FusionSolarAPI", Mock(return_value=api))
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow.context = {"entry_id": "existing-entry", "source": "reconfigure"}
+    challenge = await flow.async_step_reconfigure(credentials)
+    assert challenge["step_id"] == "captcha"
+    final = await flow.async_step_captcha({config.CAPTCHA_INPUT: "9876"})
+    assert final["reason"] == "reconfigure_successful"
+    assert hass.config_entries.async_update_entry.call_args.kwargs["data"][config.CONF_STATION_DN] == "plant-original"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "code"), [
+    ("APIAuthCaptchaError", "invalid_captcha"),
+    ("APIAuthError", "invalid_auth"),
+    ("APIConnectionError", "cannot_connect"),
+])
+async def test_captcha_submit_errors_remain_on_captcha_screen(config, hass, credentials, api, error, code):
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow._api = api
+    flow._captcha_credentials = credentials
+    api.login.side_effect = getattr(config, error)("failure")
+    result = await flow.async_step_captcha({config.CAPTCHA_INPUT: "0000"})
+    assert result["step_id"] == "captcha"
+    assert result["errors"]["base"] == code
+    hass.config_entries.async_update_entry.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_captcha_success_with_station_fetch_failure_does_not_create_entry(config, hass, credentials, api):
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow._api = api
+    flow._captcha_credentials = credentials
+    api.get_station_list.side_effect = RuntimeError("unreachable")
+    result = await flow.async_step_captcha({config.CAPTCHA_INPUT: "1234"})
+    assert result["step_id"] == "captcha"
+    assert result["errors"]["base"] == "cannot_connect"
+
+
+@pytest.mark.asyncio
+async def test_captcha_context_missing_returns_user_form(config, hass):
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    result = await flow.async_step_captcha({config.CAPTCHA_INPUT: "1234"})
+    assert result["step_id"] == "user"
+    assert result["errors"]["base"] == "unknown"
