@@ -64,7 +64,7 @@ def _entity(entity_id, device_id):
 def _device(dn, entry_id="entry-1"):
     return SimpleNamespace(
         identifiers={("fusion_solar_app", f"fusion_plant-1_inverter_{dn}")},
-        config_entries={entry_id},
+        config_entry_id=entry_id,
     )
 
 
