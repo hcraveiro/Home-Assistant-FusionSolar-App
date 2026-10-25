@@ -54,18 +54,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             data={k: v for k, v in config_entry.data.items() if k not in ("dp_session", "data_host")},
         )
 
-    # BETA TEST ONLY: arm a single synthetic transport failure on an explicit event.
-    # No failure is injected unless the event is fired manually.
-    def _arm_connection_failure_test(event) -> None:
-        if event.data.get("entry_id") != config_entry.entry_id:
-            return
-        coordinator.arm_test_connection_failure()
-
-    unsubscribe_test_event = hass.bus.async_listen(
-        "fusion_solar_app_test_connection_failure", _arm_connection_failure_test
-    )
-    config_entry.async_on_unload(unsubscribe_test_event)
-
     # Initialise a listener for config flow options changes.
     # See config_flow for defining an options setting that shows up as configure on the integration.
     cancel_update_listener = config_entry.add_update_listener(_async_update_listener)
