@@ -13,6 +13,7 @@ from homeassistant.const import (
     CONF_USERNAME,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -172,6 +173,25 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             await self.hass.async_add_executor_job(time.sleep, 1)
             return await self.hass.async_add_executor_job(self._call_api_serialized, self.api.get_devices)
 
+    def _restore_known_battery_dn(self) -> None:
+        """Recover a prior battery identity from this entry's HA device registry."""
+        if self.api.battery_dn or not self.api.station:
+            return
+        prefix = f"{DOMAIN}_{self.api.station}_battery_"
+        registry = dr.async_get(self.hass)
+        for device in registry.devices.values():
+            if self.config_entry.entry_id not in device.config_entries:
+                continue
+            for identifier_domain, identifier in device.identifiers:
+                if identifier_domain != DOMAIN or not identifier.startswith(prefix):
+                    continue
+                battery_dn = identifier[len(prefix):]
+                if not battery_dn or battery_dn == "unknown_battery":
+                    continue
+                self.api.battery_dn = battery_dn
+                _LOGGER.debug("Restored known battery DN from device registry")
+                return
+
     async def async_update_data(self) -> FusionSolarAPIData:
         """Fetch data from API endpoint."""
         started_at = time.monotonic()
@@ -182,6 +202,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 await self.hass.async_add_executor_job(self._call_api_serialized, self.api.login)
     
             await self._ensure_station_dn()
+            self._restore_known_battery_dn()
             devices = await self._fetch_devices_with_connection_retry()
     
         except APIAuthCaptchaError as err:
