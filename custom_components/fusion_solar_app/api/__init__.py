@@ -161,7 +161,7 @@ class FusionSolarAPI(
 
         value = output[output_key]
         if value is None or value == "None":
-            return default
+            return None
 
         if device_type == DeviceType.SENSOR_TEXT:
             return str(value)
