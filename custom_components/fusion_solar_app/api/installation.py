@@ -203,6 +203,15 @@ class FusionSolarInstallationMixin:
                 "battery_injection_power",
                 "house_load_power",
             )
+            # Previously discovered batteries are not absent merely because telemetry drops.
+            # Only a known zero capacity with no discovered DN establishes no battery.
+            confirmed_no_battery = (
+                getattr(self, "battery_dn", None) is None
+                and getattr(self, "battery_capacity", None) == 0
+            )
+            if confirmed_no_battery:
+                output["battery_consumption_power"] = 0.0
+                output["battery_injection_power"] = 0.0
             if grid_power is None or any(output.get(key) is None for key in keys):
                 continue
             balance = (
