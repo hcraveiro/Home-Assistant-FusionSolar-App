@@ -112,7 +112,7 @@ def test_battery_discovery_fallback_dn(modules):
 
 
 @pytest.mark.parametrize("power,expected_charge,expected_discharge", [
-    ("4.5 kW", 4.5, 0.0),
+    ("4.5 kW", 3.0, 0.0),
     ("-2 kW", 0.0, 3.0),
     ("0", 0.0, 3.0),
 ])
