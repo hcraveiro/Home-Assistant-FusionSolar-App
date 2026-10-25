@@ -42,7 +42,7 @@ def modules():
 @pytest.mark.parametrize(("raw", "expected"), [
     ("1", "Export+import meter"), ("2", "Production meter"),
     ("3", "Consumption meter"), ("unknown", "unknown"),
-    (" -- ", " -- "), ("--", None), (None, None),
+    (" -- ", "--"), ("--", None), (None, None),
 ])
 def test_meter_usage(modules, raw, expected):
     api = modules[0].FusionSolarPowerSensorMixin()
