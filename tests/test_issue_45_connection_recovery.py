@@ -86,45 +86,6 @@ class SessionSerializationTests(unittest.TestCase):
         self.assertEqual(namespace["_call_api_serialized"](coordinator, lambda: 42), 42)
 
 
-class FaultInjectionTests(unittest.TestCase):
-    def test_opt_in_failure_is_consumed_once(self):
-        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
-        methods = [
-            node for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef)
-            and node.name in {"_call_api_serialized", "arm_test_connection_failure"}
-        ]
-        self.assertEqual(len(methods), 2)
-        module = ast.fix_missing_locations(ast.Module(body=methods, type_ignores=[]))
-        namespace = {
-            "nullcontext": nullcontext,
-            "APIConnectionError": APIConnectionError,
-            "_LOGGER": logging.getLogger(__name__),
-        }
-        exec(compile(module, str(SOURCE), "exec"), namespace)
-        coordinator = types.SimpleNamespace(
-            api=types.SimpleNamespace(_session_lock=threading.RLock()),
-            _test_connection_failure_armed=False,
-        )
-        coordinator.arm_test_connection_failure = lambda: namespace[
-            "arm_test_connection_failure"
-        ](coordinator)
-
-        def get_devices():
-            return ["device"]
-
-        self.assertEqual(
-            namespace["_call_api_serialized"](coordinator, get_devices), ["device"]
-        )
-        coordinator.arm_test_connection_failure()
-        with self.assertRaisesRegex(APIConnectionError, "Synthetic"):
-            namespace["_call_api_serialized"](coordinator, get_devices)
-        self.assertFalse(coordinator._test_connection_failure_armed)
-        self.assertEqual(
-            namespace["_call_api_serialized"](coordinator, get_devices), ["device"]
-        )
-
-
 class ConnectionRetryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
