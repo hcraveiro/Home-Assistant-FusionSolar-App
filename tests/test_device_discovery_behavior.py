@@ -127,9 +127,9 @@ def test_battery_name_map_fallback_and_metadata(modules):
 ])
 def test_inverter_dn_discovery(modules, nodes, expected):
     api = modules[2].FusionSolarInverterMixin()
-    api.inverter_dn = None
-    api._discover_inverter_dn_from_flow_nodes(nodes)
-    assert api.inverter_dn == expected
+    api.inverters = {}
+    api._discover_inverter_dns_from_flow_nodes(nodes)
+    assert list(api.inverters) == ([expected] if expected else [])
 
 
 def test_inverter_pv_placeholders_trimmed(modules):
@@ -157,7 +157,10 @@ def make_api_for_fetch(module, dn_attribute, dn):
     api = (module.FusionSolarBatteryMixin() if dn_attribute == "battery_dn" else
            module.FusionSolarPowerSensorMixin() if dn_attribute == "power_sensor_dn" else
            module.FusionSolarInverterMixin())
-    setattr(api, dn_attribute, dn)
+    if dn_attribute == "inverter_dn":
+        api.inverters = {dn: module.InverterInfo(dn=dn)} if dn else {}
+    else:
+        setattr(api, dn_attribute, dn)
     api.data_host = "eu5.fusionsolar.huawei.com"
     api.csrf = "dummy"
     api.refresh_csrf = Mock()
@@ -173,7 +176,8 @@ def make_api_for_fetch(module, dn_attribute, dn):
 ])
 def test_device_endpoints_skip_missing_dn(modules, module_index, attribute, method):
     api = make_api_for_fetch(modules[module_index], attribute, None)
-    assert getattr(api, method)() == {}
+    args = (None,) if attribute == "inverter_dn" else ()
+    assert getattr(api, method)(*args) == {}
     api.refresh_csrf.assert_not_called()
 
 
@@ -224,10 +228,7 @@ def test_battery_optional_kpi_failure_does_not_discard_data(modules):
 
 def test_inverter_config_uses_real_metadata_parser(modules):
     api = make_api_for_fetch(modules[2], "inverter_dn", "inverter-1")
-    api.inverter_name = None
-    api.inverter_model = None
-    api.inverter_software_version = None
-    api.inverter_serial_number = None
+    info = api.inverters["inverter-1"]
     api._request_json.return_value = (None, {"data": {
         "signals": [
             {"signal": 33595393, "value": "Inverter"},
@@ -236,10 +237,10 @@ def test_inverter_config_uses_real_metadata_parser(modules):
             {"signal": 50012, "value": "redacted"},
         ]
     }})
-    api.get_inverter_config_info()
-    assert api.inverter_model == "SUN2000"
-    assert api.inverter_name == "Inverter"
-    assert api.inverter_serial_number == "redacted"
+    api.get_inverter_config_info("inverter-1")
+    assert info.model == "SUN2000"
+    assert info.name == "Inverter"
+    assert info.serial_number == "redacted"
 
 
 def test_meter_config_metadata_parser(modules):
@@ -269,7 +270,7 @@ def test_inverter_realtime_pv_kpi_and_power(modules):
             "11008": {"value": "0", "latestTime": 50},
         }}}),
     ]
-    result = api.get_inverter_realtime_data()
+    result = api.get_inverter_realtime_data("inverter-1")
     assert 11001 in result
     assert 11002 in result
 
@@ -280,7 +281,7 @@ def test_inverter_realtime_kpi_failure_keeps_initial_values(modules):
         (None, {"success": True, "data": [{"signals": [{"id": 11001, "value": "400 V"}]}]}),
         RuntimeError("KPI offline"),
     ]
-    assert isinstance(api.get_inverter_realtime_data(), dict)
+    assert isinstance(api.get_inverter_realtime_data("inverter-1"), dict)
 
 
 def test_meter_type_name_and_entities(modules):
@@ -332,7 +333,7 @@ def test_isitepower_empty_inverter_node_does_not_invent_dn(modules):
     """An iSitePower flow node ID is not a valid inverter DN."""
     inverter_module = modules[2]
     api = inverter_module.FusionSolarInverterMixin()
-    api.inverter_dn = None
+    api.inverters = {}
     node = {
         "mocId": 20822,
         "id": "1",
@@ -342,23 +343,17 @@ def test_isitepower_empty_inverter_node_does_not_invent_dn(modules):
         "devIds": [],
         "deviceTips": None,
     }
-    api._discover_inverter_dn_from_flow_nodes([node])
-    assert api.inverter_dn is None
+    api._discover_inverter_dns_from_flow_nodes([node])
+    assert api.inverters == {}
 
 
 def test_isitepower_missing_inverter_dn_skips_api_metadata(modules):
     """Missing discovery metadata must not trigger an invented device request."""
     inverter_module = modules[2]
     api = inverter_module.FusionSolarInverterMixin()
-    api.inverter_dn = None
-    api.inverter_name = None
-    api.inverter_model = None
-    api.inverter_software_version = None
-    api.inverter_serial_number = None
-    api.inverter_device_id = None
-    api.inverter_parent_dn = None
+    api.inverters = {}
     api.get_inverter_config_info = Mock(side_effect=AssertionError("Invalid DN request"))
     api.get_inverter_status_info = Mock(side_effect=AssertionError("Invalid DN request"))
-    api._ensure_inverter_metadata_loaded()
+    api._ensure_inverter_metadata_loaded("missing-dn")
     api.get_inverter_config_info.assert_not_called()
     api.get_inverter_status_info.assert_not_called()
