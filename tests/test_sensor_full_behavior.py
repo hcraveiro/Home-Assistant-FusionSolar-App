@@ -230,3 +230,54 @@ def test_no_forecast_future_returns_empty_chart(sensor_module):
     payload = {"curve": [{"source": "actual", "time": "2026-10-25T10:00:00+00:00", "value": 5}]}
     assert sensor_module._build_forecast_power_chart(payload) == []
     assert sensor_module._build_forecast_cumulative_chart(payload) == []
+
+
+@pytest.mark.asyncio
+async def test_sensors_discovered_after_initial_setup_without_duplicates(coordinator, sensor_module):
+    """PV inputs found after a nighttime start should become new entities exactly once."""
+    first = device(sensor_module, "Panel Production Power", state=0)
+    coordinator.data.devices = [first]
+    listeners = []
+    coordinator.async_add_listener = lambda callback: listeners.append(callback) or (lambda: None)
+    hass = types.SimpleNamespace(data={
+        sensor_module.DOMAIN: {"entry-1": types.SimpleNamespace(coordinator=coordinator)}
+    })
+    entry = types.SimpleNamespace(entry_id="entry-1", async_on_unload=lambda unsubscribe: None)
+    batches = []
+    await sensor_module.async_setup_entry(hass, entry, lambda new: batches.append(list(new)))
+    assert len(batches) == 2
+    assert [sensor.device_id for sensor in batches[0]] == ["Panel Production Power"]
+    assert len(batches[1]) == 2
+    assert len(listeners) == 1
+
+    # The inverter's PV string appears when production starts, without a reload.
+    pv = device(sensor_module, "Inverter PV1 Voltage", state=400)
+    coordinator.data.devices = [first, pv]
+    listeners[0]()
+    assert [sensor.device_id for sensor in batches[-1]] == ["Inverter PV1 Voltage"]
+    count = len(batches)
+    listeners[0]()
+    assert len(batches) == count
+
+
+@pytest.mark.asyncio
+async def test_dynamic_sensor_reappearing_with_same_identity_is_not_recreated(coordinator, sensor_module):
+    first = device(sensor_module, "Inverter PV1 Current", state=3)
+    coordinator.data.devices = []
+    listener = []
+    coordinator.async_add_listener = lambda callback: listener.append(callback) or (lambda: None)
+    hass = types.SimpleNamespace(data={
+        sensor_module.DOMAIN: {"entry-1": types.SimpleNamespace(coordinator=coordinator)}
+    })
+    entry = types.SimpleNamespace(entry_id="entry-1", async_on_unload=lambda unsubscribe: None)
+    batches = []
+    await sensor_module.async_setup_entry(hass, entry, lambda new: batches.append(list(new)))
+    assert len(batches) == 1  # Only forecast sensors at setup.
+    coordinator.data.devices = [first]
+    listener[0]()
+    assert len(batches) == 2
+    coordinator.data.devices = []
+    listener[0]()
+    coordinator.data.devices = [device(sensor_module, "Inverter PV1 Current", state=4)]
+    listener[0]()
+    assert len(batches) == 2
