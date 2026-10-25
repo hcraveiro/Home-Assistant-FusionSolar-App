@@ -41,8 +41,8 @@ class ViaDeviceMigrationTests(unittest.TestCase):
             if isinstance(node, ast.AsyncFunctionDef) and node.name == "async_setup_entry"
         )
         src = ast.get_source_segment(self.source, setup)
-        self.assertLess(src.index("async_get_or_create("), src.index("async_add_entities(sensors)"))
-        self.assertLess(src.index("_plant_device_registry_id = plant.id"), src.index("async_add_entities(sensors)"))
+        self.assertLess(src.index("async_get_or_create("), src.index("add_discovered_sensors()"))
+        self.assertLess(src.index("_plant_device_registry_id = plant.id"), src.index("add_discovered_sensors()"))
 
 
 if __name__ == "__main__":
