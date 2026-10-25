@@ -24,6 +24,8 @@ class CaptchaValidationTests(unittest.TestCase):
         cases = [
             (True, True), (False, False),
             ({"success": True}, True), ({"success": False}, False),
+            ({"success": False, "data": True}, False),
+            ({"data": True}, False),
             ("true", True), ("false", False),
             ("ok", True), ("unknown captcha response", False),
             ("not valid", False), ("411", False),
@@ -32,7 +34,7 @@ class CaptchaValidationTests(unittest.TestCase):
         for response_value, expected in cases:
             with self.subTest(response_value=response_value):
                 response = types.SimpleNamespace(
-                    status_code=200, text=str(response_value),
+                    status_code=200, text=str(response_value), headers={"Content-Type": "application/json"},
                     json=lambda value=response_value: value,
                 )
                 session = types.SimpleNamespace(post=lambda *args, **kwargs: response)
@@ -41,7 +43,7 @@ class CaptchaValidationTests(unittest.TestCase):
 
     def test_non_200_is_failure(self):
         method = extract_prevalidation()
-        response = types.SimpleNamespace(status_code=500, text="true", json=lambda: True)
+        response = types.SimpleNamespace(status_code=500, text="true", headers={"Content-Type": "application/json"}, json=lambda: True)
         api = types.SimpleNamespace(
             login_host="eu5.fusionsolar.huawei.com",
             session=types.SimpleNamespace(post=lambda *args, **kwargs: response),
