@@ -414,3 +414,46 @@ def test_valid_battery_soc_zero_is_retained(modules):
         "deviceTips": {"SOC": "0 %", "BATTERY_POWER": "0 kW"},
     }], output)
     assert output["battery_percentage"] == 0.0
+
+
+def test_live_power_placeholders_remain_unknown(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.string", "description": {"value": "--"}},
+        {"name": "neteco.pvms.KPI.kpiView.electricalLoad", "description": {"value": None}},
+        {"name": "neteco.pvms.devTypeLangKey.energy_store",
+         "description": {"value": "--"},
+         "deviceTips": {"SOC": "--", "BATTERY_POWER": None}},
+    ], output)
+    assert output["panel_production_power"] is None
+    assert output["house_load_power"] is None
+    assert output["battery_injection_power"] is None
+    assert output["battery_consumption_power"] is None
+
+
+def test_live_power_real_zero_remains_zero(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.string", "description": {"value": "0 kW"}},
+        {"name": "neteco.pvms.KPI.kpiView.electricalLoad", "description": {"value": "0 kW"}},
+        {"name": "neteco.pvms.devTypeLangKey.energy_store",
+         "description": {"value": "0 kW"},
+         "deviceTips": {"SOC": "0 %", "BATTERY_POWER": "0 kW"}},
+    ], output)
+    assert output["panel_production_power"] == 0
+    assert output["house_load_power"] == 0
+    assert output["battery_consumption_power"] == 0
+    assert output["battery_injection_power"] == 0
+
+
+def test_grid_direction_requires_complete_power_inputs(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    output.update(panel_production_power=2.0, house_load_power=1.0)
+    api._parse_installation_flow_links([{
+        "description": {"label": "neteco.pvms.energy.flow.buy.power", "value": "1 kW"}
+    }], output)
+    assert output["grid_injection_power"] is None
+    assert output["grid_consumption_power"] is None
