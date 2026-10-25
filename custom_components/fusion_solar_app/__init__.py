@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -105,18 +105,53 @@ async def _async_migrate_inverter_unique_ids(
         station_suffix = f"_{api.sanitize_id_segment(api.station)}"
 
     old_prefix = f"{DOMAIN}-{api.controller_name}{station_suffix}_inverter_"
-    new_prefix = (
-        f"{DOMAIN}-{api.controller_name}{station_suffix}"
-        f"_inv_{api.sanitize_id_segment(inverter_dns[0])}_inverter_"
-    )
-
     registry = er.async_get(hass)
+    devices = dr.async_get(hass)
+    known_dns: dict[str, str] = {}
+    identifier_prefix = f"{api.controller_name}_{api.station}_inverter_"
+
+    for dn, info in api.inverters.items():
+        known_dns[api.sanitize_id_segment(dn)] = dn
+        canonical_dn = getattr(info, "canonical_dn", None)
+        if canonical_dn:
+            known_dns[api.sanitize_id_segment(canonical_dn)] = dn
+
+    @callback
+    def _legacy_inverter_dn(entity_entry: er.RegistryEntry) -> str | None:
+        if entity_entry.device_id:
+            device_entry = devices.async_get(entity_entry.device_id)
+            if device_entry and config_entry.entry_id in device_entry.config_entries:
+                for domain, identifier in device_entry.identifiers:
+                    if domain != DOMAIN or not identifier.startswith(identifier_prefix):
+                        continue
+                    stored_dn = api.sanitize_id_segment(identifier[len(identifier_prefix):])
+                    if stored_dn in known_dns:
+                        return known_dns[stored_dn]
+
+        # Safe fallback: there is no other inverter to accidentally claim
+        # these entities, so a one-inverter plant can still migrate.
+        if len(inverter_dns) == 1:
+            return inverter_dns[0]
+
+        return None
 
     @callback
     def _migrate(entity_entry: er.RegistryEntry) -> dict[str, str] | None:
         if not entity_entry.unique_id.startswith(old_prefix):
             return None
 
+        existing_dn = _legacy_inverter_dn(entity_entry)
+        if existing_dn is None:
+            _LOGGER.warning(
+                "Skipping migration of %s: original inverter identity is ambiguous",
+                entity_entry.entity_id,
+            )
+            return None
+
+        new_prefix = (
+            f"{DOMAIN}-{api.controller_name}{station_suffix}"
+            f"_inv_{api.sanitize_id_segment(existing_dn)}_inverter_"
+        )
         new_unique_id = new_prefix + entity_entry.unique_id[len(old_prefix):]
 
         # Renaming onto an existing unique ID raises and would abort the rest
