@@ -264,3 +264,60 @@ async def test_cache_is_persisted_when_historical_profile_is_usable(builder):
     assert result["date"] == "2026-10-25"
     assert result["delta_curve"][1]["delta_kwh"] == 0.5
     builder._forecast_store.async_save.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cross_midnight_cache_is_rebuilt_for_new_date(builder, forecast_module):
+    """An old daily cache must never leak yesterday's forecast into today's curve."""
+    module, _, _ = forecast_module
+    now = datetime(2026, 10, 26, 0, 5, tzinfo=timezone.utc)
+    start = now.replace(hour=0, minute=0)
+    builder._forecast_cache_loaded = True
+    builder._forecast_cache = {
+        "date": "2026-10-25", "source_entity_id": "sensor.solar",
+        "step_minutes": builder.step_minutes, "days": builder.days,
+        "algorithm_version": module.FORECAST_CACHE_ALGORITHM_VERSION,
+        "delta_curve": [{"delta_kwh": 99}],
+    }
+    builder._build_forecast_delta_cache = Mock(return_value=[
+        {"delta_kwh": 0.0}, {"delta_kwh": 0.5},
+    ])
+    result = await builder._async_ensure_forecast_cache(
+        "sensor.solar", now, start, start + timedelta(days=1), [], [])
+    assert result["date"] == "2026-10-26"
+    assert result["delta_curve"][1]["delta_kwh"] == 0.5
+    assert result["delta_curve"][0]["delta_kwh"] != 99
+    builder._forecast_store.async_save.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cache_changes_when_forecast_source_changes(builder, forecast_module):
+    module, _, _ = forecast_module
+    now = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)
+    start = now.replace(hour=0)
+    builder._forecast_cache_loaded = True
+    builder._forecast_cache = {
+        "date": "2026-10-25", "source_entity_id": "sensor.previous",
+        "step_minutes": builder.step_minutes, "days": builder.days,
+        "algorithm_version": module.FORECAST_CACHE_ALGORITHM_VERSION,
+        "delta_curve": [{"delta_kwh": 1}],
+    }
+    builder._build_forecast_delta_cache = Mock(return_value=[
+        {"delta_kwh": 0}, {"delta_kwh": 0.2},
+    ])
+    result = await builder._async_ensure_forecast_cache(
+        "sensor.current", now, start, start + timedelta(days=1), [], [])
+    assert result["source_entity_id"] == "sensor.current"
+
+
+@pytest.mark.asyncio
+async def test_empty_history_after_midnight_uses_new_day_reading(builder, forecast_module):
+    """A new-day production reading should not be combined with yesterday's accumulated total."""
+    _, Device, DeviceType = forecast_module
+    builder._resolve_sensor_entity_id = Mock(return_value="sensor.solar")
+    builder._get_history_states = AsyncMock(return_value=[])
+    result = await builder.build([
+        Device("Panel Production Today", DeviceType.SENSOR_KWH, "0.06")
+    ])
+    assert result.forecasted_today == pytest.approx(0.06)
+    assert result.remaining_today == 0
