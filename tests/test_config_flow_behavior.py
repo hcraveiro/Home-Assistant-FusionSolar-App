@@ -296,3 +296,167 @@ def test_solcast_attribute_schema(config, hass, samples, expected):
     flow.hass = hass
     hass.states.get.return_value = types.SimpleNamespace(attributes={"detailedHourly": samples})
     assert flow._is_valid_solcast_forecast_entity("sensor.solcast") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source,expected", [
+    ("reauth", "reauth_successful"),
+    ("reconfigure", "reconfigure_successful"),
+])
+async def test_captcha_completion_updates_existing_entry(
+    config, hass, credentials, api, source, expected
+):
+    """A successful CAPTCHA must update credentials without creating a second entry."""
+    entry = Mock()
+    entry.entry_id = "existing-entry"
+    entry.data = dict(credentials, station_dn="plant-1")
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": source}
+    flow._target_entry = entry
+    flow._api = api
+    flow._captcha_credentials = dict(credentials, station_dn="plant-1")
+    api.captcha_img = "data:image/png;base64,test"
+
+    result = await flow.async_step_captcha({config.CAPTCHA_INPUT: " 9876 "})
+
+    assert result == {"type": "abort", "reason": expected}
+    assert api.captcha_input == "9876"
+    api.get_station_list.assert_not_called()
+    hass.config_entries.async_reload.assert_awaited_once_with("existing-entry")
+    stored = hass.config_entries.async_update_entry.call_args.kwargs["data"]
+    assert stored[config.CONF_STATION_DN] == "plant-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_name,expected", [
+    ("APIAuthCaptchaError", "invalid_captcha"),
+    ("APIAuthError", "invalid_auth"),
+    ("APIConnectionError", "cannot_connect"),
+])
+async def test_captcha_error_does_not_update_credentials(
+    config, hass, credentials, api, error_name, expected
+):
+    """Invalid challenge and transport errors must not mutate the config entry."""
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "reauth"}
+    flow._api = api
+    flow._captcha_credentials = credentials
+    flow._target_entry = Mock(entry_id="existing-entry", data={})
+    api.captcha_img = ""
+    api.login.side_effect = getattr(config, error_name)("challenge failed")
+
+    result = await flow.async_step_captcha({config.CAPTCHA_INPUT: "0000"})
+
+    assert result["step_id"] == "captcha"
+    assert result["errors"]["base"] == expected
+    hass.config_entries.async_update_entry.assert_not_called()
+    hass.config_entries.async_reload.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_captcha_flow_without_saved_credentials_returns_to_login(config, hass):
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow._api = None
+    flow._captcha_credentials = None
+
+    result = await flow.async_step_captcha({config.CAPTCHA_INPUT: "1234"})
+
+    assert result["step_id"] == "user"
+    assert result["errors"]["base"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_captcha_initial_setup_fetches_stations_after_success(config, hass, credentials, api):
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow._api = api
+    flow._captcha_credentials = credentials
+    flow._target_entry = None
+    api.captcha_img = ""
+
+    result = await flow.async_step_captcha({config.CAPTCHA_INPUT: " 1234 "})
+
+    assert result["step_id"] == "select_station"
+    assert flow._stations[0]["dn"] == "station-1"
+    assert api.captcha_input == "1234"
+
+
+@pytest.mark.asyncio
+async def test_captcha_initial_setup_station_fetch_failure_is_recoverable(
+    config, hass, credentials, api
+):
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow._api = api
+    flow._captcha_credentials = credentials
+    flow._target_entry = None
+    api.captcha_img = ""
+    api.get_station_list.side_effect = RuntimeError("station endpoint offline")
+
+    result = await flow.async_step_captcha({config.CAPTCHA_INPUT: "1234"})
+
+    assert result["step_id"] == "captcha"
+    assert result["errors"]["base"] == "cannot_connect"
+
+
+@pytest.mark.asyncio
+async def test_reauth_challenge_maintains_existing_plant(config, hass, credentials, api, monkeypatch):
+    """Reauth must retain the selected station across the CAPTCHA redirect."""
+    entry = Mock()
+    entry.entry_id = "previous-entry"
+    entry.data = dict(credentials, station_dn="original-plant")
+    hass.config_entries.async_get_entry.return_value = entry
+    api.captcha_img = ""
+    monkeypatch.setattr(config, "validate_input",
+        AsyncMock(side_effect=config.InvalidCaptcha(api)))
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow.context = {"entry_id": "previous-entry", "source": "reauth"}
+
+    initial = await flow.async_step_reauth(entry.data)
+    assert initial["step_id"] == "reauth_confirm"
+    challenge = await flow.async_step_reauth_confirm(credentials)
+    assert challenge["step_id"] == "captcha"
+    assert flow._captcha_credentials[config.CONF_STATION_DN] == "original-plant"
+    assert flow._target_entry is entry
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_challenge_preserves_station(config, hass, credentials, api, monkeypatch):
+    entry = Mock()
+    entry.entry_id = "previous-entry"
+    entry.data = dict(credentials, station_dn="original-plant")
+    hass.config_entries.async_get_entry.return_value = entry
+    api.captcha_img = ""
+    monkeypatch.setattr(config, "validate_input",
+        AsyncMock(side_effect=config.InvalidCaptcha(api)))
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow.context = {"entry_id": "previous-entry", "source": "reconfigure"}
+
+    result = await flow.async_step_reconfigure(credentials)
+
+    assert result["step_id"] == "captcha"
+    assert flow._captcha_credentials[config.CONF_STATION_DN] == "original-plant"
+    assert flow._target_entry is entry
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_success_updates_existing_entry(config, hass, credentials, api, monkeypatch):
+    entry = Mock()
+    entry.entry_id = "previous-entry"
+    entry.data = dict(credentials, station_dn="original-plant")
+    hass.config_entries.async_get_entry.return_value = entry
+    monkeypatch.setattr(config, "validate_input", AsyncMock(return_value=({}, api)))
+    flow = config.FusionSolarConfigFlow()
+    flow.hass = hass
+    flow.context = {"entry_id": "previous-entry", "source": "reconfigure"}
+
+    result = await flow.async_step_reconfigure(credentials)
+
+    assert result == {"type": "abort", "reason": "reconfigure_successful"}
+    hass.config_entries.async_reload.assert_awaited_once_with("previous-entry")
+    assert hass.config_entries.async_update_entry.call_args.kwargs["data"][config.CONF_STATION_DN] == "original-plant"
