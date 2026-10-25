@@ -65,6 +65,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize coordinator."""
         self.config_entry = config_entry
+        self._test_connection_failure_armed = False
         self.user = config_entry.data[CONF_USERNAME]
         self.pwd = config_entry.data[CONF_PASSWORD]
         self.login_host = config_entry.data[FUSION_SOLAR_HOST]
@@ -154,10 +155,22 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             "Auto-selected FusionSolar station DN and stored it in the config entry"
         )
         
+    def arm_test_connection_failure(self) -> None:
+        """Arm one synthetic device-request failure for beta testing only."""
+        self._test_connection_failure_armed = True
+        _LOGGER.warning("BETA TEST: One synthetic device connection failure armed")
+
     def _call_api_serialized(self, method):
         """Prevent session renewal from replacing HTTP state during a request."""
         lock = getattr(self.api, "_session_lock", None)
         with lock if lock is not None else nullcontext():
+            if (
+                self._test_connection_failure_armed
+                and getattr(method, "__name__", None) == "get_devices"
+            ):
+                self._test_connection_failure_armed = False
+                _LOGGER.warning("BETA TEST: Injecting one synthetic APIConnectionError")
+                raise APIConnectionError("Synthetic connection failure (beta test)")
             return method()
 
     async def _fetch_devices_with_connection_retry(self) -> list[Device]:
