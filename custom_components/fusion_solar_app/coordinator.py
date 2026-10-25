@@ -179,9 +179,9 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             return
         prefix = f"{DOMAIN}_{self.api.station}_battery_"
         registry = dr.async_get(self.hass)
-        for device in registry.devices.values():
-            if self.config_entry.entry_id not in device.config_entries:
-                continue
+        for device in dr.async_entries_for_config_entry(
+            registry, self.config_entry.entry_id
+        ):
             for identifier_domain, identifier in device.identifiers:
                 if identifier_domain != DOMAIN or not identifier.startswith(prefix):
                     continue
