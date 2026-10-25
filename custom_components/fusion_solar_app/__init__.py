@@ -120,7 +120,7 @@ async def _async_migrate_inverter_unique_ids(
     def _legacy_inverter_dn(entity_entry: er.RegistryEntry) -> str | None:
         if entity_entry.device_id:
             device_entry = devices.async_get(entity_entry.device_id)
-            if device_entry and config_entry.entry_id in device_entry.config_entries:
+            if device_entry and device_entry.config_entry_id == config_entry.entry_id:
                 for domain, identifier in device_entry.identifiers:
                     if domain != DOMAIN or not identifier.startswith(identifier_prefix):
                         continue
