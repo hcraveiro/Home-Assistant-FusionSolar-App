@@ -357,3 +357,27 @@ def test_isitepower_missing_inverter_dn_skips_api_metadata(modules):
     api._ensure_inverter_metadata_loaded("missing-dn")
     api.get_inverter_config_info.assert_not_called()
     api.get_inverter_status_info.assert_not_called()
+
+
+def test_multiple_inverters_are_discovered_without_duplicates(modules):
+    """One flow node can expose several inverter DNs."""
+    api = modules[2].FusionSolarInverterMixin()
+    api.inverters = {}
+    api._discover_inverter_dns_from_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": ["inv-a", "inv-b", "inv-a"]},
+        {"name": "neteco.pvms.devTypeLangKey.inverter", "devDn": "inv-c"},
+        {"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": []},
+        {"name": "other", "devIds": ["unrelated"]},
+    ])
+    assert list(api.inverters) == ["inv-a", "inv-b", "inv-c"]
+    assert all(info.dn == dn for dn, info in api.inverters.items())
+
+
+def test_missing_inverter_dn_does_not_synthesize_identity(modules):
+    """An iSitePower flow without DN must not create fake inverters."""
+    api = modules[2].FusionSolarInverterMixin()
+    api.inverters = {}
+    api._discover_inverter_dns_from_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": [], "devDn": None},
+    ])
+    assert api.inverters == {}
