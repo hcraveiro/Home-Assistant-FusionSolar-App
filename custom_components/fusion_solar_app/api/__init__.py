@@ -81,6 +81,7 @@ class FusionSolarAPI(
         self.csrf = None
         self.csrf_time = None
         self.request_timeout = 20
+        self._session_lock = threading.RLock()
         self.session = requests.Session()
         self.session.cookies.set("locale", "en-us")
 
