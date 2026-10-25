@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -690,6 +691,43 @@ class FusionSolarForecastSensor(CoordinatorEntity, SensorEntity):
             return None
 
 
+
+def _bounded_forecast_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
+    """Keep forecast sensor attributes within Home Assistant's 16 KiB state limit."""
+    max_bytes = 15000
+
+    def encoded_size() -> int:
+        return len(json.dumps(attributes, default=str, ensure_ascii=False).encode("utf-8"))
+
+    if encoded_size() <= max_bytes:
+        return attributes
+
+    # The full source curve duplicates the two ApexCharts-ready series.
+    attributes.pop("curve", None)
+    if encoded_size() <= max_bytes:
+        return attributes
+
+    attributes.pop("debug", None)
+    if encoded_size() <= max_bytes:
+        return attributes
+
+    # Preserve series endpoints while progressively reducing chart resolution.
+    for key in ("forecast_power_chart", "forecast_cumulative_chart"):
+        points = attributes.get(key)
+        if not isinstance(points, list):
+            continue
+        while len(points) > 2 and encoded_size() > max_bytes:
+            points = points[::2]
+            if points[-1] != attributes[key][-1]:
+                points.append(attributes[key][-1])
+            attributes[key] = points
+
+    if encoded_size() > max_bytes:
+        attributes.pop("forecast_power_chart", None)
+        attributes.pop("forecast_cumulative_chart", None)
+    return attributes
+
+
 class FusionSolarForecastedTodaySensor(FusionSolarForecastSensor):
     """Fusion Solar forecasted production today sensor."""
 
@@ -731,7 +769,7 @@ class FusionSolarForecastedTodaySensor(FusionSolarForecastSensor):
         if debug:
             attrs["debug"] = debug
     
-        return attrs
+        return _bounded_forecast_attributes(attrs)
 
 
 class FusionSolarRemainingTodaySensor(FusionSolarForecastSensor):
