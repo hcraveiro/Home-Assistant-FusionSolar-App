@@ -95,7 +95,8 @@ class DynamicSensorTests(unittest.TestCase):
 
         self.device_type = DeviceType
         coordinator = types.SimpleNamespace(
-            data=types.SimpleNamespace(devices=self.devices),
+            data=types.SimpleNamespace(devices=self.devices, controller_name="test_controller"),
+            api=types.SimpleNamespace(station="test_station", station_name="Test Plant", controller_name="test_controller"),
             async_add_listener=self.register_listener,
         )
         hass = types.SimpleNamespace(
@@ -118,6 +119,9 @@ class DynamicSensorTests(unittest.TestCase):
             "FusionSolarForecastedTodaySensor": lambda coordinator: "forecast",
             "FusionSolarRemainingTodaySensor": lambda coordinator: "remaining",
             "callback": lambda function: function,
+            "dr": types.SimpleNamespace(async_get=lambda hass: types.SimpleNamespace(
+                async_get_or_create=lambda **kwargs: types.SimpleNamespace(id="test_parent_id")
+            )),
         }
         self.setup = load_function(COMPONENT / "sensor.py", "async_setup_entry", namespace)
         asyncio.run(self.setup(hass, config_entry, self.added_batches.append))
