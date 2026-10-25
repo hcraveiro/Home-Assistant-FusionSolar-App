@@ -212,3 +212,55 @@ async def test_empty_delta_cache_is_not_persisted(builder):
         "sensor.solar", now, start, start + timedelta(days=1), [], [])
     assert result is None
     builder._forecast_store.async_save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_forecast_generates_future_from_cached_profile(builder, forecast_module):
+    """A complete forecast with recorder history must never predict decreasing production."""
+    _, Device, DeviceType = forecast_module
+    now = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    builder._resolve_sensor_entity_id = Mock(return_value="sensor.solar")
+    builder._get_history_states = AsyncMock(return_value=[
+        types.SimpleNamespace(state="0", last_changed=start),
+        types.SimpleNamespace(state="3", last_changed=start + timedelta(hours=6)),
+        types.SimpleNamespace(state="5", last_changed=now),
+    ])
+    builder._async_ensure_forecast_cache = AsyncMock(return_value={
+        "date": "2026-10-25",
+        "delta_curve": [{"delta_kwh": 0.1, "power_w": 100}] * 25,
+    })
+    result = await builder.build([
+        Device("Panel Production Today", DeviceType.SENSOR_KWH, "5.0")
+    ])
+    assert result.forecasted_today >= 5.0
+    assert result.remaining_today >= 0
+    assert any(item.get("source") == "forecast" for item in result.curve)
+    values = [item["value"] for item in result.curve]
+    assert values == sorted(values)
+
+
+def test_real_historical_delta_profile_is_nonnegative(builder):
+    start = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    previous = start - timedelta(days=1)
+    times = [previous + timedelta(hours=h) for h in (0, 6, 12, 18)]
+    output = builder._build_forecast_delta_cache(
+        times, [0, 1, 4, 6], start, start + timedelta(days=1))
+    assert output
+    assert all(item["delta_kwh"] >= 0 for item in output)
+    assert sum(item["delta_kwh"] for item in output) > 0
+
+
+@pytest.mark.asyncio
+async def test_cache_is_persisted_when_historical_profile_is_usable(builder):
+    now = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)
+    start = now.replace(hour=0)
+    builder._forecast_cache_loaded = True
+    builder._build_forecast_delta_cache = Mock(return_value=[
+        {"delta_kwh": 0.0}, {"delta_kwh": 0.5}, {"delta_kwh": 0.1}
+    ])
+    result = await builder._async_ensure_forecast_cache(
+        "sensor.solar", now, start, start + timedelta(days=1), [], [])
+    assert result["date"] == "2026-10-25"
+    assert result["delta_curve"][1]["delta_kwh"] == 0.5
+    builder._forecast_store.async_save.assert_awaited_once()
