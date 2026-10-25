@@ -72,7 +72,7 @@ def sensor_module():
     register("homeassistant.helpers.update_coordinator", CoordinatorEntity=CoordinatorEntity)
     pkg("homeassistant.util")
     register("homeassistant.util.dt",
-             parse_datetime=lambda s: datetime.fromisoformat(s.replace("Z", "+00:00")),
+             parse_datetime=lambda s: datetime.fromisoformat(s.replace("Z", "+00:00")) if s != "bad-date" else None,
              as_local=lambda d: d.replace(tzinfo=timezone.utc),
              now=lambda: datetime(2026, 10, 25, 12, tzinfo=timezone.utc))
     package = pkg(PREFIX)
