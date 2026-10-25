@@ -165,7 +165,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
         lock = getattr(self.api, "_session_lock", None)
         with lock if lock is not None else nullcontext():
             if (
-                self._test_connection_failure_armed
+                getattr(self, "_test_connection_failure_armed", False)
                 and getattr(method, "__name__", None) == "get_devices"
             ):
                 self._test_connection_failure_armed = False
