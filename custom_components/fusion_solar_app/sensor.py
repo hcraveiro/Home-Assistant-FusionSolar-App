@@ -410,20 +410,34 @@ async def async_setup_entry(
         config_entry.entry_id
     ].coordinator
 
-    sensors: list[SensorEntity] = [
-        FusionSolarSensor(coordinator, device)
-        for device in coordinator.data.devices
-        if device.device_type in SUPPORTED_SENSOR_DEVICE_TYPES
-    ]
+    known_sensor_ids: set[tuple[DeviceType, str]] = set()
 
-    sensors.extend(
+    @callback
+    def add_discovered_sensors() -> None:
+        """Add sensors that become available after the initial setup."""
+        new_sensors: list[SensorEntity] = []
+        for device in coordinator.data.devices:
+            if device.device_type not in SUPPORTED_SENSOR_DEVICE_TYPES:
+                continue
+
+            sensor_key = (device.device_type, device.device_id)
+            if sensor_key in known_sensor_ids:
+                continue
+
+            known_sensor_ids.add(sensor_key)
+            new_sensors.append(FusionSolarSensor(coordinator, device))
+
+        if new_sensors:
+            async_add_entities(new_sensors)
+
+    add_discovered_sensors()
+    async_add_entities(
         [
             FusionSolarForecastedTodaySensor(coordinator),
             FusionSolarRemainingTodaySensor(coordinator),
         ]
     )
-
-    async_add_entities(sensors)
+    config_entry.async_on_unload(coordinator.async_add_listener(add_discovered_sensors))
 
 
 class FusionSolarSensor(CoordinatorEntity, SensorEntity):
