@@ -381,3 +381,35 @@ def test_missing_inverter_dn_does_not_synthesize_identity(modules):
         {"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": [], "devDn": None},
     ])
     assert api.inverters == {}
+
+
+def test_multi_inverter_discovery_preserves_order_and_identity(modules):
+    """Repeated and missing nodes must not overwrite previously discovered DNs."""
+    api = modules[2].FusionSolarInverterMixin()
+    api.inverters = {}
+    kind = "neteco.pvms.devTypeLangKey.inverter"
+    api._discover_inverter_dns_from_flow_nodes([
+        {"name": kind, "devIds": ["primary", "secondary", "primary"]},
+        {"name": kind, "devDn": "third"},
+        {"name": "other", "devIds": ["ignored"]},
+    ])
+    assert list(api.inverters) == ["primary", "secondary", "third"]
+    original = api.inverters["primary"]
+
+    api._discover_inverter_dns_from_flow_nodes([
+        {"name": kind, "devIds": ["secondary", "fourth"]},
+    ])
+    assert list(api.inverters) == ["primary", "secondary", "third", "fourth"]
+    assert api.inverters["primary"] is original
+
+
+def test_multi_inverter_invalid_nodes_do_not_create_fake_devices(modules):
+    """Never create an inverter ID from a flow node's UI id or malformed devIds."""
+    api = modules[2].FusionSolarInverterMixin()
+    api.inverters = {}
+    api._discover_inverter_dns_from_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.inverter", "id": "1", "devIds": []},
+        {"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": {"bad": "shape"}},
+        {"name": "neteco.pvms.devTypeLangKey.inverter", "devIds": [None, "", [], "valid"]},
+    ])
+    assert list(api.inverters) == ["valid"]
