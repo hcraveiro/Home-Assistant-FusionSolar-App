@@ -188,3 +188,54 @@ def test_battery_capacity_fetched_when_unknown(modules):
     assert output["battery_capacity"] == 15
     assert api.battery_capacity == 15
     api.refresh_csrf.assert_called_once()
+
+
+def test_device_assembly_keeps_partial_data(modules):
+    api = make_installation(modules)
+    api.get_inverter_metadata_devices = Mock(side_effect=RuntimeError("metadata temporarily unavailable"))
+    api.get_inverter_realtime_data = Mock(side_effect=RuntimeError("inverter temporarily unavailable"))
+    api.get_battery_devices = Mock(side_effect=RuntimeError("battery temporarily unavailable"))
+    api.get_power_sensor_devices = Mock(side_effect=RuntimeError("meter temporarily unavailable"))
+    assert api._build_inverter_devices() == []
+    assert api._build_battery_devices() == []
+    assert api._build_power_sensor_devices([]) == []
+
+
+def test_inverter_metadata_can_survive_telemetry_failure(modules):
+    api = make_installation(modules)
+    sentinel = object()
+    api.get_inverter_metadata_devices = Mock(return_value=[sentinel])
+    api.get_inverter_realtime_data = Mock(side_effect=RuntimeError("not available"))
+    assert api._build_inverter_devices() == [sentinel]
+
+
+def test_inverter_unknown_signals_are_skipped(modules):
+    api = make_installation(modules)
+    api.get_inverter_metadata_devices = Mock(return_value=[])
+    api.get_inverter_realtime_data = Mock(return_value={999999999: "2.0"})
+    assert api._build_inverter_devices() == []
+
+
+def test_installation_entities_created_from_output(modules):
+    api = make_installation(modules)
+    api.get_device_unique_id = lambda device_id, kind: "unique_" + device_id
+    api.get_device_name = lambda device_id: device_id
+    api.get_device_value = lambda device_id, kind, output: output[device_id.lower().replace(" ", "_")]
+    devices = api._build_installation_devices(api._build_base_output())
+    assert devices
+    assert all(device.device_unique_id.startswith("unique_") for device in devices)
+
+
+def test_complete_device_orchestration_preserves_order(modules):
+    api = make_installation(modules)
+    api._get_installation_flow_data = Mock(return_value=([], []))
+    api._discover_inverter_dn_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(return_value=["plant"])
+    api._build_inverter_devices = Mock(return_value=["inverter"])
+    api._build_battery_devices = Mock(return_value=["battery"])
+    api._build_power_sensor_devices = Mock(return_value=["meter"])
+    assert api.get_devices() == ["plant", "inverter", "battery", "meter"]
+    api._discover_inverter_dn_from_flow_nodes.assert_called_once_with([])
+    api._ensure_inverter_metadata_loaded.assert_called_once()
