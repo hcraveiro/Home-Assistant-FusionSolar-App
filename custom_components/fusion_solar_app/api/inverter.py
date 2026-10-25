@@ -22,24 +22,43 @@ _LOGGER = logging.getLogger(__name__)
 class FusionSolarInverterMixin:
     """Inverter helpers for FusionSolar API."""
 
+    @staticmethod
+    def _extract_inverter_dns_from_flow_nodes(
+        flow_data_nodes: list[dict[str, Any]],
+    ) -> list[str]:
+        """Collect distinct inverter DNs without assuming one inverter per plant."""
+        inverter_label = "neteco.pvms.devTypeLangKey.inverter"
+        discovered: list[str] = []
+        seen: set[str] = set()
+        for node in flow_data_nodes:
+            if not isinstance(node, dict) or node.get("name") != inverter_label:
+                continue
+            device_ids = node.get("devIds")
+            candidates = device_ids if isinstance(device_ids, list) else []
+            if not candidates:
+                candidates = [node.get("devDn")]
+            for candidate in candidates:
+                if candidate is None:
+                    continue
+                dn = str(candidate).strip()
+                if dn and dn not in seen:
+                    seen.add(dn)
+                    discovered.append(dn)
+        return discovered
+
     def _discover_inverter_dn_from_flow_nodes(self, flow_data_nodes: list[dict[str, Any]]) -> None:
         """Discover the inverter DN from installation flow nodes."""
         if self.inverter_dn is not None:
             return
 
-        for node in flow_data_nodes:
-            if node.get("name") == "neteco.pvms.devTypeLangKey.inverter":
-                dev_ids = node.get("devIds") or []
-                dn = dev_ids[0] if dev_ids else node.get("devDn")
-                if dn:
-                    self.inverter_dn = dn
-                    _LOGGER.info("Discovered inverter DN: %s", self.inverter_dn)
-                else:
-                    _LOGGER.warning(
-                        "Could not determine inverter DN from inverter node. Node: %s",
-                        node,
-                    )
-                return
+        discovered = self._extract_inverter_dns_from_flow_nodes(flow_data_nodes)
+        if discovered:
+            # Preserve the original primary inverter and its existing entity IDs.
+            self.inverter_dn = discovered[0]
+            _LOGGER.debug(
+                "Discovered %s inverter DN(s); primary inverter selected",
+                len(discovered),
+            )
 
     def _ensure_inverter_metadata_loaded(self) -> None:
         """Load inverter metadata when the inverter DN is known and metadata is missing."""
