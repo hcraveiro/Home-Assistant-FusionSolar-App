@@ -3,6 +3,7 @@
 import ast
 import asyncio
 import logging
+import time
 import types
 import unittest
 from pathlib import Path
@@ -42,6 +43,7 @@ def load_retry_method():
         "Device": object,
         "APIConnectionError": APIConnectionError,
         "_LOGGER": logging.getLogger(__name__),
+        "time": time,
     }
     exec(compile(module, str(SOURCE), "exec"), namespace)
     return namespace[method.name]
@@ -64,7 +66,7 @@ class ConnectionRetryTests(unittest.TestCase):
             return result
 
         async def run_in_executor(func, *args):
-            if func is __import__('time').sleep:
+            if func is time.sleep:
                 return None
             return func(*args)
 
