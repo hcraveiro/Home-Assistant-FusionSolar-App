@@ -37,6 +37,10 @@ def normalize_fusionsolar_host(host: str) -> str:
     normalized = normalized.split("/", 1)[0]
     normalized = normalized.split(":", 1)[0]
 
+    # EnergyOrb is a separate login domain; do not rewrite it as a FusionSolar host.
+    if normalized == "monitor.energyorb.com":
+        return normalized
+
     domain_suffix = ".fusionsolar.huawei.com"
     if normalized.endswith(domain_suffix):
         normalized = normalized[: -len(domain_suffix)]
