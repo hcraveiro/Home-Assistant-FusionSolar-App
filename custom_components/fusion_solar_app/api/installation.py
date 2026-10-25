@@ -61,7 +61,7 @@ class FusionSolarInstallationMixin:
             "battery_consumption_month": 0.0,
             "battery_consumption_year": 0.0,
             "battery_consumption_lifetime": 0.0,
-            "battery_percentage": 0.0,
+            "battery_percentage": None,
             "battery_capacity": 0.0,
             "self_consumption_ratio_today": 0.0,
             "self_consumption_ratio_week": 0.0,
@@ -151,12 +151,13 @@ class FusionSolarInstallationMixin:
             value = node.get("description", {}).get("value", "")
 
             if label == "neteco.pvms.devTypeLangKey.energy_store":
-                soc = extract_numeric(node.get("deviceTips", {}).get("SOC", ""))
-                if soc is not None:
-                    output["battery_percentage"] = soc
+                tips = node.get("deviceTips") or {}
+                soc_raw = tips.get("SOC")
+                if soc_raw not in (None, "", "--", "null"):
+                    output["battery_percentage"] = extract_numeric(soc_raw)
 
                 battery_power = extract_numeric(
-                    node.get("deviceTips", {}).get("BATTERY_POWER", "")
+                    tips.get("BATTERY_POWER", "")
                 )
                 if battery_power is None or battery_power <= 0:
                     output["battery_consumption_power"] = extract_numeric(value)
