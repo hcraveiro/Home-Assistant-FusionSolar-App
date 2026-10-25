@@ -258,3 +258,69 @@ def test_week_data_calls_daily_endpoint_without_waiting(modules, monkeypatch):
     assert api.call_energy_balance.call_count == len(result)
     assert all(call.args[0] == energy_module.ENERGY_BALANCE_CALL_TYPE.DAY
                for call in api.call_energy_balance.call_args_list)
+
+
+@pytest.mark.parametrize(("frozen_time", "period", "expected_date", "expected_dim"), [
+    ("2026-10-31T23:59:00", "MONTH", "2026-10-01 00:00:00", "4"),
+    ("2026-11-01T00:01:00", "MONTH", "2026-11-01 00:00:00", "4"),
+    ("2026-11-01T00:01:00", "PREVIOUS_MONTH", "2026-10-01 00:00:00", "4"),
+    ("2026-12-31T23:59:00", "YEAR", "2026-01-01 00:00:00", "5"),
+    ("2027-01-01T00:01:00", "YEAR", "2027-01-01 00:00:00", "5"),
+    ("2027-01-01T00:01:00", "LIFETIME", "2027-01-01 00:00:00", "6"),
+])
+def test_energy_balance_request_date_boundaries(
+    modules, monkeypatch, frozen_time, period, expected_date, expected_dim
+):
+    """Lock down current date-selection behavior without altering source totals."""
+    from datetime import datetime
+    from urllib.parse import parse_qs, urlsplit
+
+    energy_module = modules[1]
+    fixed = datetime.fromisoformat(frozen_time)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed if tz is None else fixed.replace(tzinfo=tz)
+
+    monkeypatch.setattr(energy_module, "datetime", FrozenDatetime)
+    api = energy_module.FusionSolarEnergyBalanceMixin()
+    api.station = "station-id"
+    api.data_host = "example.com"
+    api.csrf = "test-csrf"
+    api.refresh_csrf = Mock()
+    api._request_json = Mock(return_value=(None, {"data": {"totalProductPower": "99 kWh"}}))
+    call_type = energy_module.ENERGY_BALANCE_CALL_TYPE[period]
+    result = api.call_energy_balance(call_type)
+    params = parse_qs(urlsplit(api._request_json.call_args.args[1]).query)
+    assert params["dateStr"] == [expected_date]
+    assert params["timeDim"] == [expected_dim]
+    assert int(params["queryTime"][0]) > 0
+    assert result["data"]["totalProductPower"] == "99 kWh"
+
+
+def test_energy_balance_explicit_day_across_year_boundary(modules, monkeypatch):
+    """A requested day must not change when a new calendar year starts."""
+    from datetime import datetime
+    from urllib.parse import parse_qs, urlsplit
+
+    energy_module = modules[1]
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2027, 1, 1, 0, 1)
+
+    monkeypatch.setattr(energy_module, "datetime", FrozenDatetime)
+    api = energy_module.FusionSolarEnergyBalanceMixin()
+    api.station = "station-id"
+    api.data_host = "example.com"
+    api.csrf = "test-csrf"
+    api.refresh_csrf = Mock()
+    api._request_json = Mock(return_value=(None, {"data": {}}))
+    api.call_energy_balance(
+        energy_module.ENERGY_BALANCE_CALL_TYPE.DAY,
+        specific_date=datetime(2026, 12, 31),
+    )
+    params = parse_qs(urlsplit(api._request_json.call_args.args[1]).query)
+    assert params["dateStr"] == ["2026-12-31 00:00:00"]
+    assert params["timeDim"] == ["2"]
