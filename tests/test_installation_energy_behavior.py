@@ -239,3 +239,22 @@ def test_complete_device_orchestration_preserves_order(modules):
     assert api.get_devices() == ["plant", "inverter", "battery", "meter"]
     api._discover_inverter_dn_from_flow_nodes.assert_called_once_with([])
     api._ensure_inverter_metadata_loaded.assert_called_once()
+
+
+def test_week_energy_ignores_missing_markers(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    source = {"data": {"productPower": ["2.5 kWh", "--", "null", "3 kWh"]}}
+    assert api.calculate_week_energy(source, [1, 2, 3, 4], "productPower") == 5.5
+    assert api.calculate_week_energy({"data": {"productPower": []}}, [1], "productPower") == 0
+
+
+def test_week_data_calls_daily_endpoint_without_waiting(modules, monkeypatch):
+    energy_module = modules[1]
+    api = energy_module.FusionSolarEnergyBalanceMixin()
+    api.call_energy_balance = Mock(return_value={"data": {"totalBuyPower": "1 kWh"}})
+    monkeypatch.setattr(energy_module.time, "sleep", lambda seconds: None)
+    result = api.get_week_data()
+    assert len(result) == energy_module.datetime.now().weekday() + 1
+    assert api.call_energy_balance.call_count == len(result)
+    assert all(call.args[0] == energy_module.ENERGY_BALANCE_CALL_TYPE.DAY
+               for call in api.call_energy_balance.call_args_list)
