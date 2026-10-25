@@ -441,9 +441,9 @@ class FusionSolarAuthMixin:
         normalized_response = response_text.strip('"').lower()
 
         _LOGGER.debug(
-            "Captcha pre-validation response. Status=%s Response=%s",
+            "Captcha pre-validation response status=%s, content_type=%s",
             response.status_code,
-            response_text,
+            response.headers.get("Content-Type", "unknown"),
         )
 
         if response.status_code != 200:
@@ -460,11 +460,13 @@ class FusionSolarAuthMixin:
             return result
 
         if isinstance(result, dict):
-            if result.get("success") is True:
-                return True
+            # Explicit failure must take precedence over any nested data.
             if result.get("success") is False:
                 return False
-            result = result.get("data")
+            if result.get("success") is True:
+                return True
+            # An unknown object shape is not a validated CAPTCHA.
+            return False
 
         if isinstance(result, str):
             return result.strip().lower() in ("true", "success", "ok", "1")
