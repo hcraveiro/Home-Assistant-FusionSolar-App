@@ -572,7 +572,7 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> float | int | datetime | str | None:
         """Return the state of the entity."""
-        if self.device is None:
+        if self.device is None or self.device.state is None:
             return None
 
         dtype = self.device.device_type
