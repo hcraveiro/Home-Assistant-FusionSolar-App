@@ -326,3 +326,39 @@ def test_battery_device_assembly_handles_fetch_errors(modules):
     api.get_battery_module_data = Mock(side_effect=RuntimeError("offline"))
     api._create_dynamic_device = Mock(return_value=None)
     assert api.get_battery_devices() == []
+
+
+def test_isitepower_empty_inverter_node_does_not_invent_dn(modules):
+    """An iSitePower flow node ID is not a valid inverter DN."""
+    inverter_module = modules[2]
+    api = inverter_module.FusionSolarInverterMixin()
+    api.inverter_dn = None
+    node = {
+        "mocId": 20822,
+        "id": "1",
+        "name": "neteco.pvms.devTypeLangKey.inverter",
+        "display": "HIDE",
+        "description": {"value": "--"},
+        "devIds": [],
+        "deviceTips": None,
+    }
+    api._discover_inverter_dn_from_flow_nodes([node])
+    assert api.inverter_dn is None
+
+
+def test_isitepower_missing_inverter_dn_skips_api_metadata(modules):
+    """Missing discovery metadata must not trigger an invented device request."""
+    inverter_module = modules[2]
+    api = inverter_module.FusionSolarInverterMixin()
+    api.inverter_dn = None
+    api.inverter_name = None
+    api.inverter_model = None
+    api.inverter_software_version = None
+    api.inverter_serial_number = None
+    api.inverter_device_id = None
+    api.inverter_parent_dn = None
+    api.get_inverter_config_info = Mock(side_effect=AssertionError("Invalid DN request"))
+    api.get_inverter_status_info = Mock(side_effect=AssertionError("Invalid DN request"))
+    api._ensure_inverter_metadata_loaded()
+    api.get_inverter_config_info.assert_not_called()
+    api.get_inverter_status_info.assert_not_called()
