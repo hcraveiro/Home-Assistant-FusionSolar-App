@@ -30,7 +30,7 @@ def _migration_function(entries, devices):
         "HomeAssistant": object,
         "ConfigEntry": object,
         "FusionSolarCoordinator": object,
-        "er": SimpleNamespace(async_get=lambda hass: registry, async_migrate_entries=migrate),
+        "er": SimpleNamespace(async_get=lambda hass: registry, async_migrate_entries=migrate, RegistryEntry=object),
         "dr": SimpleNamespace(async_get=lambda hass: SimpleNamespace(
             async_get=lambda device_id: devices.get(device_id))),
         "callback": lambda f: f,
