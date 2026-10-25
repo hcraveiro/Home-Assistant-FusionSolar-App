@@ -4,3 +4,4 @@ cryptography>=42,<48
 requests>=2.31,<3
 python-dateutil>=2.8,<3
 pytest-asyncio>=0.24,<2
+voluptuous>=0.15,<1
