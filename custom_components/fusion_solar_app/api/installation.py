@@ -371,9 +371,9 @@ class FusionSolarInstallationMixin:
     
         flow_data_nodes, flow_data_links = self._get_installation_flow_data()
     
-        # Once this station has been identified as iSitePower-M, do not infer
-        # that the physical battery vanished from a partial flow response.
-        self._is_isitepower_m = getattr(self, "_is_isitepower_m", False)
+        # Recheck station architecture every refresh. Within a refresh, detect
+        # power_cube before interpreting a stale zero battery-capacity field.
+        self._is_isitepower_m = False
         self._parse_installation_flow_nodes(flow_data_nodes, output)
         if getattr(self, "_is_isitepower_m", False):
             # Every energy total needs a validated source. The conventional
