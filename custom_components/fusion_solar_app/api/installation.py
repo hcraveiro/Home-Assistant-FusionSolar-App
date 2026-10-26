@@ -371,15 +371,20 @@ class FusionSolarInstallationMixin:
     
         flow_data_nodes, flow_data_links = self._get_installation_flow_data()
     
-        # Re-evaluate architecture on every refresh to avoid stale station type.
-        self._is_isitepower_m = False
+        # Once this station has been identified as iSitePower-M, do not infer
+        # that the physical battery vanished from a partial flow response.
+        self._is_isitepower_m = getattr(self, "_is_isitepower_m", False)
         self._parse_installation_flow_nodes(flow_data_nodes, output)
         if getattr(self, "_is_isitepower_m", False):
-            # iSitePower-M can omit conventional station energy counters.
-            # Preserve unknown readings rather than showing synthetic zero kWh.
+            # Every energy total needs a validated source. The conventional
+            # station endpoint may omit all categories on iSitePower-M.
             for period in ("today", "week", "month", "year", "lifetime"):
-                output[f"grid_consumption_{period}"] = None
-                output[f"grid_injection_{period}"] = None
+                for category in (
+                    "grid_consumption", "grid_injection",
+                    "panel_production", "panel_production_consumption",
+                    "house_load", "battery_consumption", "battery_injection",
+                ):
+                    output[f"{category}_{period}"] = None
             output["battery_capacity"] = None
         self._parse_installation_flow_links(flow_data_links, output)
     
