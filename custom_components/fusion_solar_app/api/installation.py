@@ -219,7 +219,8 @@ class FusionSolarInstallationMixin:
             # Previously discovered batteries are not absent merely because telemetry drops.
             # Only a known zero capacity with no discovered DN establishes no battery.
             confirmed_no_battery = (
-                getattr(self, "battery_dn", None) is None
+                not getattr(self, "_is_isitepower_m", False)
+                and getattr(self, "battery_dn", None) is None
                 and getattr(self, "battery_capacity", None) == 0
             )
             if confirmed_no_battery:
@@ -261,8 +262,22 @@ class FusionSolarInstallationMixin:
         output: dict[str, float | int | str],
     ) -> None:
         """Enrich installation output with calculated and external domain data."""
-        self.update_output_with_battery_capacity(output)
-        self.update_output_with_energy_balance(output)
+        if getattr(self, "_is_isitepower_m", False):
+            # Keep live flow telemetry available if nonstandard iSitePower-M
+            # station metadata or energy-balance payloads are incomplete.
+            for action, label in (
+                (self.update_output_with_battery_capacity, "battery capacity"),
+                (self.update_output_with_energy_balance, "energy balance"),
+            ):
+                try:
+                    action(output)
+                except (KeyError, IndexError, TypeError, ValueError, APIDataStructureError) as ex:
+                    _LOGGER.warning(
+                        "iSitePower-M %s data unavailable: %s", label, ex
+                    )
+        else:
+            self.update_output_with_battery_capacity(output)
+            self.update_output_with_energy_balance(output)
         self._update_output_with_self_consumption_ratios(output)
 
         try:
