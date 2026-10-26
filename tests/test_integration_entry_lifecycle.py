@@ -41,14 +41,14 @@ def integration():
         SENSOR = "sensor"
 
     register("homeassistant.const", Platform=Platform)
-    register("homeassistant.core", HomeAssistant=object)
+    register("homeassistant.core", HomeAssistant=object, callback=lambda function: function)
 
     class ConfigEntryNotReady(Exception):
         pass
 
     register("homeassistant.exceptions", ConfigEntryNotReady=ConfigEntryNotReady)
     package("homeassistant.helpers")
-    register("homeassistant.helpers.device_registry", DeviceEntry=object)
+    register("homeassistant.helpers.device_registry", DeviceEntry=object, async_get=lambda hass: Mock())
     register("homeassistant.helpers.update_coordinator", DataUpdateCoordinator=object)
 
     package(PREFIX, ROOT)
