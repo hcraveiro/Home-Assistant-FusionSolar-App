@@ -1,6 +1,7 @@
 """Fusion Solar App installation helpers."""
 
 import logging
+import re
 from typing import Any
 from urllib.parse import unquote
 
@@ -20,7 +21,7 @@ class FusionSolarInstallationMixin:
     def _build_base_output(self) -> dict[str, float | int | str]:
         """Build the base output structure for installation-level sensors."""
         return {
-            "panel_production_power": 0.0,
+            "panel_production_power": None,
             "panel_production_today": 0.0,
             "panel_production_week": 0.0,
             "panel_production_month": 0.0,
@@ -31,37 +32,37 @@ class FusionSolarInstallationMixin:
             "panel_production_consumption_month": 0.0,
             "panel_production_consumption_year": 0.0,
             "panel_production_consumption_lifetime": 0.0,
-            "house_load_power": 0.0,
+            "house_load_power": None,
             "house_load_today": 0.0,
             "house_load_week": 0.0,
             "house_load_month": 0.0,
             "house_load_year": 0.0,
             "house_load_lifetime": 0.0,
-            "grid_consumption_power": 0.0,
+            "grid_consumption_power": None,
             "grid_consumption_today": 0.0,
             "grid_consumption_week": 0.0,
             "grid_consumption_month": 0.0,
             "grid_consumption_year": 0.0,
             "grid_consumption_lifetime": 0.0,
-            "grid_injection_power": 0.0,
+            "grid_injection_power": None,
             "grid_injection_today": 0.0,
             "grid_injection_week": 0.0,
             "grid_injection_month": 0.0,
             "grid_injection_year": 0.0,
             "grid_injection_lifetime": 0.0,
-            "battery_injection_power": 0.0,
+            "battery_injection_power": None,
             "battery_injection_today": 0.0,
             "battery_injection_week": 0.0,
             "battery_injection_month": 0.0,
             "battery_injection_year": 0.0,
             "battery_injection_lifetime": 0.0,
-            "battery_consumption_power": 0.0,
+            "battery_consumption_power": None,
             "battery_consumption_today": 0.0,
             "battery_consumption_week": 0.0,
             "battery_consumption_month": 0.0,
             "battery_consumption_year": 0.0,
             "battery_consumption_lifetime": 0.0,
-            "battery_percentage": 0.0,
+            "battery_percentage": None,
             "battery_capacity": 0.0,
             "self_consumption_ratio_today": 0.0,
             "self_consumption_ratio_week": 0.0,
@@ -133,70 +134,109 @@ class FusionSolarInstallationMixin:
 
         return flow_data_nodes, flow_data_links
 
+    @staticmethod
+    def _valid_flow_power(raw: Any) -> float | None:
+        """Parse a real numeric flow reading, including attached kW/W/% units."""
+        if raw is None or isinstance(raw, bool):
+            return None
+        if isinstance(raw, str):
+            match = re.fullmatch(
+                r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:kW|W|%)?\s*",
+                raw,
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                return None
+            return float(match.group(1))
+        try:
+            return float(raw)
+        except (ValueError, TypeError, OverflowError):
+            return None
+
     def _parse_installation_flow_nodes(
         self,
         flow_data_nodes: list[dict[str, Any]],
         output: dict[str, float | int | str],
     ) -> None:
-        """Parse installation flow nodes into the output structure."""
+        """Parse actual flow readings; leave missing values unknown."""
         node_map = {
             "neteco.pvms.energy.flow.buy.power": "grid_consumption_power",
             "neteco.pvms.devTypeLangKey.string": "panel_production_power",
             "neteco.pvms.devTypeLangKey.energy_store": "battery_injection_power",
             "neteco.pvms.KPI.kpiView.electricalLoad": "house_load_power",
         }
-
         for node in flow_data_nodes:
+            if not isinstance(node, dict):
+                continue
             label = node.get("name", "")
-            value = node.get("description", {}).get("value", "")
-
-            if label == "neteco.pvms.devTypeLangKey.energy_store":
-                soc = extract_numeric(node.get("deviceTips", {}).get("SOC", ""))
-                if soc is not None:
-                    output["battery_percentage"] = soc
-
-                battery_power = extract_numeric(
-                    node.get("deviceTips", {}).get("BATTERY_POWER", "")
-                )
-                if battery_power is None or battery_power <= 0:
-                    output["battery_consumption_power"] = extract_numeric(value)
+            description = node.get("description") or {}
+            # iSitePower-M reports battery SOC under the power_cube node.
+            # Its description uses the legacy energy_store label, while the
+            # flow node itself has no inverter DN and may list several devices.
+            is_battery_node = label == "neteco.pvms.devTypeLangKey.energy_store" or (
+                label == "neteco.pvms.devTypeLangKey.power_cube"
+                and description.get("label") == "neteco.pvms.devTypeLangKey.energy_store"
+            )
+            value = self._valid_flow_power(description.get("value"))
+            if is_battery_node:
+                tips = node.get("deviceTips") or {}
+                soc_raw = tips.get("SOC")
+                if soc_raw not in (None, "", "--", "null"):
+                    output["battery_percentage"] = self._valid_flow_power(soc_raw)
+                signed_power = self._valid_flow_power(tips.get("BATTERY_POWER"))
+                if value is None or signed_power is None:
+                    continue
+                if signed_power <= 0:
+                    output["battery_consumption_power"] = value
                     output["battery_injection_power"] = 0.0
                 else:
-                    output[node_map[label]] = extract_numeric(value)
+                    output["battery_injection_power"] = value
                     output["battery_consumption_power"] = 0.0
-
-            elif label in node_map:
-                output[node_map[label]] = extract_numeric(value)
+            elif label in node_map and value is not None:
+                output[node_map[label]] = value
 
     def _parse_installation_flow_links(
         self,
         flow_data_links: list[dict[str, Any]],
         output: dict[str, float | int | str],
     ) -> None:
-        """Parse installation flow links into the output structure."""
-        node_map = {
-            "neteco.pvms.energy.flow.buy.power": "grid_consumption_power",
-            "neteco.pvms.devTypeLangKey.string": "panel_production_power",
-            "neteco.pvms.devTypeLangKey.energy_store": "battery_injection_power",
-            "neteco.pvms.KPI.kpiView.electricalLoad": "house_load_power",
-        }
-
+        """Determine grid flow direction only when all inputs are measured."""
         for node in flow_data_links:
-            label = node.get("description", {}).get("label", "")
-            value = node.get("description", {}).get("value", "")
-            if label in node_map and label == "neteco.pvms.energy.flow.buy.power":
-                grid_consumption_injection = extract_numeric(value)
-                if (
-                    output["panel_production_power"]
-                    + output["battery_consumption_power"]
-                    - output["battery_injection_power"]
-                    - output["house_load_power"]
-                ) > 0:
-                    output["grid_injection_power"] = grid_consumption_injection
-                    output["grid_consumption_power"] = 0.0
-                else:
-                    output["grid_consumption_power"] = grid_consumption_injection
-                    output["grid_injection_power"] = 0.0
+            if not isinstance(node, dict):
+                continue
+            description = node.get("description") or {}
+            if description.get("label") != "neteco.pvms.energy.flow.buy.power":
+                continue
+            grid_power = self._valid_flow_power(description.get("value"))
+            keys = (
+                "panel_production_power",
+                "battery_consumption_power",
+                "battery_injection_power",
+                "house_load_power",
+            )
+            # Previously discovered batteries are not absent merely because telemetry drops.
+            # Only a known zero capacity with no discovered DN establishes no battery.
+            confirmed_no_battery = (
+                getattr(self, "battery_dn", None) is None
+                and getattr(self, "battery_capacity", None) == 0
+            )
+            if confirmed_no_battery:
+                output["battery_consumption_power"] = 0.0
+                output["battery_injection_power"] = 0.0
+            if grid_power is None or any(output.get(key) is None for key in keys):
+                continue
+            balance = (
+                output["panel_production_power"]
+                + output["battery_consumption_power"]
+                - output["battery_injection_power"]
+                - output["house_load_power"]
+            )
+            if balance > 0:
+                output["grid_injection_power"] = grid_power
+                output["grid_consumption_power"] = 0.0
+            else:
+                output["grid_consumption_power"] = grid_power
+                output["grid_injection_power"] = 0.0
 
     def _discover_battery_dn_from_flow_nodes(self, flow_data_nodes: list[dict[str, Any]]) -> None:
         """Discover the battery DN from installation flow nodes."""
@@ -256,34 +296,36 @@ class FusionSolarInstallationMixin:
         ]
 
     def _build_inverter_devices(self) -> list[Device]:
-        """Build inverter realtime, derived and metadata device entities."""
+        """Build inverter realtime, derived and metadata device entities for every inverter."""
         devices: list[Device] = []
 
-        try:
-            devices.extend(self.get_inverter_metadata_devices())
-        except Exception as ex:
-            _LOGGER.warning("Failed to build inverter metadata devices: %s", ex)
+        for dn in self.inverters:
+            try:
+                devices.extend(self.get_inverter_metadata_devices(dn))
+            except Exception as ex:
+                _LOGGER.warning("Failed to build inverter metadata devices for %s: %s", dn, ex)
 
-        try:
-            inverter_data = self.get_inverter_realtime_data()
-            signal_map = get_inverter_signal_map()
+            try:
+                inverter_data = self.get_inverter_realtime_data(dn)
+                signal_map = get_inverter_signal_map()
 
-            for signal_id, value in inverter_data.items():
-                if signal_id not in signal_map:
-                    continue
+                for signal_id, value in inverter_data.items():
+                    if signal_id not in signal_map:
+                        continue
 
-                sig = signal_map[signal_id]
-                device = self._create_dynamic_device(
-                    sig["id"],
-                    sig["type"],
-                    value,
-                    sig["icon"],
-                )
-                if device is not None:
-                    devices.append(device)
+                    sig = signal_map[signal_id]
+                    device = self._create_dynamic_device(
+                        sig["id"],
+                        sig["type"],
+                        value,
+                        sig["icon"],
+                        dn=dn,
+                    )
+                    if device is not None:
+                        devices.append(device)
 
-        except Exception as ex:
-            _LOGGER.warning("Failed to fetch inverter realtime data: %s", ex)
+            except Exception as ex:
+                _LOGGER.warning("Failed to fetch inverter realtime data for %s: %s", dn, ex)
 
         return devices
 
@@ -316,8 +358,9 @@ class FusionSolarInstallationMixin:
         self._parse_installation_flow_links(flow_data_links, output)
     
         self._discover_battery_dn_from_flow_nodes(flow_data_nodes)
-        self._discover_inverter_dn_from_flow_nodes(flow_data_nodes)
-        self._ensure_inverter_metadata_loaded()
+        self._discover_inverter_dns_from_flow_nodes(flow_data_nodes)
+        for inverter_dn in self.inverters:
+            self._ensure_inverter_metadata_loaded(inverter_dn)
     
         self._enrich_installation_output(output)
     
