@@ -503,3 +503,97 @@ def test_unknown_battery_presence_does_not_invent_zero(modules):
     }], output)
     assert output["grid_injection_power"] is None
     assert output["grid_consumption_power"] is None
+
+
+def test_isitepower_power_cube_recovers_soc_without_inventing_power_direction(modules):
+    """Reproduce the redacted iSitePower-M INTL flow in issue #49."""
+    api = make_installation(modules)
+    output = api._build_base_output()
+    nodes = [
+        {
+            "mocId": 20822, "id": "1",
+            "name": "neteco.pvms.devTypeLangKey.inverter",
+            "display": "HIDE", "devIds": [], "deviceTips": None,
+            "description": {"value": "--"},
+        },
+        {
+            "mocId": 60014, "id": "6",
+            "name": "neteco.pvms.devTypeLangKey.power_cube",
+            "description": {
+                "label": "neteco.pvms.devTypeLangKey.energy_store",
+                "value": "3.13kW",
+            },
+            "devIds": ["battery-1", "battery-2", "battery-3"],
+            "deviceTips": {"SOC": "46%"},
+        },
+        {
+            "mocId": 60043,
+            "name": "neteco.pvms.devTypeLangKey.string",
+            "description": {"value": "3.24kW"},
+        },
+        {
+            "mocId": 60001,
+            "name": "neteco.pvms.pcs.station.energyflow.mains",
+            "description": {"value": "0.33kW"},
+        },
+        {
+            "mocId": 60010,
+            "name": "neteco.pvms.KPI.kpiView.electricalLoad",
+            "description": {"value": "0.33kW"},
+        },
+    ]
+    api._parse_installation_flow_nodes(nodes, output)
+    api._discover_battery_dn_from_flow_nodes(nodes)
+
+    assert output["battery_percentage"] == 46
+    assert output["panel_production_power"] == 3.24
+    assert output["house_load_power"] == 0.33
+    assert output["battery_consumption_power"] is None
+    assert output["battery_injection_power"] is None
+    assert output["grid_consumption_power"] is None
+    assert output["grid_injection_power"] is None
+    assert api.battery_dn is None
+
+
+def test_isitepower_power_cube_ignores_unverified_or_missing_soc(modules):
+    api = make_installation(modules)
+    node = {
+        "name": "neteco.pvms.devTypeLangKey.power_cube",
+        "description": {
+            "label": "neteco.pvms.devTypeLangKey.energy_store",
+            "value": "2.2kW",
+        },
+        "deviceTips": None,
+    }
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([node], output)
+    assert output["battery_percentage"] is None
+    assert output["battery_injection_power"] is None
+    node["deviceTips"] = {"SOC": "--"}
+    api._parse_installation_flow_nodes([node], output)
+    assert output["battery_percentage"] is None
+
+
+def test_unrelated_node_cannot_impersonate_isitepower_soc(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([{
+        "name": "neteco.pvms.pcs.station.energyflow.mains",
+        "description": {
+            "label": "neteco.pvms.devTypeLangKey.energy_store",
+            "value": "7kW",
+        },
+        "deviceTips": {"SOC": "72%"},
+    }], output)
+    assert output["battery_percentage"] is None
+
+
+def test_isitepower_genuine_zero_soc_is_not_discarded(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([{
+        "name": "neteco.pvms.devTypeLangKey.power_cube",
+        "description": {"label": "neteco.pvms.devTypeLangKey.energy_store", "value": "0kW"},
+        "deviceTips": {"SOC": "0%"},
+    }], output)
+    assert output["battery_percentage"] == 0
