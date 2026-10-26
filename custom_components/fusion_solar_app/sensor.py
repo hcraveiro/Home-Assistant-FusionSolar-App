@@ -103,6 +103,20 @@ def _build_device_info(
     parent_device_id = getattr(coordinator, "_plant_device_registry_id", None)
 
     if device is not None:
+        if device.device_id.startswith("Optimizer ") and device.dn:
+            meta = getattr(coordinator.api, "_optimizers", {}).get(device.dn, {})
+            parent_dn = meta.get("parent_dn")
+            info = {
+                "name": f"Optimizer {meta.get('position') or device.dn}",
+                "manufacturer": "Huawei",
+                "model": meta.get("model") or "FusionSolar Optimizer",
+                "identifiers": {(DOMAIN, f"{controller_name}_{station_dn}_optimizer_{device.dn}")},
+                "via_device_id": parent_device_id,
+            }
+            if meta.get("serial"):
+                info["serial_number"] = meta["serial"]
+            return DeviceInfo(**info)
+
         if device.device_id.startswith(INVERTER_DEVICE_SENSOR_PREFIX):
             inverter_dn = device.dn or "unknown_inverter"
             info = getattr(coordinator.api, "inverters", {}).get(inverter_dn)
