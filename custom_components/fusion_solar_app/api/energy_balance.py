@@ -68,11 +68,18 @@ class FusionSolarEnergyBalanceMixin:
             if match is None:
                 return None
             raw = match.group(1)
+            unit = match.group(0).strip().lower()
+            in_wh = unit.endswith("wh") and not unit.endswith("kwh")
+        else:
+            in_wh = False
         try:
             value = float(raw)
         except (ValueError, TypeError, OverflowError):
             return None
-        return value if __import__("math").isfinite(value) else None
+        if not __import__("math").isfinite(value):
+            return None
+        # Explicit Wh readings must be converted to the kWh exposed by HA.
+        return value / 1000 if in_wh else value
 
     def _set_grid_energy(self, output, period, direction, payload):
         """Do not convert missing iSitePower-M counters into false zero kWh."""
