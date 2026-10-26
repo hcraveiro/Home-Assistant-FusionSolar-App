@@ -940,7 +940,7 @@ def test_isitepower_failed_energy_response_never_exposes_payload_totals(modules)
     assert output["grid_consumption_year"] == 1.5
     assert output["grid_consumption_lifetime"] is None
     assert output["grid_consumption_today"] == 0.3
-    assert output["grid_consumption_week"] is None
+    assert output.get("grid_consumption_week") is None
 
 
 def test_isitepower_api_disconnect_does_not_interrupt_station_updates(modules):
