@@ -693,3 +693,59 @@ def test_isitepower_base_output_keeps_unverified_counters_unknown(modules):
                for period in ("today", "week", "month", "year", "lifetime"))
     assert result["battery_capacity"] is None
     assert result["battery_percentage"] == 100
+
+
+def test_isitepower_zero_station_capacity_does_not_prove_no_battery(modules):
+    """An INTL power_cube exists even when conventional station capacity is zero."""
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    api.battery_capacity = 0
+    api.battery_dn = None
+    output = api._build_base_output()
+    output.update(panel_production_power=3.24, house_load_power=0.33)
+    api._parse_installation_flow_links([{
+        "description": {
+            "label": "neteco.pvms.energy.flow.buy.power",
+            "value": "0.33kW",
+        },
+    }], output)
+    assert output["battery_consumption_power"] is None
+    assert output["battery_injection_power"] is None
+    assert output["grid_consumption_power"] is None
+    assert output["grid_injection_power"] is None
+
+
+def test_isitepower_missing_energy_balance_keeps_live_readings(modules):
+    """A nonstandard history payload cannot suppress a healthy flow response."""
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    api.battery_capacity = 0
+    api.update_output_with_battery_capacity = Mock(side_effect=KeyError("batteryCapacity"))
+    api.update_output_with_energy_balance = Mock(side_effect=KeyError("totalBuyPower"))
+    api.update_output_with_social_contribution = Mock()
+    api._update_output_with_self_consumption_ratios = Mock()
+    output = api._build_base_output()
+    output.update(
+        battery_capacity=None,
+        panel_production_power=0.53,
+        house_load_power=0.38,
+        battery_percentage=100,
+        grid_consumption_lifetime=None,
+        grid_injection_lifetime=None,
+    )
+    api._enrich_installation_output(output)
+    assert output["exit_code"] == "SUCCESS"
+    assert output["panel_production_power"] == 0.53
+    assert output["house_load_power"] == 0.38
+    assert output["battery_percentage"] == 100
+    assert output["grid_consumption_lifetime"] is None
+    assert output["grid_injection_lifetime"] is None
+    assert output["battery_capacity"] is None
+
+
+def test_regular_installation_energy_errors_still_propagate(modules):
+    api = make_installation(modules)
+    api._is_isitepower_m = False
+    api.update_output_with_battery_capacity = Mock(side_effect=KeyError("batteryCapacity"))
+    with pytest.raises(KeyError):
+        api._enrich_installation_output(api._build_base_output())
