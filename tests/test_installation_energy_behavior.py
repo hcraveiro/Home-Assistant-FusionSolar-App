@@ -597,3 +597,99 @@ def test_isitepower_genuine_zero_soc_is_not_discarded(modules):
         "deviceTips": {"SOC": "0%"},
     }], output)
     assert output["battery_percentage"] == 0
+
+
+def test_isitepower_power_cube_marks_nonstandard_energy_architecture(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([{
+        "mocId": 60014,
+        "name": "neteco.pvms.devTypeLangKey.power_cube",
+        "description": {"label": "neteco.pvms.devTypeLangKey.energy_store", "value": "0.01kW"},
+        "deviceTips": {"SOC": "100%"},
+    }], output)
+    assert api._is_isitepower_m is True
+    assert output["battery_percentage"] == 100
+
+
+@pytest.mark.parametrize(("reading", "expected"), [
+    ("1376.860 kWh", 1376.860),
+    ("0 kWh", 0.0),
+    ("--", None),
+    ("null", None),
+    ("", None),
+    (None, None),
+    ("garbage", None),
+    ("NaN", None),
+])
+def test_isitepower_grid_counter_is_not_guessed_from_missing_data(modules, reading, expected):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    output = {}
+    api._set_grid_energy(output, "lifetime", "consumption", {"totalBuyPower": reading})
+    assert output["grid_consumption_lifetime"] == expected
+
+
+def test_isitepower_missing_grid_fields_are_unknown(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    output = {}
+    api._set_grid_energy(output, "lifetime", "consumption", {})
+    api._set_grid_energy(output, "lifetime", "injection", {"totalOnGridPower": "--"})
+    assert output == {
+        "grid_consumption_lifetime": None,
+        "grid_injection_lifetime": None,
+    }
+
+
+def test_existing_plant_grid_zero_remains_unchanged(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = False
+    output = {}
+    api._set_grid_energy(output, "year", "consumption", {"totalBuyPower": "0 kWh"})
+    assert output["grid_consumption_year"] == 0
+
+
+@pytest.mark.parametrize(("capacity", "expected"), [
+    (None, None), ("", None), ("0", None),
+    ("15", 15.0), ("15.0 kWh", 15.0),
+])
+def test_isitepower_battery_capacity_unverified_zero_is_unknown(modules, capacity, expected):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    api.station = "selected"
+    api.battery_capacity = None
+    api.refresh_csrf = Mock()
+    api.get_station_list = Mock(return_value={"data": {"list": [
+        {"dn": "other", "batteryCapacity": "99"},
+        {"dn": "selected", "batteryCapacity": capacity},
+    ]}})
+    output = {}
+    api.update_output_with_battery_capacity(output)
+    assert output["battery_capacity"] == expected
+    assert api.battery_capacity == expected
+
+
+def test_isitepower_base_output_keeps_unverified_counters_unknown(modules):
+    api = make_installation(modules)
+    api._get_installation_flow_data = Mock(return_value=([{
+        "mocId": 60014,
+        "name": "neteco.pvms.devTypeLangKey.power_cube",
+        "description": {"label": "neteco.pvms.devTypeLangKey.energy_store", "value": "0.01kW"},
+        "deviceTips": {"SOC": "100%"},
+    }], []))
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(side_effect=lambda output: [output.copy()])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    result = api.get_devices()[0]
+    assert all(result[f"grid_consumption_{period}"] is None
+               for period in ("today", "week", "month", "year", "lifetime"))
+    assert all(result[f"grid_injection_{period}"] is None
+               for period in ("today", "week", "month", "year", "lifetime"))
+    assert result["battery_capacity"] is None
+    assert result["battery_percentage"] == 100
