@@ -1216,6 +1216,13 @@ cards:
 
 ## FAQ
 
+### Can I control battery charging or discharging?
+
+**FusionSolar App is read-only.** This integration monitors FusionSolar cloud data and does not provide controls for forced battery charging/discharging, battery operating modes, or charge/discharge power limits.
+
+For compatible Huawei inverters and batteries, consider the separate [Huawei Solar integration (wlcrs/huawei_solar)](https://github.com/wlcrs/huawei_solar), which can provide **local control through Modbus TCP**, depending on your hardware, firmware, and connectivity. Verify supported devices, access permissions, and safety limits before enabling write operations. The two integrations can be used side by side: FusionSolar App for cloud monitoring and Huawei Solar for supported local controls.
+
+
 ### I'm not able to login, or my sensors stop updating
 
 This integration is based on how the FusionSolar frontend behaves, not on the official OpenAPI.
