@@ -49,6 +49,7 @@ def integration():
     register("homeassistant.exceptions", ConfigEntryNotReady=ConfigEntryNotReady)
     package("homeassistant.helpers")
     register("homeassistant.helpers.device_registry", DeviceEntry=object, async_get=lambda hass: Mock())
+    register("homeassistant.helpers.entity_registry", async_get=lambda hass: Mock())
     register("homeassistant.helpers.update_coordinator", DataUpdateCoordinator=object)
 
     package(PREFIX, ROOT)
