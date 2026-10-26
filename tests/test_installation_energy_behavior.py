@@ -749,3 +749,49 @@ def test_regular_installation_energy_errors_still_propagate(modules):
     api.update_output_with_battery_capacity = Mock(side_effect=KeyError("batteryCapacity"))
     with pytest.raises(KeyError):
         api._enrich_installation_output(api._build_base_output())
+
+
+def test_isitepower_capacity_never_falls_back_to_another_station(modules):
+    """A selected INTL station cannot borrow battery size from an unrelated plant."""
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api.station = "NE=SELECTED"
+    api._is_isitepower_m = True
+    api.battery_capacity = None
+    api.refresh_csrf = Mock()
+    api.get_station_list = Mock(return_value={"data": {"list": [
+        {"dn": "NE=OTHER", "batteryCapacity": 30},
+    ]}})
+    output = {}
+    api.update_output_with_battery_capacity(output)
+    assert output["battery_capacity"] is None
+    assert api.battery_capacity is None
+
+
+def test_isitepower_architecture_flag_is_rechecked_on_every_refresh(modules):
+    """An earlier power_cube must not mark unrelated later flow polls as iSitePower-M."""
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    api._get_installation_flow_data = Mock(return_value=([], []))
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(return_value=[])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    api.get_devices()
+    assert api._is_isitepower_m is False
+
+
+def test_isitepower_explicit_zero_energy_is_kept_as_zero(modules):
+    """A genuine zero remains distinct from missing or unrecognized data."""
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    output = {}
+    api._set_grid_energy(output, "month", "consumption", {"totalBuyPower": "0 kWh"})
+    api._set_grid_energy(output, "month", "injection", {"totalOnGridPower": 0})
+    assert output == {
+        "grid_consumption_month": 0.0,
+        "grid_injection_month": 0.0,
+    }
