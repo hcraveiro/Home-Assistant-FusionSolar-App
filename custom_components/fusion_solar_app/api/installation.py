@@ -371,6 +371,8 @@ class FusionSolarInstallationMixin:
     
         flow_data_nodes, flow_data_links = self._get_installation_flow_data()
     
+        # Re-evaluate architecture on every refresh to avoid stale station type.
+        self._is_isitepower_m = False
         self._parse_installation_flow_nodes(flow_data_nodes, output)
         if getattr(self, "_is_isitepower_m", False):
             # iSitePower-M can omit conventional station energy counters.
