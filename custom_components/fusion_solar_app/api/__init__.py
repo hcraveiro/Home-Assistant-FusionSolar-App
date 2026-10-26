@@ -39,6 +39,7 @@ class FusionSolarAPI(
     FusionSolarEnergyBalanceMixin,
     FusionSolarInstallationMixin,
     FusionSolarPowerSensorMixin,
+    FusionSolarOptimizerMixin,
 ):
     """Class for Fusion Solar App API."""
 
