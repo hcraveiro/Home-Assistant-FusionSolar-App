@@ -373,7 +373,7 @@ class FusionSolarInstallationMixin:
     
         # Recheck station architecture every refresh. Within a refresh, detect
         # power_cube before interpreting a stale zero battery-capacity field.
-        self._is_isitepower_m = False
+        self._is_isitepower_m = getattr(self, "_station_is_isitepower_m", False)
         self._parse_installation_flow_nodes(flow_data_nodes, output)
         if getattr(self, "_is_isitepower_m", False):
             # Every energy total needs a validated source. The conventional
