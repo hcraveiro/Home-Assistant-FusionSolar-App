@@ -7,7 +7,7 @@ from urllib.parse import unquote
 
 from ..const import DATA_URL
 from ..utils import extract_numeric
-from .exceptions import APIDataStructureError
+from .exceptions import APIConnectionError, APIDataStructureError
 from .models import Device, DeviceType
 from .signal_maps import DEVICES, get_inverter_signal_map
 
@@ -271,7 +271,7 @@ class FusionSolarInstallationMixin:
             ):
                 try:
                     action(output)
-                except (KeyError, IndexError, TypeError, ValueError, APIDataStructureError) as ex:
+                except (KeyError, IndexError, TypeError, ValueError, APIConnectionError, APIDataStructureError) as ex:
                     _LOGGER.warning(
                         "iSitePower-M %s data unavailable: %s", label, ex
                     )
