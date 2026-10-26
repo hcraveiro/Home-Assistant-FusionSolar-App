@@ -21,6 +21,7 @@ from .exceptions import (
 from .installation import FusionSolarInstallationMixin
 from .inverter import FusionSolarInverterMixin
 from .models import Device, DeviceType, ENERGY_BALANCE_CALL_TYPE, InverterInfo
+from .optimizer import FusionSolarOptimizerMixin
 from .social import FusionSolarSocialMixin
 from .station import FusionSolarStationMixin
 from .power_sensor import FusionSolarPowerSensorMixin
@@ -38,6 +39,7 @@ class FusionSolarAPI(
     FusionSolarEnergyBalanceMixin,
     FusionSolarInstallationMixin,
     FusionSolarPowerSensorMixin,
+    FusionSolarOptimizerMixin,
 ):
     """Class for Fusion Solar App API."""
 
