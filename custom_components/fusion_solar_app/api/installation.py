@@ -141,7 +141,7 @@ class FusionSolarInstallationMixin:
             return None
         if isinstance(raw, str):
             match = re.fullmatch(
-                r"\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\s*(?:kW|W|%)?\\s*",
+                r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:kW|W|%)?\s*",
                 raw,
                 flags=re.IGNORECASE,
             )
