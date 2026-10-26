@@ -89,10 +89,17 @@ class FusionSolarEnergyBalanceMixin:
             self.refresh_csrf()
             station_list = self.get_station_list()
             stations = station_list.get("data", {}).get("list") or []
+            selected_dn = getattr(self, "station", None)
             station_data = next(
-                (station for station in stations if station.get("dn") == getattr(self, "station", None)),
-                stations[0] if stations else {},
+                (station for station in stations if station.get("dn") == selected_dn),
+                None,
             )
+            if station_data is None:
+                if getattr(self, "_is_isitepower_m", False):
+                    # A capacity from a different station is not a valid fallback.
+                    station_data = {}
+                else:
+                    station_data = stations[0] if stations else {}
             capacity = station_data.get("batteryCapacity")
             if getattr(self, "_is_isitepower_m", False):
                 # A power_cube with no conventional capacity field is still
