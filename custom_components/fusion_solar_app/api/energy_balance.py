@@ -56,8 +56,20 @@ class FusionSolarEnergyBalanceMixin:
             return None
         if isinstance(raw, str) and raw.strip().lower() in ("", "--", "null", "none"):
             return None
+        if isinstance(raw, str):
+            # extract_numeric() returns 0 for unparsable text. Validate the
+            # upstream number first so a protocol error never becomes 0 kWh.
+            import re
+            match = re.fullmatch(
+                r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:kWh|Wh)?\s*",
+                raw,
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                return None
+            raw = match.group(1)
         try:
-            value = float(extract_numeric(raw))
+            value = float(raw)
         except (ValueError, TypeError, OverflowError):
             return None
         return value if __import__("math").isfinite(value) else None
