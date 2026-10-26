@@ -919,3 +919,65 @@ def test_isitepower_installation_survives_partial_energy_sources(modules):
     assert data["grid_consumption_lifetime"] is None
     assert data["battery_capacity"] is None
     assert data["exit_code"] == "SUCCESS"
+
+
+def test_isitepower_failed_energy_response_never_exposes_payload_totals(modules):
+    """Even numeric fields in a failed Huawei response cannot be trusted."""
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    api.call_energy_balance = Mock(side_effect=[
+        {"success": False, "data": {"totalBuyPower": "9999 kWh"}},
+        {"success": True, "data": {"totalBuyPower": "1.5kWh"}},
+        {"success": False, "data": {"totalBuyPower": "500 kWh"}},
+    ])
+    api.get_week_data = Mock(return_value=[
+        {"success": False, "data": {"totalBuyPower": "20 kWh"}},
+        {"success": True, "data": {"totalBuyPower": "0.3 kWh"}},
+    ])
+    output = {}
+    api.update_output_with_energy_balance(output)
+    assert output["grid_consumption_month"] is None
+    assert output["grid_consumption_year"] == 1.5
+    assert output["grid_consumption_lifetime"] is None
+    assert output["grid_consumption_today"] == 0.3
+    assert output["grid_consumption_week"] is None
+
+
+def test_isitepower_api_disconnect_does_not_interrupt_station_updates(modules):
+    """A transient optional energy failure should not discard live SOC/power."""
+    from unittest.mock import Mock
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    api.update_output_with_battery_capacity = Mock()
+    api.update_output_with_energy_balance = Mock(
+        side_effect=modules[2].APIConnectionError("connection reset")
+    )
+    api.update_output_with_social_contribution = Mock()
+    api._update_output_with_self_consumption_ratios = Mock()
+    output = api._build_base_output()
+    output.update(
+        battery_percentage=73, panel_production_power=0.53,
+        house_load_power=0.38, grid_consumption_lifetime=None,
+    )
+    api._enrich_installation_output(output)
+    assert output["battery_percentage"] == 73
+    assert output["panel_production_power"] == 0.53
+    assert output["grid_consumption_lifetime"] is None
+    assert output["exit_code"] == "SUCCESS"
+
+
+def test_isitepower_optional_energy_disconnect_preserves_other_periods(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    api.call_energy_balance = Mock(side_effect=[
+        {"data": {"totalBuyPower": "2kWh"}},
+        modules[2].APIConnectionError("temporary disconnect"),
+        {"data": {"totalBuyPower": "25kWh"}},
+    ])
+    api.get_week_data = Mock(side_effect=modules[2].APIConnectionError("daily request disconnected"))
+    output = {}
+    api.update_output_with_energy_balance(output)
+    assert output["grid_consumption_month"] == 2
+    assert output["grid_consumption_lifetime"] == 25
+    assert output.get("grid_consumption_year") is None
+    assert output.get("grid_consumption_today") is None
