@@ -282,3 +282,43 @@ async def test_dynamic_sensor_reappearing_with_same_identity_is_not_recreated(co
     coordinator.data.devices = [device(sensor_module, "Inverter PV1 Current", state=4)]
     listener[0]()
     assert len(batches) == 2
+
+
+def test_optimizer_registry_uses_inverter_parent_when_registered(coordinator, sensor_module, monkeypatch):
+    """Optimizer entities belong to their parent inverter without changing their DN-based IDs."""
+    inverter = types.SimpleNamespace(id="inverter-registry-id")
+    registry = types.SimpleNamespace(async_get_device=Mock(return_value=inverter))
+    monkeypatch.setattr(sensor_module.dr, "async_get", lambda hass: registry)
+    coordinator.hass = object()
+    coordinator.api.inverters = {"NE=INV_1": types.SimpleNamespace(canonical_dn="NE=INV_1")}
+    coordinator.api._optimizers = {
+        "NE=OPT_2": {
+            "parent_dn": "NE=INV_1",
+            "position": "1.1.2",
+            "model": "MERC-600W-PA0",
+            "serial": "OPT_SN_2",
+        }
+    }
+    optimizer = sensor_module.Device(
+        "Optimizer Output Power", "station-opt2-output", sensor_module.DeviceType.SENSOR_KW,
+        "Output Power", 0.1096, "mdi:solar-power", dn="NE=OPT_2",
+    )
+    info = sensor_module._build_device_info(coordinator, optimizer)
+    assert info["name"] == "Optimizer 1.1.2"
+    assert info["model"] == "MERC-600W-PA0"
+    assert info["via_device_id"] == "inverter-registry-id"
+    assert ("fusion_solar_app", "fusion_solar_app_Plant/1_optimizer_NE=OPT_2") in info["identifiers"]
+    assert registry.async_get_device.call_count == 1
+
+
+def test_optimizer_registry_falls_back_to_plant(coordinator, sensor_module, monkeypatch):
+    registry = types.SimpleNamespace(async_get_device=Mock(return_value=None))
+    monkeypatch.setattr(sensor_module.dr, "async_get", lambda hass: registry)
+    coordinator.hass = object()
+    coordinator.api.inverters = {}
+    coordinator.api._optimizers = {"NE=OPT_2": {"parent_dn": "NE=INV_1", "position": "1.1.2"}}
+    optimizer = sensor_module.Device(
+        "Optimizer Energy Today", "station-opt2-energy", sensor_module.DeviceType.SENSOR_KWH,
+        "Energy Today", 0.11, "mdi:solar-power", dn="NE=OPT_2",
+    )
+    assert sensor_module._build_device_info(coordinator, optimizer)["via_device_id"] == "parent-id"
