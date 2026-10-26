@@ -33,6 +33,22 @@ class FusionSolarEnergyBalanceMixin:
         periods = ("today", "week", "month", "year", "lifetime")
 
         for period in periods:
+            if getattr(self, "_is_isitepower_m", False):
+                # Unknown inputs cannot establish meaningful ratios.
+                consumption = output.get(f"panel_production_consumption_{period}")
+                load = output.get(f"house_load_{period}")
+                production = output.get(f"panel_production_{period}")
+                output[f"self_consumption_ratio_{period}"] = (
+                    self._calculate_ratio_percentage(float(consumption), float(load))
+                    if consumption is not None and load is not None and float(load) > 0
+                    else None
+                )
+                output[f"self_consumption_ratio_by_production_{period}"] = (
+                    self._calculate_ratio_percentage(float(consumption), float(production))
+                    if consumption is not None and production is not None and float(production) > 0
+                    else None
+                )
+                continue
             self_use_value = float(output.get(f"panel_production_consumption_{period}", 0.0) or 0.0)
             house_load_value = float(output.get(f"house_load_{period}", 0.0) or 0.0)
             panel_production_value = float(output.get(f"panel_production_{period}", 0.0) or 0.0)
