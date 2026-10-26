@@ -46,15 +46,50 @@ class FusionSolarEnergyBalanceMixin:
                 panel_production_value,
             )
 
+    @staticmethod
+    def _optional_grid_energy(payload, key):
+        """Read a measured counter; missing/invalid values are not zero."""
+        if not isinstance(payload, dict):
+            return None
+        raw = payload.get(key)
+        if raw is None or isinstance(raw, bool):
+            return None
+        if isinstance(raw, str) and raw.strip().lower() in ("", "--", "null", "none"):
+            return None
+        try:
+            value = float(extract_numeric(raw))
+        except (ValueError, TypeError, OverflowError):
+            return None
+        return value if __import__("math").isfinite(value) else None
+
+    def _set_grid_energy(self, output, period, direction, payload):
+        """Do not convert missing iSitePower-M counters into false zero kWh."""
+        key = "totalBuyPower" if direction == "consumption" else "totalOnGridPower"
+        if getattr(self, "_is_isitepower_m", False):
+            output[f"grid_{direction}_{period}"] = self._optional_grid_energy(payload, key)
+        else:
+            output[f"grid_{direction}_{period}"] = extract_numeric(payload[key])
+
     def update_output_with_battery_capacity(self, output: Dict[str, Optional[float | str]]):
         """Populate battery capacity in the output dictionary."""
         if self.battery_capacity is None or self.battery_capacity == 0.0:
             _LOGGER.debug("Getting Battery capacity")
             self.refresh_csrf()
             station_list = self.get_station_list()
-            station_data = station_list["data"]["list"][0]
-            output["battery_capacity"] = station_data["batteryCapacity"]
-            self.battery_capacity = station_data["batteryCapacity"]
+            stations = station_list.get("data", {}).get("list") or []
+            station_data = next(
+                (station for station in stations if station.get("dn") == getattr(self, "station", None)),
+                stations[0] if stations else {},
+            )
+            capacity = station_data.get("batteryCapacity")
+            if getattr(self, "_is_isitepower_m", False):
+                # A power_cube with no conventional capacity field is still
+                # an installed battery; zero is not a verified capacity.
+                capacity = self._optional_grid_energy({"capacity": capacity}, "capacity")
+                if capacity is None or capacity <= 0:
+                    capacity = None
+            output["battery_capacity"] = capacity
+            self.battery_capacity = capacity
         else:
             output["battery_capacity"] = self.battery_capacity
 
@@ -66,8 +101,8 @@ class FusionSolarEnergyBalanceMixin:
         month_data = self.call_energy_balance(ENERGY_BALANCE_CALL_TYPE.MONTH)
         output["panel_production_month"] = extract_numeric(month_data["data"]["totalProductPower"])
         output["panel_production_consumption_month"] = extract_numeric(month_data["data"]["totalSelfUsePower"])
-        output["grid_injection_month"] = extract_numeric(month_data["data"]["totalOnGridPower"])
-        output["grid_consumption_month"] = extract_numeric(month_data["data"]["totalBuyPower"])
+        self._set_grid_energy(output, "month", "injection", month_data["data"])
+        self._set_grid_energy(output, "month", "consumption", month_data["data"])
 
         month_charge_power_list = month_data["data"]["chargePower"]
         if month_charge_power_list:
@@ -89,8 +124,8 @@ class FusionSolarEnergyBalanceMixin:
 
         _LOGGER.debug("Getting Today's energy data")
         week_data = self.get_week_data()
-        output["grid_consumption_today"] = extract_numeric(week_data[-1]["data"]["totalBuyPower"])
-        output["grid_injection_today"] = extract_numeric(week_data[-1]["data"]["totalOnGridPower"])
+        self._set_grid_energy(output, "today", "consumption", week_data[-1]["data"])
+        self._set_grid_energy(output, "today", "injection", week_data[-1]["data"])
 
         if month_charge_power_list:
             charge_value_today = month_charge_power_list[datetime.now().day - 1]
@@ -161,24 +196,39 @@ class FusionSolarEnergyBalanceMixin:
         output["battery_injection_week"] = battery_injection_value_week
         output["battery_consumption_week"] = battery_consumption_value_week
         if week_data:
-            output["grid_consumption_week"] = sum(
-                extract_numeric(day["data"]["totalBuyPower"])
-                for day in week_data
-                if (day["data"]["totalBuyPower"] != "--" and day["data"]["totalBuyPower"] != "null")
-            )
-            output["grid_injection_week"] = sum(
-                extract_numeric(day["data"]["totalOnGridPower"])
-                for day in week_data
-                if (day["data"]["totalOnGridPower"] != "--" and day["data"]["totalOnGridPower"] != "null")
-            )
-
+            if getattr(self, "_is_isitepower_m", False):
+                for direction, field in (
+                    ("consumption", "totalBuyPower"),
+                    ("injection", "totalOnGridPower"),
+                ):
+                    readings = [
+                        self._optional_grid_energy(day.get("data"), field)
+                        for day in week_data
+                    ]
+                    output[f"grid_{direction}_week"] = (
+                        round(sum(readings), 4)
+                        if readings and all(value is not None for value in readings)
+                        else None
+                    )
+            else:
+                output["grid_consumption_week"] = sum(
+                    extract_numeric(day["data"]["totalBuyPower"])
+                    for day in week_data
+                    if (day["data"]["totalBuyPower"] != "--" and day["data"]["totalBuyPower"] != "null")
+                )
+                output["grid_injection_week"] = sum(
+                    extract_numeric(day["data"]["totalOnGridPower"])
+                    for day in week_data
+                    if (day["data"]["totalOnGridPower"] != "--" and day["data"]["totalOnGridPower"] != "null")
+                )
+    
         _LOGGER.debug("Getting Years's energy data")
         year_data = self.call_energy_balance(ENERGY_BALANCE_CALL_TYPE.YEAR)
         output["panel_production_consumption_year"] = extract_numeric(year_data["data"]["totalSelfUsePower"])
         output["house_load_year"] = extract_numeric(year_data["data"]["totalUsePower"])
         output["panel_production_year"] = extract_numeric(year_data["data"]["totalProductPower"])
-        output["grid_consumption_year"] = extract_numeric(year_data["data"]["totalBuyPower"])
-        output["grid_injection_year"] = extract_numeric(year_data["data"]["totalOnGridPower"])
+        self._set_grid_energy(output, "year", "consumption", year_data["data"])
+        self._set_grid_energy(output, "year", "injection", year_data["data"])
 
         charge_power_list = year_data["data"]["chargePower"]
         if charge_power_list:
@@ -209,8 +259,8 @@ class FusionSolarEnergyBalanceMixin:
         output["panel_production_lifetime"] = extract_numeric(lifetime_data["data"]["totalProductPower"])
         output["panel_production_consumption_lifetime"] = extract_numeric(lifetime_data["data"]["totalSelfUsePower"])
         output["house_load_lifetime"] = extract_numeric(lifetime_data["data"]["totalUsePower"])
-        output["grid_consumption_lifetime"] = extract_numeric(lifetime_data["data"]["totalBuyPower"])
-        output["grid_injection_lifetime"] = extract_numeric(lifetime_data["data"]["totalOnGridPower"])
+        self._set_grid_energy(output, "lifetime", "consumption", lifetime_data["data"])
+        self._set_grid_energy(output, "lifetime", "injection", lifetime_data["data"])
 
         lifetime_charge_power_list = lifetime_data["data"]["chargePower"]
         if lifetime_charge_power_list:
