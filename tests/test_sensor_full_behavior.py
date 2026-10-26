@@ -108,12 +108,12 @@ def coordinator():
     )
     data = types.SimpleNamespace(controller_name="fusion_solar_app", forecast=None, devices=[])
     return types.SimpleNamespace(api=api, data=data, _plant_device_registry_id="parent-id",
-                                 get_device_by_id=Mock(return_value=None))
+                                 get_device_by_unique_id=Mock(return_value=None))
 
 
 def device(sensor_module, device_id="House Load Power", kind=None, state=1.2):
     kind = kind or sensor_module.DeviceType.SENSOR_KW
-    return sensor_module.Device(device_id, "unique-test", kind, device_id, state, "mdi:flash")
+    return sensor_module.Device(device_id, "unique-test", kind, device_id, state, "mdi:flash", dn="inverter-1" if device_id.startswith("Inverter ") else None)
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -156,10 +156,10 @@ def test_sensor_coordinator_updates_preserve_previous_on_missing(coordinator, se
     initial = device(sensor_module, state=5)
     obj = sensor_module.FusionSolarSensor(coordinator, initial)
     updated = device(sensor_module, state=6)
-    coordinator.get_device_by_id.return_value = updated
+    coordinator.get_device_by_unique_id.return_value = updated
     obj._handle_coordinator_update()
     assert obj.native_value == 6
-    coordinator.get_device_by_id.return_value = None
+    coordinator.get_device_by_unique_id.return_value = None
     obj._handle_coordinator_update()
     assert obj.native_value == 6
 
@@ -254,7 +254,7 @@ async def test_sensors_discovered_after_initial_setup_without_duplicates(coordin
     pv = device(sensor_module, "Inverter PV1 Voltage", state=400)
     coordinator.data.devices = [first, pv]
     listeners[0]()
-    assert [sensor.device_id for sensor in batches[-1]] == ["Inverter PV1 Voltage"]
+    assert [sensor.device_id for sensor in batches[-1] if isinstance(sensor, sensor_module.FusionSolarSensor)] == ["Inverter PV1 Voltage"]
     count = len(batches)
     listeners[0]()
     assert len(batches) == count
