@@ -8,8 +8,9 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -54,6 +55,14 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             data={k: v for k, v in config_entry.data.items() if k not in ("dp_session", "data_host")},
         )
 
+    # Migrate legacy station-scoped inverter entity unique IDs to DN-scoped
+    # ones now that the inverter DNs are known. Must run before the sensor
+    # platform is set up so existing entities keep their history.
+    try:
+        await _async_migrate_inverter_unique_ids(hass, config_entry, coordinator)
+    except Exception as ex:  # migration must never block setup
+        _LOGGER.warning("Inverter unique ID migration failed: %s", ex)
+
     # Initialise a listener for config flow options changes.
     # See config_flow for defining an options setting that shows up as configure on the integration.
     cancel_update_listener = config_entry.add_update_listener(_async_update_listener)
@@ -71,6 +80,86 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     # Return true to denote a successful setup.
     return True
+
+
+async def _async_migrate_inverter_unique_ids(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: FusionSolarCoordinator,
+) -> None:
+    """Migrate legacy inverter entity unique IDs to DN-scoped unique IDs.
+
+    Before multi-inverter support, inverter entities were keyed on the station
+    only (``…_<station>_inverter_<signal>``). They now carry the inverter DN
+    (``…_<station>_inv_<dn>_inverter_<signal>``). Existing entities belong to
+    its registered Home Assistant device. Ambiguous multi-inverter identities
+    are left untouched to protect dashboards and history.
+    """
+    api = coordinator.api
+    inverter_dns = list(getattr(api, "inverters", {}))
+    if not inverter_dns:
+        return
+
+    station_suffix = ""
+    if api.station:
+        station_suffix = f"_{api.sanitize_id_segment(api.station)}"
+
+    old_prefix = f"{DOMAIN}-{api.controller_name}{station_suffix}_inverter_"
+    registry = er.async_get(hass)
+    devices = dr.async_get(hass)
+    devices = dr.async_get(hass)
+    valid_dns = {api.sanitize_id_segment(dn): dn for dn in inverter_dns}
+
+    @callback
+    def _migrate(entity_entry: er.RegistryEntry) -> dict[str, str] | None:
+        if not entity_entry.unique_id.startswith(old_prefix):
+            return None
+
+        # Match the existing HA device to the inverter it represented before
+        # multi-inverter discovery. The first flow node is not stable.
+        matched_dn = None
+        if entity_entry.device_id:
+            device = devices.async_get(entity_entry.device_id)
+            if device:
+                for identifier_domain, identifier in device.identifiers:
+                    if identifier_domain != DOMAIN:
+                        continue
+                    for safe_dn, original_dn in valid_dns.items():
+                        if identifier.endswith(f"_inverter_{original_dn}"):
+                            matched_dn = original_dn
+                            break
+                    if matched_dn:
+                        break
+
+        if matched_dn is None and len(inverter_dns) == 1:
+            matched_dn = inverter_dns[0]
+
+        if matched_dn is None:
+            _LOGGER.warning(
+                "Skipping ambiguous inverter migration for %s: no matching "
+                "registered device DN; preserved original unique ID",
+                entity_entry.entity_id,
+            )
+            return None
+
+        new_prefix = (
+            f"{DOMAIN}-{api.controller_name}{station_suffix}"
+            f"_inv_{api.sanitize_id_segment(matched_dn)}_inverter_"
+        )
+        new_unique_id = new_prefix + entity_entry.unique_id[len(old_prefix):]
+        if registry.async_get_entity_id(
+            entity_entry.domain, entity_entry.platform, new_unique_id
+        ):
+            _LOGGER.warning(
+                "Skipping migration of %s: unique ID %s is already registered",
+                entity_entry.entity_id,
+                new_unique_id,
+            )
+            return None
+
+        return {"new_unique_id": new_unique_id}
+
+    await er.async_migrate_entries(hass, config_entry.entry_id, _migrate)
 
 
 async def _async_update_listener(hass: HomeAssistant, config_entry):

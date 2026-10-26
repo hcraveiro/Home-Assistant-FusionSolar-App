@@ -12,7 +12,7 @@ from ..const import (
     INVERTER_CONFIG_SIGNAL_URL,
 )
 from ..utils import extract_numeric
-from .models import Device, DeviceType
+from .models import Device, DeviceType, InverterInfo
 from .signal_maps import get_inverter_signal_map
 
 
@@ -22,57 +22,68 @@ _LOGGER = logging.getLogger(__name__)
 class FusionSolarInverterMixin:
     """Inverter helpers for FusionSolar API."""
 
-    def _discover_inverter_dn_from_flow_nodes(self, flow_data_nodes: list[dict[str, Any]]) -> None:
-        """Discover the inverter DN from installation flow nodes."""
-        if self.inverter_dn is not None:
-            return
-
+    def _discover_inverter_dns_from_flow_nodes(self, flow_data_nodes: list[dict[str, Any]]) -> None:
+        """Discover all inverter DNs from installation flow nodes."""
         for node in flow_data_nodes:
-            if node.get("name") == "neteco.pvms.devTypeLangKey.inverter":
-                dev_ids = node.get("devIds") or []
-                dn = dev_ids[0] if dev_ids else node.get("devDn")
-                if dn:
-                    self.inverter_dn = dn
-                    _LOGGER.info("Discovered inverter DN: %s", self.inverter_dn)
-                else:
-                    _LOGGER.warning(
-                        "Could not determine inverter DN from inverter node. Node: %s",
-                        node,
-                    )
-                return
+            if node.get("name") != "neteco.pvms.devTypeLangKey.inverter":
+                continue
 
-    def _ensure_inverter_metadata_loaded(self) -> None:
+            dev_ids = node.get("devIds") or []
+            if not isinstance(dev_ids, list):
+                dev_ids = []
+            if not dev_ids and node.get("devDn"):
+                dev_ids = [node["devDn"]]
+
+            if not dev_ids:
+                _LOGGER.warning(
+                    "Could not determine inverter DN from inverter node. Node: %s",
+                    node,
+                )
+                continue
+
+            for dn in dev_ids:
+                if isinstance(dn, (str, int)) and str(dn).strip():
+                    dn = str(dn)
+                    if dn not in self.inverters:
+                        self.inverters[dn] = InverterInfo(dn=dn)
+
+        if self.inverters:
+            _LOGGER.info("Discovered inverter DNs: %s", list(self.inverters))
+
+    def _ensure_inverter_metadata_loaded(self, dn: str) -> None:
         """Load inverter metadata when the inverter DN is known and metadata is missing."""
-        if not self.inverter_dn:
+        info = self.inverters.get(dn)
+        if info is None:
             return
 
         config_metadata_loaded = (
-            self.inverter_name is not None
-            and self.inverter_model is not None
-            and self.inverter_software_version is not None
-            and self.inverter_serial_number is not None
+            info.name is not None
+            and info.model is not None
+            and info.software_version is not None
+            and info.serial_number is not None
         )
 
         if not config_metadata_loaded:
             try:
-                self.get_inverter_config_info()
+                self.get_inverter_config_info(dn)
             except Exception as ex:
-                _LOGGER.warning("Failed to fetch inverter config info: %s", ex)
+                _LOGGER.warning("Failed to fetch inverter config info for %s: %s", dn, ex)
 
         status_metadata_loaded = (
-            self.inverter_device_id is not None
-            and self.inverter_parent_dn is not None
+            info.device_id is not None
+            and info.parent_dn is not None
         )
 
         if not status_metadata_loaded:
             try:
-                self.get_inverter_status_info()
+                self.get_inverter_status_info(dn)
             except Exception as ex:
-                _LOGGER.warning("Failed to fetch inverter status info: %s", ex)
+                _LOGGER.warning("Failed to fetch inverter status info for %s: %s", dn, ex)
 
-    def get_inverter_config_info(self) -> dict:
+    def get_inverter_config_info(self, dn: str) -> dict:
         """Fetch inverter configuration metadata such as model, software version and serial number."""
-        if not self.inverter_dn:
+        info = self.inverters.get(dn)
+        if info is None:
             return {}
 
         self.refresh_csrf()
@@ -84,7 +95,7 @@ class FusionSolarInverterMixin:
         }
 
         params = {
-            "dn": self.inverter_dn,
+            "dn": dn,
             "signals": "50009,50010,50012,33595393",
             "_": int(time.time() * 1000),
         }
@@ -141,30 +152,32 @@ class FusionSolarInverterMixin:
             parsed[signal_id] = raw_value
 
         if "33595393" in parsed:
-            self.inverter_name = str(parsed["33595393"])
+            info.name = str(parsed["33595393"])
 
         if "50009" in parsed:
-            self.inverter_model = str(parsed["50009"])
+            info.model = str(parsed["50009"])
 
         if "50010" in parsed:
-            self.inverter_software_version = str(parsed["50010"])
+            info.software_version = str(parsed["50010"])
 
         if "50012" in parsed:
-            self.inverter_serial_number = str(parsed["50012"])
+            info.serial_number = str(parsed["50012"])
 
         _LOGGER.debug(
-            "Inverter config info loaded: name=%s model=%s sw=%s sn=%s",
-            self.inverter_name,
-            self.inverter_model,
-            self.inverter_software_version,
-            self.inverter_serial_number,
+            "Inverter config info loaded for %s: name=%s model=%s sw=%s sn=%s",
+            dn,
+            info.name,
+            info.model,
+            info.software_version,
+            info.serial_number,
         )
 
         return data
 
-    def get_inverter_status_info(self) -> dict:
+    def get_inverter_status_info(self, dn: str) -> dict:
         """Fetch inverter status metadata such as numeric device ID and parent station DN."""
-        if not self.inverter_dn:
+        info = self.inverters.get(dn)
+        if info is None:
             return {}
 
         self.refresh_csrf()
@@ -184,7 +197,7 @@ class FusionSolarInverterMixin:
             url,
             context="FusionSolar inverter status info",
             headers=headers,
-            data={"dn": self.inverter_dn},
+            data={"dn": dn},
         )
 
         payload = data.get("data") or {}
@@ -193,48 +206,50 @@ class FusionSolarInverterMixin:
 
         device_id = payload.get("dnId")
         if device_id not in (None, "", "--", "null"):
-            self.inverter_device_id = str(device_id)
+            info.device_id = str(device_id)
 
-        dn = payload.get("dn")
-        if dn not in (None, "", "--", "null"):
-            self.inverter_dn = str(dn)
+        canonical_dn = payload.get("dn")
+        if canonical_dn not in (None, "", "--", "null"):
+            info.canonical_dn = str(canonical_dn)
 
         parent_dn = payload.get("parentDn")
         if parent_dn not in (None, "", "--", "null"):
-            self.inverter_parent_dn = str(parent_dn)
+            info.parent_dn = str(parent_dn)
 
         name = payload.get("name")
-        if self.inverter_name in (None, "", "--", "null") and name not in (None, "", "--", "null"):
-            self.inverter_name = str(name)
+        if info.name in (None, "", "--", "null") and name not in (None, "", "--", "null"):
+            info.name = str(name)
 
         _LOGGER.debug(
-            "Inverter status info loaded: device_id=%s dn=%s parent_dn=%s name=%s",
-            self.inverter_device_id,
-            self.inverter_dn,
-            self.inverter_parent_dn,
-            self.inverter_name,
+            "Inverter status info loaded for %s: device_id=%s canonical_dn=%s parent_dn=%s name=%s",
+            dn,
+            info.device_id,
+            info.canonical_dn,
+            info.parent_dn,
+            info.name,
         )
 
         return data
 
-    def get_inverter_metadata_devices(self) -> list[Device]:
+    def get_inverter_metadata_devices(self, dn: str) -> list[Device]:
         """Return diagnostic inverter metadata entities."""
-        if not self.inverter_dn:
+        info = self.inverters.get(dn)
+        if info is None:
             return []
 
-        self._ensure_inverter_metadata_loaded()
+        self._ensure_inverter_metadata_loaded(dn)
 
-        station_dn = self.station or self.inverter_parent_dn
+        station_dn = self.station or info.parent_dn
 
         metadata_definitions = [
-            ("Inverter Name", self.inverter_name, "mdi:label-outline"),
-            ("Inverter Model", self.inverter_model, "mdi:solar-power-variant"),
-            ("Inverter Firmware", self.inverter_software_version, "mdi:chip"),
-            ("Inverter Serial", self.inverter_serial_number, "mdi:barcode"),
-            ("Inverter Device ID", self.inverter_device_id, "mdi:identifier"),
+            ("Inverter Name", info.name, "mdi:label-outline"),
+            ("Inverter Model", info.model, "mdi:solar-power-variant"),
+            ("Inverter Firmware", info.software_version, "mdi:chip"),
+            ("Inverter Serial", info.serial_number, "mdi:barcode"),
+            ("Inverter Device ID", info.device_id, "mdi:identifier"),
             ("Inverter Station", self.station_name, "mdi:home-lightning-bolt-outline"),
             ("Inverter Station DN", station_dn, "mdi:identifier"),
-            ("Inverter DN", self.inverter_dn, "mdi:identifier"),
+            ("Inverter DN", dn, "mdi:identifier"),
         ]
 
         devices: list[Device] = []
@@ -244,15 +259,16 @@ class FusionSolarInverterMixin:
                 DeviceType.SENSOR_TEXT,
                 raw_value,
                 icon,
+                dn=dn,
             )
             if device is not None:
                 devices.append(device)
 
         return devices
 
-    def get_inverter_realtime_data(self) -> dict:
+    def get_inverter_realtime_data(self, dn: str) -> dict:
         """Fetch real-time inverter data and dynamically expose only visible PV inputs."""
-        if not self.inverter_dn:
+        if not dn or dn not in self.inverters:
             return {}
 
         signal_map = get_inverter_signal_map()
@@ -263,7 +279,7 @@ class FusionSolarInverterMixin:
             "Roarand": self.csrf,
             "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
         }
-        params = {"deviceDn": self.inverter_dn, "displayAccessModel": "true"}
+        params = {"deviceDn": dn, "displayAccessModel": "true"}
 
         realtime_url = f"https://{self.data_host}{DEVICE_REALTIME_DATA_URL}"
         _LOGGER.debug("Getting inverter realtime data at: %s", realtime_url)
@@ -319,7 +335,7 @@ class FusionSolarInverterMixin:
             )
             kpi_url = (
                 f"https://{self.data_host}{DEVICE_REAL_KPI_URL}"
-                f"?deviceDn={self.inverter_dn}&{signal_str}"
+                f"?deviceDn={dn}&{signal_str}"
             )
             _LOGGER.debug("Getting inverter KPI data at: %s", kpi_url)
 

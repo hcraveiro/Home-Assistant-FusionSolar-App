@@ -137,7 +137,7 @@ class DynamicSensorTests(unittest.TestCase):
     def test_late_discovery_adds_sensor_only_once(self):
         self.assertEqual(len(self.listeners), 1)
         self.assertEqual(self.added_batches, [["forecast", "remaining"]])
-        self.devices.append(types.SimpleNamespace(device_type="power", device_id="Inverter PV1 Voltage"))
+        self.devices.append(types.SimpleNamespace(device_type="power", device_id="Inverter PV1 Voltage", device_unique_id="plant_inv_1_pv1_voltage"))
         self.notify()
         self.notify()
         self.assertEqual(len(self.added_batches), 2)
@@ -146,8 +146,8 @@ class DynamicSensorTests(unittest.TestCase):
 
     def test_existing_sensor_is_not_created_twice(self):
         self.devices.extend([
-            types.SimpleNamespace(device_type="power", device_id="Inverter PV1 Power"),
-            types.SimpleNamespace(device_type="power", device_id="Inverter PV2 Power"),
+            types.SimpleNamespace(device_type="power", device_id="Inverter PV1 Power", device_unique_id="plant_inv_1_pv1_power"),
+            types.SimpleNamespace(device_type="power", device_id="Inverter PV2 Power", device_unique_id="plant_inv_1_pv2_power"),
         ])
         self.notify()
         self.notify()

@@ -61,6 +61,7 @@ def sensor_module():
         DIAGNOSTIC = "diagnostic"
     register("homeassistant.helpers.entity", EntityCategory=EntityCategory)
     registry = Mock()
+    registry.async_get_or_create.return_value = types.SimpleNamespace(id="parent-id")
     register("homeassistant.helpers.device_registry", DeviceInfo=dict, async_get=lambda hass: registry)
     register("homeassistant.helpers.entity_platform", AddEntitiesCallback=object)
     class CoordinatorEntity:
@@ -108,7 +109,8 @@ def coordinator():
     )
     data = types.SimpleNamespace(controller_name="fusion_solar_app", forecast=None, devices=[])
     return types.SimpleNamespace(api=api, data=data, _plant_device_registry_id="parent-id",
-                                 get_device_by_id=Mock(return_value=None))
+                                 get_device_by_id=Mock(return_value=None),
+                                 get_device_by_unique_id=Mock(return_value=None))
 
 
 def device(sensor_module, device_id="House Load Power", kind=None, state=1.2):
@@ -130,7 +132,10 @@ def test_safe_float(sensor_module, value, expected):
     ("Power Sensor Status", "_power_sensor_meter-1"),
 ])
 def test_device_info_routes_to_correct_registry(coordinator, sensor_module, device_id, fragment):
-    info = sensor_module._build_device_info(coordinator, device(sensor_module, device_id))
+    test_device = device(sensor_module, device_id)
+    if device_id == "Inverter Model":
+        test_device.dn = "inverter-1"
+    info = sensor_module._build_device_info(coordinator, test_device)
     assert any(fragment in identifier[1] for identifier in info["identifiers"])
     if device_id != "House Load Power":
         assert info["via_device_id"] == "parent-id"
@@ -156,10 +161,10 @@ def test_sensor_coordinator_updates_preserve_previous_on_missing(coordinator, se
     initial = device(sensor_module, state=5)
     obj = sensor_module.FusionSolarSensor(coordinator, initial)
     updated = device(sensor_module, state=6)
-    coordinator.get_device_by_id.return_value = updated
+    coordinator.get_device_by_unique_id.return_value = updated
     obj._handle_coordinator_update()
     assert obj.native_value == 6
-    coordinator.get_device_by_id.return_value = None
+    coordinator.get_device_by_unique_id.return_value = None
     obj._handle_coordinator_update()
     assert obj.native_value == 6
 
@@ -246,12 +251,13 @@ async def test_sensors_discovered_after_initial_setup_without_duplicates(coordin
     batches = []
     await sensor_module.async_setup_entry(hass, entry, lambda new: batches.append(list(new)))
     assert len(batches) == 2
-    assert [sensor.device_id for sensor in batches[0]] == ["Panel Production Power"]
+    assert [sensor.device_id for sensor in batches[0] if isinstance(sensor, sensor_module.FusionSolarSensor)] == ["Panel Production Power"]
     assert len(batches[1]) == 2
     assert len(listeners) == 1
 
     # The inverter's PV string appears when production starts, without a reload.
     pv = device(sensor_module, "Inverter PV1 Voltage", state=400)
+    pv.device_unique_id = "unique-pv1-voltage"
     coordinator.data.devices = [first, pv]
     listeners[0]()
     assert [sensor.device_id for sensor in batches[-1]] == ["Inverter PV1 Voltage"]

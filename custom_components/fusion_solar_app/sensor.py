@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -103,13 +104,21 @@ def _build_device_info(
 
     if device is not None:
         if device.device_id.startswith(INVERTER_DEVICE_SENSOR_PREFIX):
-            inverter_dn = getattr(coordinator.api, "inverter_dn", None) or "unknown_inverter"
-            inverter_model = getattr(coordinator.api, "inverter_model", None) or "FusionSolar Inverter"
-            inverter_software_version = getattr(coordinator.api, "inverter_software_version", None) or "1.0"
-            inverter_serial_number = getattr(coordinator.api, "inverter_serial_number", None)
+            inverter_dn = device.dn or "unknown_inverter"
+            info = getattr(coordinator.api, "inverters", {}).get(inverter_dn)
+
+            inverter_name = getattr(info, "name", None)
+            inverter_model = getattr(info, "model", None) or "FusionSolar Inverter"
+            inverter_software_version = getattr(info, "software_version", None) or "1.0"
+            inverter_serial_number = getattr(info, "serial_number", None)
+
+            if not inverter_name:
+                inverter_name = f"Fusion Solar Inverter ({inverter_serial_number or inverter_dn})"
+
+            identifier_dn = getattr(info, "canonical_dn", None) or inverter_dn
 
             return DeviceInfo(
-                name="Fusion Solar Inverter",
+                name=inverter_name,
                 manufacturer="Huawei",
                 model=inverter_model,
                 sw_version=inverter_software_version,
@@ -117,7 +126,7 @@ def _build_device_info(
                 identifiers={
                     (
                         DOMAIN,
-                        f"{controller_name}_{station_dn}_inverter_{inverter_dn}",
+                        f"{controller_name}_{station_dn}_inverter_{identifier_dn}",
                     )
                 },
                 via_device_id=parent_device_id,
@@ -431,7 +440,7 @@ async def async_setup_entry(
     )
     coordinator._plant_device_registry_id = plant.id
 
-    known_sensor_ids: set[tuple[DeviceType, str]] = set()
+    known_sensor_ids: set[str] = set()
 
     @callback
     def add_discovered_sensors() -> None:
@@ -441,7 +450,7 @@ async def async_setup_entry(
             if device.device_type not in SUPPORTED_SENSOR_DEVICE_TYPES:
                 continue
 
-            sensor_key = (device.device_type, device.device_id)
+            sensor_key = device.device_unique_id
             if sensor_key in known_sensor_ids:
                 continue
 
@@ -519,9 +528,8 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Update sensor with latest data from coordinator."""
-        updated_device = self.coordinator.get_device_by_id(
-            self._device_type,
-            self.device_id,
+        updated_device = self.coordinator.get_device_by_unique_id(
+            self._device_unique_id,
         )
 
         if updated_device is not None:
@@ -572,7 +580,7 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> float | int | datetime | str | None:
         """Return the state of the entity."""
-        if self.device is None:
+        if self.device is None or self.device.state is None:
             return None
 
         dtype = self.device.device_type
@@ -690,6 +698,42 @@ class FusionSolarForecastSensor(CoordinatorEntity, SensorEntity):
             return None
 
 
+def _bounded_forecast_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
+    """Keep forecast sensor attributes within Home Assistant's 16 KiB state limit."""
+    max_bytes = 15000
+
+    def encoded_size() -> int:
+        return len(json.dumps(attributes, default=str, ensure_ascii=False).encode("utf-8"))
+
+    if encoded_size() <= max_bytes:
+        return attributes
+
+    # The full source curve duplicates the two ApexCharts-ready series.
+    attributes.pop("curve", None)
+    if encoded_size() <= max_bytes:
+        return attributes
+
+    attributes.pop("debug", None)
+    if encoded_size() <= max_bytes:
+        return attributes
+
+    # Preserve series endpoints while progressively reducing chart resolution.
+    for key in ("forecast_power_chart", "forecast_cumulative_chart"):
+        points = attributes.get(key)
+        if not isinstance(points, list):
+            continue
+        while len(points) > 2 and encoded_size() > max_bytes:
+            points = points[::2]
+            if points[-1] != attributes[key][-1]:
+                points.append(attributes[key][-1])
+            attributes[key] = points
+
+    if encoded_size() > max_bytes:
+        attributes.pop("forecast_power_chart", None)
+        attributes.pop("forecast_cumulative_chart", None)
+    return attributes
+
+
 class FusionSolarForecastedTodaySensor(FusionSolarForecastSensor):
     """Fusion Solar forecasted production today sensor."""
 
@@ -731,7 +775,7 @@ class FusionSolarForecastedTodaySensor(FusionSolarForecastSensor):
         if debug:
             attrs["debug"] = debug
     
-        return attrs
+        return _bounded_forecast_attributes(attrs)
 
 
 class FusionSolarRemainingTodaySensor(FusionSolarForecastSensor):
