@@ -334,7 +334,8 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
                     else:
                         return await self.async_step_select_station()
     
-                errors["base"] = "invalid_captcha"
+                if "base" not in errors:
+                    errors["base"] = "invalid_captcha"
     
             except APIAuthCaptchaError:
                 errors["base"] = "invalid_captcha"
