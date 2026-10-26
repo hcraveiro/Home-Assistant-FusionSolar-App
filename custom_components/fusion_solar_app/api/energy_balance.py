@@ -8,7 +8,7 @@ from dateutil.relativedelta import relativedelta
 
 from ..const import DATA_REFERER_URL, ENERGY_BALANCE_URL
 from ..utils import extract_numeric
-from .exceptions import APIDataStructureError
+from .exceptions import APIConnectionError, APIDataStructureError
 from .models import ENERGY_BALANCE_CALL_TYPE
 
 
@@ -157,7 +157,11 @@ class FusionSolarEnergyBalanceMixin:
         for period, call_type in periods.items():
             try:
                 response = self.call_energy_balance(call_type)
-                payload = response.get("data") if isinstance(response, dict) else None
+                payload = (
+                    response.get("data")
+                    if isinstance(response, dict) and response.get("success") is not False
+                    else None
+                )
                 for category, key in fields.items():
                     output[f"{category}_{period}"] = self._optional_grid_energy(payload, key)
                 if period in ("month", "year", "lifetime"):
@@ -170,7 +174,7 @@ class FusionSolarEnergyBalanceMixin:
                             values = [self._optional_grid_energy({"v": item}, "v") for item in readings]
                             if all(value is not None for value in values):
                                 output[f"{category}_{period}"] = round(sum(values), 4)
-            except (KeyError, IndexError, TypeError, ValueError, APIDataStructureError) as ex:
+            except (KeyError, IndexError, TypeError, ValueError, APIConnectionError, APIDataStructureError) as ex:
                 _LOGGER.warning("iSitePower-M %s energy not available: %s", period, ex)
 
         try:
@@ -178,7 +182,9 @@ class FusionSolarEnergyBalanceMixin:
             # Empty/incomplete week data is not evidence of zero energy.
             if days:
                 daily_payloads = [
-                    item.get("data") if isinstance(item, dict) else None
+                    item.get("data")
+                    if isinstance(item, dict) and item.get("success") is not False
+                    else None
                     for item in days
                 ]
                 for category, key in fields.items():
@@ -187,7 +193,7 @@ class FusionSolarEnergyBalanceMixin:
                         output[f"{category}_today"] = values[-1]
                     if all(value is not None for value in values):
                         output[f"{category}_week"] = round(sum(values), 4)
-        except (KeyError, IndexError, TypeError, ValueError, APIDataStructureError) as ex:
+        except (KeyError, IndexError, TypeError, ValueError, APIConnectionError, APIDataStructureError) as ex:
             _LOGGER.warning("iSitePower-M daily energy not available: %s", ex)
 
         # Per-period battery/load arrays and energy direction are not reliably
