@@ -614,6 +614,7 @@ def test_isitepower_power_cube_marks_nonstandard_energy_architecture(modules):
 
 @pytest.mark.parametrize(("reading", "expected"), [
     ("1376.860 kWh", 1376.860),
+    ("1376860 Wh", 1376.860),
     ("0 kWh", 0.0),
     ("--", None),
     ("null", None),
