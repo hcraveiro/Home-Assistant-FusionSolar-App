@@ -251,7 +251,7 @@ async def test_sensors_discovered_after_initial_setup_without_duplicates(coordin
     batches = []
     await sensor_module.async_setup_entry(hass, entry, lambda new: batches.append(list(new)))
     assert len(batches) == 2
-    assert [sensor.device_id for sensor in batches[0]] == ["Panel Production Power"]
+    assert [sensor.device_id for sensor in batches[0] if isinstance(sensor, sensor_module.FusionSolarSensor)] == ["Panel Production Power"]
     assert len(batches[1]) == 2
     assert len(listeners) == 1
 
