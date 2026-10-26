@@ -361,7 +361,6 @@ async def test_captcha_submit_errors_remain_on_captcha_screen(config, hass, cred
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="Known bug: station list failure after valid CAPTCHA is overwritten as invalid_captcha")
 async def test_captcha_success_with_station_fetch_failure_does_not_create_entry(config, hass, credentials, api):
     flow = config.FusionSolarConfigFlow()
     flow.hass = hass
