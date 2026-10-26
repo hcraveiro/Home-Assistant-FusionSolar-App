@@ -37,11 +37,12 @@ def coordinator_module():
     package("homeassistant")
     module("homeassistant.config_entries", ConfigEntry=type("ConfigEntry", (), {}))
     module("homeassistant.const", CONF_PASSWORD="password", CONF_SCAN_INTERVAL="scan_interval", CONF_USERNAME="username")
-    module("homeassistant.core", HomeAssistant=type("HomeAssistant", (), {}))
+    module("homeassistant.core", HomeAssistant=type("HomeAssistant", (), {}), callback=lambda function: function)
     class ConfigEntryAuthFailed(Exception):
         pass
     module("homeassistant.exceptions", ConfigEntryAuthFailed=ConfigEntryAuthFailed)
     package("homeassistant.helpers")
+    module("homeassistant.helpers.device_registry", async_get=lambda hass: Mock())
     class DataUpdateCoordinator:
         pass
     class UpdateFailed(Exception):
