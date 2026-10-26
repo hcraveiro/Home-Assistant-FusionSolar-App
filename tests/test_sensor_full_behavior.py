@@ -257,6 +257,7 @@ async def test_sensors_discovered_after_initial_setup_without_duplicates(coordin
 
     # The inverter's PV string appears when production starts, without a reload.
     pv = device(sensor_module, "Inverter PV1 Voltage", state=400)
+    pv.device_unique_id = "unique-pv1-voltage"
     coordinator.data.devices = [first, pv]
     listeners[0]()
     assert [sensor.device_id for sensor in batches[-1]] == ["Inverter PV1 Voltage"]
