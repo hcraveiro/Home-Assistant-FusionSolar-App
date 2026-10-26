@@ -1,6 +1,7 @@
 """Fusion Solar App installation helpers."""
 
 import logging
+import re
 from typing import Any
 from urllib.parse import unquote
 
@@ -135,18 +136,21 @@ class FusionSolarInstallationMixin:
 
     @staticmethod
     def _valid_flow_power(raw: Any) -> float | None:
-        """Return an actual flow reading, never treating placeholders as zero."""
+        """Parse a real numeric flow reading, including attached kW/W/% units."""
         if raw is None or isinstance(raw, bool):
             return None
-        if isinstance(raw, str) and raw.strip().lower() in {"", "--", "null", "none"}:
-            return None
+        if isinstance(raw, str):
+            match = re.fullmatch(
+                r"\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\s*(?:kW|W|%)?\\s*",
+                raw,
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                return None
+            return float(match.group(1))
         try:
-            value = extract_numeric(raw)
-            # extract_numeric returns zero for malformed strings; reject those.
-            if isinstance(raw, str):
-                float(raw.strip().split()[0])
-            return value
-        except (ValueError, TypeError, IndexError):
+            return float(raw)
+        except (ValueError, TypeError, OverflowError):
             return None
 
     def _parse_installation_flow_nodes(
