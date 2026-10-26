@@ -119,8 +119,70 @@ class FusionSolarEnergyBalanceMixin:
         else:
             output["battery_capacity"] = self.battery_capacity
 
+    def _update_isitepower_energy_balance(self, output):
+        """Read only verified conventional energy fields on iSitePower-M.
+
+        The iSitePower-M API can return incomplete or empty station balance
+        payloads. Parse each available field independently. This does not map
+        device-specific Mains counters to station totals.
+        """
+        fields = {
+            "grid_consumption": "totalBuyPower",
+            "grid_injection": "totalOnGridPower",
+            "panel_production": "totalProductPower",
+            "panel_production_consumption": "totalSelfUsePower",
+            "house_load": "totalUsePower",
+        }
+        periods = {
+            "month": ENERGY_BALANCE_CALL_TYPE.MONTH,
+            "year": ENERGY_BALANCE_CALL_TYPE.YEAR,
+            "lifetime": ENERGY_BALANCE_CALL_TYPE.LIFETIME,
+        }
+        for period, call_type in periods.items():
+            try:
+                response = self.call_energy_balance(call_type)
+                payload = response.get("data") if isinstance(response, dict) else None
+                for category, key in fields.items():
+                    output[f"{category}_{period}"] = self._optional_grid_energy(payload, key)
+                if period in ("month", "year", "lifetime"):
+                    for category, key in (
+                        ("battery_injection", "chargePower"),
+                        ("battery_consumption", "dischargePower"),
+                    ):
+                        readings = payload.get(key) if isinstance(payload, dict) else None
+                        if isinstance(readings, list) and readings:
+                            values = [self._optional_grid_energy({"v": item}, "v") for item in readings]
+                            if all(value is not None for value in values):
+                                output[f"{category}_{period}"] = round(sum(values), 4)
+            except (KeyError, IndexError, TypeError, ValueError, APIDataStructureError) as ex:
+                _LOGGER.warning("iSitePower-M %s energy not available: %s", period, ex)
+
+        try:
+            days = self.get_week_data()
+            # Empty/incomplete week data is not evidence of zero energy.
+            if days:
+                daily_payloads = [
+                    item.get("data") if isinstance(item, dict) else None
+                    for item in days
+                ]
+                for category, key in fields.items():
+                    values = [self._optional_grid_energy(item, key) for item in daily_payloads]
+                    if values[-1] is not None:
+                        output[f"{category}_today"] = values[-1]
+                    if all(value is not None for value in values):
+                        output[f"{category}_week"] = round(sum(values), 4)
+        except (KeyError, IndexError, TypeError, ValueError, APIDataStructureError) as ex:
+            _LOGGER.warning("iSitePower-M daily energy not available: %s", ex)
+
+        # Per-period battery/load arrays and energy direction are not reliably
+        # described by the provided INTL samples. Do not extrapolate them.
+        self._update_output_with_self_consumption_ratios(output)
+
     def update_output_with_energy_balance(self, output: Dict[str, Optional[float | str]]):
         """Populate energy balance values in the output dictionary."""
+        if getattr(self, "_is_isitepower_m", False):
+            self._update_isitepower_energy_balance(output)
+            return
         self.refresh_csrf()
 
         _LOGGER.debug("Getting Month's energy data")
