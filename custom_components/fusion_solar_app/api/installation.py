@@ -368,5 +368,10 @@ class FusionSolarInstallationMixin:
         devices.extend(self._build_inverter_devices())
         devices.extend(self._build_battery_devices())
         devices.extend(self._build_power_sensor_devices(flow_data_nodes))
+
+        try:
+            devices.extend(self.get_optimizer_devices())
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch optional optimizer data: %s", ex)
     
         return devices
