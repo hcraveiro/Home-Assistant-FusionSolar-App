@@ -26,6 +26,7 @@ def modules():
         ("api.signal_maps", ROOT / "api/signal_maps.py"),
         ("api.installation", ROOT / "api/installation.py"),
         ("api.energy_balance", ROOT / "api/energy_balance.py"),
+        ("api.station", ROOT / "api/station.py"),
     ):
         fullname = f"{PREFIX}.{name}"
         spec = importlib.util.spec_from_file_location(fullname, path)
@@ -981,3 +982,49 @@ def test_isitepower_optional_energy_disconnect_preserves_other_periods(modules):
     assert output["grid_consumption_lifetime"] == 25
     assert output.get("grid_consumption_year") is None
     assert output.get("grid_consumption_today") is None
+
+
+@pytest.mark.parametrize(("flag", "capacity", "expected"), [
+    ("true", 0, None),
+    (True, "0", None),
+    ("TRUE", None, None),
+    ("false", 0, 0),
+    (False, 15, 15),
+    ("true", "15.0 kWh", 15.0),
+])
+def test_station_flags_prevent_isitepower_zero_capacity_poisoning(
+    modules, flag, capacity, expected
+):
+    """Station metadata is parsed before the first power_cube update."""
+    station_module = sys.modules[f"{PREFIX}.api.station"]
+    api = station_module.FusionSolarStationMixin()
+    api.station = "NE=SELECTED"
+    api.station_name = None
+    api.battery_capacity = None
+    api._update_station_metadata_from_station_list({"data": {"list": [
+        {"dn": "NE=SELECTED", "existISitePowerM": flag,
+         "batteryCapacity": capacity},
+    ]}})
+    assert api.battery_capacity == expected
+    assert api._station_is_isitepower_m is (str(flag).lower() == "true")
+
+
+def test_station_flag_keeps_unknown_battery_when_flow_node_temporarily_missing(modules):
+    """A missing power_cube on one poll must not reclassify the station."""
+    api = make_installation(modules)
+    api._station_is_isitepower_m = True
+    api.battery_capacity = None
+    api._get_installation_flow_data = Mock(return_value=([], []))
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(side_effect=lambda output: [output.copy()])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    readings = api.get_devices()[0]
+    assert api._is_isitepower_m is True
+    assert readings["battery_capacity"] is None
+    assert readings["grid_consumption_lifetime"] is None
+    assert readings["battery_injection_lifetime"] is None
