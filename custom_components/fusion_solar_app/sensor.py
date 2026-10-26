@@ -440,7 +440,7 @@ async def async_setup_entry(
     )
     coordinator._plant_device_registry_id = plant.id
 
-    known_sensor_ids: set[tuple[DeviceType, str]] = set()
+    known_sensor_ids: set[str] = set()
 
     @callback
     def add_discovered_sensors() -> None:
@@ -450,7 +450,7 @@ async def async_setup_entry(
             if device.device_type not in SUPPORTED_SENSOR_DEVICE_TYPES:
                 continue
 
-            sensor_key = (device.device_type, device.device_id)
+            sensor_key = device.device_unique_id
             if sensor_key in known_sensor_ids:
                 continue
 
