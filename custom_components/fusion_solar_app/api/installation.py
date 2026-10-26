@@ -166,8 +166,15 @@ class FusionSolarInstallationMixin:
                 continue
             label = node.get("name", "")
             description = node.get("description") or {}
+            # iSitePower-M reports battery SOC under the power_cube node.
+            # Its description uses the legacy energy_store label, while the
+            # flow node itself has no inverter DN and may list several devices.
+            is_battery_node = label == "neteco.pvms.devTypeLangKey.energy_store" or (
+                label == "neteco.pvms.devTypeLangKey.power_cube"
+                and description.get("label") == "neteco.pvms.devTypeLangKey.energy_store"
+            )
             value = self._valid_flow_power(description.get("value"))
-            if label == "neteco.pvms.devTypeLangKey.energy_store":
+            if is_battery_node:
                 tips = node.get("deviceTips") or {}
                 soc_raw = tips.get("SOC")
                 if soc_raw not in (None, "", "--", "null"):
