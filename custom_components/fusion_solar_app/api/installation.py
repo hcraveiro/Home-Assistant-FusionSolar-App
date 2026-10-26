@@ -173,6 +173,8 @@ class FusionSolarInstallationMixin:
             # iSitePower-M reports battery SOC under the power_cube node.
             # Its description uses the legacy energy_store label, while the
             # flow node itself has no inverter DN and may list several devices.
+            if label == "neteco.pvms.devTypeLangKey.power_cube" and node.get("mocId") == 60014:
+                self._is_isitepower_m = True
             is_battery_node = label == "neteco.pvms.devTypeLangKey.energy_store" or (
                 label == "neteco.pvms.devTypeLangKey.power_cube"
                 and description.get("label") == "neteco.pvms.devTypeLangKey.energy_store"
@@ -355,6 +357,13 @@ class FusionSolarInstallationMixin:
         flow_data_nodes, flow_data_links = self._get_installation_flow_data()
     
         self._parse_installation_flow_nodes(flow_data_nodes, output)
+        if getattr(self, "_is_isitepower_m", False):
+            # iSitePower-M can omit conventional station energy counters.
+            # Preserve unknown readings rather than showing synthetic zero kWh.
+            for period in ("today", "week", "month", "year", "lifetime"):
+                output[f"grid_consumption_{period}"] = None
+                output[f"grid_injection_{period}"] = None
+            output["battery_capacity"] = None
         self._parse_installation_flow_links(flow_data_links, output)
     
         self._discover_battery_dn_from_flow_nodes(flow_data_nodes)
