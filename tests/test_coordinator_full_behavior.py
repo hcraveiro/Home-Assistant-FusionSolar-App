@@ -42,6 +42,7 @@ def coordinator_module():
         pass
     module("homeassistant.exceptions", ConfigEntryAuthFailed=ConfigEntryAuthFailed)
     package("homeassistant.helpers")
+    module("homeassistant.helpers.device_registry", async_get=lambda hass: Mock())
     class DataUpdateCoordinator:
         pass
     class UpdateFailed(Exception):
