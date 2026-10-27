@@ -8,7 +8,7 @@ from dateutil.relativedelta import relativedelta
 
 from ..const import DATA_REFERER_URL, ENERGY_BALANCE_URL
 from ..utils import extract_numeric
-from .exceptions import APIDataStructureError
+from .exceptions import APIConnectionError, APIDataStructureError
 from .models import ENERGY_BALANCE_CALL_TYPE
 
 
@@ -33,6 +33,22 @@ class FusionSolarEnergyBalanceMixin:
         periods = ("today", "week", "month", "year", "lifetime")
 
         for period in periods:
+            if getattr(self, "_is_isitepower_m", False):
+                # Unknown inputs cannot establish meaningful ratios.
+                consumption = output.get(f"panel_production_consumption_{period}")
+                load = output.get(f"house_load_{period}")
+                production = output.get(f"panel_production_{period}")
+                output[f"self_consumption_ratio_{period}"] = (
+                    self._calculate_ratio_percentage(float(consumption), float(load))
+                    if consumption is not None and load is not None and float(load) > 0
+                    else None
+                )
+                output[f"self_consumption_ratio_by_production_{period}"] = (
+                    self._calculate_ratio_percentage(float(consumption), float(production))
+                    if consumption is not None and production is not None and float(production) > 0
+                    else None
+                )
+                continue
             self_use_value = float(output.get(f"panel_production_consumption_{period}", 0.0) or 0.0)
             house_load_value = float(output.get(f"house_load_{period}", 0.0) or 0.0)
             panel_production_value = float(output.get(f"panel_production_{period}", 0.0) or 0.0)
@@ -46,28 +62,157 @@ class FusionSolarEnergyBalanceMixin:
                 panel_production_value,
             )
 
+    @staticmethod
+    def _optional_grid_energy(payload, key):
+        """Read a measured counter; missing/invalid values are not zero."""
+        if not isinstance(payload, dict):
+            return None
+        raw = payload.get(key)
+        if raw is None or isinstance(raw, bool):
+            return None
+        if isinstance(raw, str) and raw.strip().lower() in ("", "--", "null", "none"):
+            return None
+        if isinstance(raw, str):
+            # extract_numeric() returns 0 for unparsable text. Validate the
+            # upstream number first so a protocol error never becomes 0 kWh.
+            import re
+            match = re.fullmatch(
+                r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:kWh|Wh)?\s*",
+                raw,
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                return None
+            raw = match.group(1)
+            unit = match.group(0).strip().lower()
+            in_wh = unit.endswith("wh") and not unit.endswith("kwh")
+        else:
+            in_wh = False
+        try:
+            value = float(raw)
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if not __import__("math").isfinite(value):
+            return None
+        # Explicit Wh readings must be converted to the kWh exposed by HA.
+        return value / 1000 if in_wh else value
+
+    def _set_grid_energy(self, output, period, direction, payload):
+        """Do not convert missing iSitePower-M counters into false zero kWh."""
+        key = "totalBuyPower" if direction == "consumption" else "totalOnGridPower"
+        if getattr(self, "_is_isitepower_m", False):
+            output[f"grid_{direction}_{period}"] = self._optional_grid_energy(payload, key)
+        else:
+            output[f"grid_{direction}_{period}"] = extract_numeric(payload[key])
+
     def update_output_with_battery_capacity(self, output: Dict[str, Optional[float | str]]):
         """Populate battery capacity in the output dictionary."""
         if self.battery_capacity is None or self.battery_capacity == 0.0:
             _LOGGER.debug("Getting Battery capacity")
             self.refresh_csrf()
             station_list = self.get_station_list()
-            station_data = station_list["data"]["list"][0]
-            output["battery_capacity"] = station_data["batteryCapacity"]
-            self.battery_capacity = station_data["batteryCapacity"]
+            stations = station_list.get("data", {}).get("list") or []
+            selected_dn = getattr(self, "station", None)
+            station_data = next(
+                (station for station in stations if station.get("dn") == selected_dn),
+                None,
+            )
+            if station_data is None:
+                if getattr(self, "_is_isitepower_m", False):
+                    # A capacity from a different station is not a valid fallback.
+                    station_data = {}
+                else:
+                    station_data = stations[0] if stations else {}
+            capacity = station_data.get("batteryCapacity")
+            if getattr(self, "_is_isitepower_m", False):
+                # A power_cube with no conventional capacity field is still
+                # an installed battery; zero is not a verified capacity.
+                capacity = self._optional_grid_energy({"capacity": capacity}, "capacity")
+                if capacity is None or capacity <= 0:
+                    capacity = None
+            output["battery_capacity"] = capacity
+            self.battery_capacity = capacity
         else:
             output["battery_capacity"] = self.battery_capacity
 
+    def _update_isitepower_energy_balance(self, output):
+        """Read only verified conventional energy fields on iSitePower-M.
+
+        The iSitePower-M API can return incomplete or empty station balance
+        payloads. Parse each available field independently. This does not map
+        device-specific Mains counters to station totals.
+        """
+        fields = {
+            "grid_consumption": "totalBuyPower",
+            "grid_injection": "totalOnGridPower",
+            "panel_production": "totalProductPower",
+            "panel_production_consumption": "totalSelfUsePower",
+            "house_load": "totalUsePower",
+        }
+        periods = {
+            "month": ENERGY_BALANCE_CALL_TYPE.MONTH,
+            "year": ENERGY_BALANCE_CALL_TYPE.YEAR,
+            "lifetime": ENERGY_BALANCE_CALL_TYPE.LIFETIME,
+        }
+        for period, call_type in periods.items():
+            try:
+                response = self.call_energy_balance(call_type)
+                payload = (
+                    response.get("data")
+                    if isinstance(response, dict) and response.get("success") is not False
+                    else None
+                )
+                for category, key in fields.items():
+                    output[f"{category}_{period}"] = self._optional_grid_energy(payload, key)
+                if period in ("month", "year", "lifetime"):
+                    for category, key in (
+                        ("battery_injection", "chargePower"),
+                        ("battery_consumption", "dischargePower"),
+                    ):
+                        readings = payload.get(key) if isinstance(payload, dict) else None
+                        if isinstance(readings, list) and readings:
+                            values = [self._optional_grid_energy({"v": item}, "v") for item in readings]
+                            if all(value is not None for value in values):
+                                output[f"{category}_{period}"] = round(sum(values), 4)
+            except (KeyError, IndexError, TypeError, ValueError, APIConnectionError, APIDataStructureError) as ex:
+                _LOGGER.warning("iSitePower-M %s energy not available: %s", period, ex)
+
+        try:
+            days = self.get_week_data()
+            # Empty/incomplete week data is not evidence of zero energy.
+            if days:
+                daily_payloads = [
+                    item.get("data")
+                    if isinstance(item, dict) and item.get("success") is not False
+                    else None
+                    for item in days
+                ]
+                for category, key in fields.items():
+                    values = [self._optional_grid_energy(item, key) for item in daily_payloads]
+                    if values[-1] is not None:
+                        output[f"{category}_today"] = values[-1]
+                    if all(value is not None for value in values):
+                        output[f"{category}_week"] = round(sum(values), 4)
+        except (KeyError, IndexError, TypeError, ValueError, APIConnectionError, APIDataStructureError) as ex:
+            _LOGGER.warning("iSitePower-M daily energy not available: %s", ex)
+
+        # Per-period battery/load arrays and energy direction are not reliably
+        # described by the provided INTL samples. Do not extrapolate them.
+        self._update_output_with_self_consumption_ratios(output)
+
     def update_output_with_energy_balance(self, output: Dict[str, Optional[float | str]]):
         """Populate energy balance values in the output dictionary."""
+        if getattr(self, "_is_isitepower_m", False):
+            self._update_isitepower_energy_balance(output)
+            return
         self.refresh_csrf()
 
         _LOGGER.debug("Getting Month's energy data")
         month_data = self.call_energy_balance(ENERGY_BALANCE_CALL_TYPE.MONTH)
         output["panel_production_month"] = extract_numeric(month_data["data"]["totalProductPower"])
         output["panel_production_consumption_month"] = extract_numeric(month_data["data"]["totalSelfUsePower"])
-        output["grid_injection_month"] = extract_numeric(month_data["data"]["totalOnGridPower"])
-        output["grid_consumption_month"] = extract_numeric(month_data["data"]["totalBuyPower"])
+        self._set_grid_energy(output, "month", "injection", month_data["data"])
+        self._set_grid_energy(output, "month", "consumption", month_data["data"])
 
         month_charge_power_list = month_data["data"]["chargePower"]
         if month_charge_power_list:
@@ -89,8 +234,8 @@ class FusionSolarEnergyBalanceMixin:
 
         _LOGGER.debug("Getting Today's energy data")
         week_data = self.get_week_data()
-        output["grid_consumption_today"] = extract_numeric(week_data[-1]["data"]["totalBuyPower"])
-        output["grid_injection_today"] = extract_numeric(week_data[-1]["data"]["totalOnGridPower"])
+        self._set_grid_energy(output, "today", "consumption", week_data[-1]["data"])
+        self._set_grid_energy(output, "today", "injection", week_data[-1]["data"])
 
         if month_charge_power_list:
             charge_value_today = month_charge_power_list[datetime.now().day - 1]
@@ -161,24 +306,39 @@ class FusionSolarEnergyBalanceMixin:
         output["battery_injection_week"] = battery_injection_value_week
         output["battery_consumption_week"] = battery_consumption_value_week
         if week_data:
-            output["grid_consumption_week"] = sum(
-                extract_numeric(day["data"]["totalBuyPower"])
-                for day in week_data
-                if (day["data"]["totalBuyPower"] != "--" and day["data"]["totalBuyPower"] != "null")
-            )
-            output["grid_injection_week"] = sum(
-                extract_numeric(day["data"]["totalOnGridPower"])
-                for day in week_data
-                if (day["data"]["totalOnGridPower"] != "--" and day["data"]["totalOnGridPower"] != "null")
-            )
-
+            if getattr(self, "_is_isitepower_m", False):
+                for direction, field in (
+                    ("consumption", "totalBuyPower"),
+                    ("injection", "totalOnGridPower"),
+                ):
+                    readings = [
+                        self._optional_grid_energy(day.get("data"), field)
+                        for day in week_data
+                    ]
+                    output[f"grid_{direction}_week"] = (
+                        round(sum(readings), 4)
+                        if readings and all(value is not None for value in readings)
+                        else None
+                    )
+            else:
+                output["grid_consumption_week"] = sum(
+                    extract_numeric(day["data"]["totalBuyPower"])
+                    for day in week_data
+                    if (day["data"]["totalBuyPower"] != "--" and day["data"]["totalBuyPower"] != "null")
+                )
+                output["grid_injection_week"] = sum(
+                    extract_numeric(day["data"]["totalOnGridPower"])
+                    for day in week_data
+                    if (day["data"]["totalOnGridPower"] != "--" and day["data"]["totalOnGridPower"] != "null")
+                )
+    
         _LOGGER.debug("Getting Years's energy data")
         year_data = self.call_energy_balance(ENERGY_BALANCE_CALL_TYPE.YEAR)
         output["panel_production_consumption_year"] = extract_numeric(year_data["data"]["totalSelfUsePower"])
         output["house_load_year"] = extract_numeric(year_data["data"]["totalUsePower"])
         output["panel_production_year"] = extract_numeric(year_data["data"]["totalProductPower"])
-        output["grid_consumption_year"] = extract_numeric(year_data["data"]["totalBuyPower"])
-        output["grid_injection_year"] = extract_numeric(year_data["data"]["totalOnGridPower"])
+        self._set_grid_energy(output, "year", "consumption", year_data["data"])
+        self._set_grid_energy(output, "year", "injection", year_data["data"])
 
         charge_power_list = year_data["data"]["chargePower"]
         if charge_power_list:
@@ -209,8 +369,8 @@ class FusionSolarEnergyBalanceMixin:
         output["panel_production_lifetime"] = extract_numeric(lifetime_data["data"]["totalProductPower"])
         output["panel_production_consumption_lifetime"] = extract_numeric(lifetime_data["data"]["totalSelfUsePower"])
         output["house_load_lifetime"] = extract_numeric(lifetime_data["data"]["totalUsePower"])
-        output["grid_consumption_lifetime"] = extract_numeric(lifetime_data["data"]["totalBuyPower"])
-        output["grid_injection_lifetime"] = extract_numeric(lifetime_data["data"]["totalOnGridPower"])
+        self._set_grid_energy(output, "lifetime", "consumption", lifetime_data["data"])
+        self._set_grid_energy(output, "lifetime", "injection", lifetime_data["data"])
 
         lifetime_charge_power_list = lifetime_data["data"]["chargePower"]
         if lifetime_charge_power_list:
