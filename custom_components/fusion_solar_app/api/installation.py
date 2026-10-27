@@ -7,7 +7,7 @@ from urllib.parse import unquote
 
 from ..const import DATA_URL
 from ..utils import extract_numeric
-from .exceptions import APIDataStructureError
+from .exceptions import APIConnectionError, APIDataStructureError
 from .models import Device, DeviceType
 from .signal_maps import DEVICES, get_inverter_signal_map
 
@@ -173,6 +173,8 @@ class FusionSolarInstallationMixin:
             # iSitePower-M reports battery SOC under the power_cube node.
             # Its description uses the legacy energy_store label, while the
             # flow node itself has no inverter DN and may list several devices.
+            if label == "neteco.pvms.devTypeLangKey.power_cube" and node.get("mocId") == 60014:
+                self._is_isitepower_m = True
             is_battery_node = label == "neteco.pvms.devTypeLangKey.energy_store" or (
                 label == "neteco.pvms.devTypeLangKey.power_cube"
                 and description.get("label") == "neteco.pvms.devTypeLangKey.energy_store"
@@ -217,7 +219,8 @@ class FusionSolarInstallationMixin:
             # Previously discovered batteries are not absent merely because telemetry drops.
             # Only a known zero capacity with no discovered DN establishes no battery.
             confirmed_no_battery = (
-                getattr(self, "battery_dn", None) is None
+                not getattr(self, "_is_isitepower_m", False)
+                and getattr(self, "battery_dn", None) is None
                 and getattr(self, "battery_capacity", None) == 0
             )
             if confirmed_no_battery:
@@ -259,8 +262,22 @@ class FusionSolarInstallationMixin:
         output: dict[str, float | int | str],
     ) -> None:
         """Enrich installation output with calculated and external domain data."""
-        self.update_output_with_battery_capacity(output)
-        self.update_output_with_energy_balance(output)
+        if getattr(self, "_is_isitepower_m", False):
+            # Keep live flow telemetry available if nonstandard iSitePower-M
+            # station metadata or energy-balance payloads are incomplete.
+            for action, label in (
+                (self.update_output_with_battery_capacity, "battery capacity"),
+                (self.update_output_with_energy_balance, "energy balance"),
+            ):
+                try:
+                    action(output)
+                except (KeyError, IndexError, TypeError, ValueError, APIConnectionError, APIDataStructureError) as ex:
+                    _LOGGER.warning(
+                        "iSitePower-M %s data unavailable: %s", label, ex
+                    )
+        else:
+            self.update_output_with_battery_capacity(output)
+            self.update_output_with_energy_balance(output)
         self._update_output_with_self_consumption_ratios(output)
 
         try:
@@ -354,7 +371,23 @@ class FusionSolarInstallationMixin:
     
         flow_data_nodes, flow_data_links = self._get_installation_flow_data()
     
+        # Recheck station architecture every refresh. Within a refresh, detect
+        # power_cube before interpreting a stale zero battery-capacity field.
+        self._is_isitepower_m = getattr(self, "_station_is_isitepower_m", False)
         self._parse_installation_flow_nodes(flow_data_nodes, output)
+        from .isitepower import discover_cluster_dns
+        self._isitepower_cluster_dns = discover_cluster_dns(flow_data_nodes)
+        if getattr(self, "_is_isitepower_m", False):
+            # Every energy total needs a validated source. The conventional
+            # station endpoint may omit all categories on iSitePower-M.
+            for period in ("today", "week", "month", "year", "lifetime"):
+                for category in (
+                    "grid_consumption", "grid_injection",
+                    "panel_production", "panel_production_consumption",
+                    "house_load", "battery_consumption", "battery_injection",
+                ):
+                    output[f"{category}_{period}"] = None
+            output["battery_capacity"] = None
         self._parse_installation_flow_links(flow_data_links, output)
     
         self._discover_battery_dn_from_flow_nodes(flow_data_nodes)
