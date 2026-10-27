@@ -103,6 +103,14 @@ def _build_device_info(
     parent_device_id = getattr(coordinator, "_plant_device_registry_id", None)
 
     if device is not None:
+        if device.device_id.startswith("iSitePower Cluster ") and device.dn:
+            return DeviceInfo(
+                name=f"iSitePower-M Battery Cluster ({device.dn})",
+                manufacturer="Huawei",
+                model="iSitePower-M Lithium Battery Cluster",
+                identifiers={(DOMAIN, f"{controller_name}_{station_dn}_cluster_{device.dn}")},
+                via_device_id=parent_device_id,
+            )
         if device.device_id.startswith("Optimizer ") and device.dn:
             meta = getattr(coordinator.api, "_optimizers", {}).get(device.dn, {})
             parent_dn = meta.get("parent_dn")
