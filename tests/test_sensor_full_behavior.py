@@ -62,7 +62,10 @@ def sensor_module():
     register("homeassistant.helpers.entity", EntityCategory=EntityCategory)
     registry = Mock()
     registry.async_get_or_create.return_value = types.SimpleNamespace(id="parent-id")
-    register("homeassistant.helpers.device_registry", DeviceInfo=dict,\n             DeviceRegistry=type("DeviceRegistry", (), {\n                 "async_get_or_create": lambda self, *, via_device_id=None: None\n             }), async_get=lambda hass: registry)
+    register("homeassistant.helpers.device_registry", DeviceInfo=dict,
+             DeviceRegistry=type("DeviceRegistry", (), {
+                 "async_get_or_create": lambda self, *, via_device_id=None: None
+             }), async_get=lambda hass: registry)
     register("homeassistant.helpers.entity_platform", AddEntitiesCallback=object)
     class CoordinatorEntity:
         available = True
