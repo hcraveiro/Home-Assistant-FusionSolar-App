@@ -26,6 +26,7 @@ def modules():
         ("api.signal_maps", ROOT / "api/signal_maps.py"),
         ("api.installation", ROOT / "api/installation.py"),
         ("api.energy_balance", ROOT / "api/energy_balance.py"),
+        ("api.station", ROOT / "api/station.py"),
     ):
         fullname = f"{PREFIX}.{name}"
         spec = importlib.util.spec_from_file_location(fullname, path)
@@ -597,3 +598,433 @@ def test_isitepower_genuine_zero_soc_is_not_discarded(modules):
         "deviceTips": {"SOC": "0%"},
     }], output)
     assert output["battery_percentage"] == 0
+
+
+def test_isitepower_power_cube_marks_nonstandard_energy_architecture(modules):
+    api = make_installation(modules)
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([{
+        "mocId": 60014,
+        "name": "neteco.pvms.devTypeLangKey.power_cube",
+        "description": {"label": "neteco.pvms.devTypeLangKey.energy_store", "value": "0.01kW"},
+        "deviceTips": {"SOC": "100%"},
+    }], output)
+    assert api._is_isitepower_m is True
+    assert output["battery_percentage"] == 100
+
+
+@pytest.mark.parametrize(("reading", "expected"), [
+    ("1376.860 kWh", 1376.860),
+    ("1376860 Wh", 1376.860),
+    ("0 kWh", 0.0),
+    ("--", None),
+    ("null", None),
+    ("", None),
+    (None, None),
+    ("garbage", None),
+    ("NaN", None),
+])
+def test_isitepower_grid_counter_is_not_guessed_from_missing_data(modules, reading, expected):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    output = {}
+    api._set_grid_energy(output, "lifetime", "consumption", {"totalBuyPower": reading})
+    assert output["grid_consumption_lifetime"] == expected
+
+
+def test_isitepower_missing_grid_fields_are_unknown(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    output = {}
+    api._set_grid_energy(output, "lifetime", "consumption", {})
+    api._set_grid_energy(output, "lifetime", "injection", {"totalOnGridPower": "--"})
+    assert output == {
+        "grid_consumption_lifetime": None,
+        "grid_injection_lifetime": None,
+    }
+
+
+def test_existing_plant_grid_zero_remains_unchanged(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = False
+    output = {}
+    api._set_grid_energy(output, "year", "consumption", {"totalBuyPower": "0 kWh"})
+    assert output["grid_consumption_year"] == 0
+
+
+@pytest.mark.parametrize(("capacity", "expected"), [
+    (None, None), ("", None), ("0", None),
+    ("15", 15.0), ("15.0 kWh", 15.0),
+])
+def test_isitepower_battery_capacity_unverified_zero_is_unknown(modules, capacity, expected):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    api.station = "selected"
+    api.battery_capacity = None
+    api.refresh_csrf = Mock()
+    api.get_station_list = Mock(return_value={"data": {"list": [
+        {"dn": "other", "batteryCapacity": "99"},
+        {"dn": "selected", "batteryCapacity": capacity},
+    ]}})
+    output = {}
+    api.update_output_with_battery_capacity(output)
+    assert output["battery_capacity"] == expected
+    assert api.battery_capacity == expected
+
+
+def test_isitepower_base_output_keeps_unverified_counters_unknown(modules):
+    api = make_installation(modules)
+    api._get_installation_flow_data = Mock(return_value=([{
+        "mocId": 60014,
+        "name": "neteco.pvms.devTypeLangKey.power_cube",
+        "description": {"label": "neteco.pvms.devTypeLangKey.energy_store", "value": "0.01kW"},
+        "deviceTips": {"SOC": "100%"},
+    }], []))
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(side_effect=lambda output: [output.copy()])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    result = api.get_devices()[0]
+    assert all(result[f"grid_consumption_{period}"] is None
+               for period in ("today", "week", "month", "year", "lifetime"))
+    assert all(result[f"grid_injection_{period}"] is None
+               for period in ("today", "week", "month", "year", "lifetime"))
+    assert result["battery_capacity"] is None
+    assert result["battery_percentage"] == 100
+
+
+def test_isitepower_zero_station_capacity_does_not_prove_no_battery(modules):
+    """An INTL power_cube exists even when conventional station capacity is zero."""
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    api.battery_capacity = 0
+    api.battery_dn = None
+    output = api._build_base_output()
+    output.update(panel_production_power=3.24, house_load_power=0.33)
+    api._parse_installation_flow_links([{
+        "description": {
+            "label": "neteco.pvms.energy.flow.buy.power",
+            "value": "0.33kW",
+        },
+    }], output)
+    assert output["battery_consumption_power"] is None
+    assert output["battery_injection_power"] is None
+    assert output["grid_consumption_power"] is None
+    assert output["grid_injection_power"] is None
+
+
+def test_isitepower_missing_energy_balance_keeps_live_readings(modules):
+    """A nonstandard history payload cannot suppress a healthy flow response."""
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    api.battery_capacity = 0
+    api.update_output_with_battery_capacity = Mock(side_effect=KeyError("batteryCapacity"))
+    api.update_output_with_energy_balance = Mock(side_effect=KeyError("totalBuyPower"))
+    api.update_output_with_social_contribution = Mock()
+    api._update_output_with_self_consumption_ratios = Mock()
+    output = api._build_base_output()
+    output.update(
+        battery_capacity=None,
+        panel_production_power=0.53,
+        house_load_power=0.38,
+        battery_percentage=100,
+        grid_consumption_lifetime=None,
+        grid_injection_lifetime=None,
+    )
+    api._enrich_installation_output(output)
+    assert output["exit_code"] == "SUCCESS"
+    assert output["panel_production_power"] == 0.53
+    assert output["house_load_power"] == 0.38
+    assert output["battery_percentage"] == 100
+    assert output["grid_consumption_lifetime"] is None
+    assert output["grid_injection_lifetime"] is None
+    assert output["battery_capacity"] is None
+
+
+def test_regular_installation_energy_errors_still_propagate(modules):
+    api = make_installation(modules)
+    api._is_isitepower_m = False
+    api.update_output_with_battery_capacity = Mock(side_effect=KeyError("batteryCapacity"))
+    with pytest.raises(KeyError):
+        api._enrich_installation_output(api._build_base_output())
+
+
+def test_isitepower_capacity_never_falls_back_to_another_station(modules):
+    """A selected INTL station cannot borrow battery size from an unrelated plant."""
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api.station = "NE=SELECTED"
+    api._is_isitepower_m = True
+    api.battery_capacity = None
+    api.refresh_csrf = Mock()
+    api.get_station_list = Mock(return_value={"data": {"list": [
+        {"dn": "NE=OTHER", "batteryCapacity": 30},
+    ]}})
+    output = {}
+    api.update_output_with_battery_capacity(output)
+    assert output["battery_capacity"] is None
+    assert api.battery_capacity is None
+
+
+def test_isitepower_architecture_flag_is_rechecked_on_every_refresh(modules):
+    """An earlier power_cube must not mark unrelated later flow polls as iSitePower-M."""
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    api._get_installation_flow_data = Mock(return_value=([], []))
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(return_value=[])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    api.get_devices()
+    assert api._is_isitepower_m is False
+
+
+def test_isitepower_explicit_zero_energy_is_kept_as_zero(modules):
+    """A genuine zero remains distinct from missing or unrecognized data."""
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    output = {}
+    api._set_grid_energy(output, "month", "consumption", {"totalBuyPower": "0 kWh"})
+    api._set_grid_energy(output, "month", "injection", {"totalOnGridPower": 0})
+    assert output == {
+        "grid_consumption_month": 0.0,
+        "grid_injection_month": 0.0,
+    }
+
+
+def test_isitepower_partial_energy_balance_keeps_unverified_periods_unknown(modules):
+    """A missing energy schema must not suppress valid measurements or create zeros."""
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    api.refresh_csrf = Mock()
+    api.call_energy_balance = Mock(side_effect=[
+        {"data": {"totalBuyPower": "1.25 kWh", "totalProductPower": "0.5kWh"}},
+        {"data": {"totalBuyPower": "2.5 kWh"}},
+        {"data": {"totalBuyPower": "1376.860 kWh"}},
+    ])
+    api.get_week_data = Mock(return_value=[
+        {"data": {"totalBuyPower": "0.2 kWh"}},
+        {"data": {"totalBuyPower": "0.3 kWh"}},
+    ])
+    output = {category + "_" + period: None
+              for period in ("today", "week", "month", "year", "lifetime")
+              for category in ("grid_consumption", "grid_injection", "panel_production",
+                               "panel_production_consumption", "house_load",
+                               "battery_injection", "battery_consumption")}
+    api.update_output_with_energy_balance(output)
+    assert output["grid_consumption_month"] == 1.25
+    assert output["grid_consumption_year"] == 2.5
+    assert output["grid_consumption_lifetime"] == 1376.860
+    assert output["grid_consumption_today"] == 0.3
+    assert output["grid_consumption_week"] == 0.5
+    assert output["panel_production_month"] == 0.5
+    assert output["grid_injection_lifetime"] is None
+    assert output["panel_production_year"] is None
+    assert output["battery_injection_month"] is None
+    assert output["self_consumption_ratio_today"] is None
+
+
+def test_isitepower_independent_period_failures_do_not_erase_good_periods(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    api.call_energy_balance = Mock(side_effect=[
+        {"data": {"totalBuyPower": "2.3kWh"}},
+        {"unexpected": "schema"},
+        {"data": {"totalBuyPower": "10 kWh"}},
+    ])
+    api.get_week_data = Mock(return_value=[])
+    output = {"grid_consumption_month": None, "grid_consumption_year": None,
+              "grid_consumption_lifetime": None}
+    api.update_output_with_energy_balance(output)
+    assert output["grid_consumption_month"] == 2.3
+    assert output["grid_consumption_year"] is None
+    assert output["grid_consumption_lifetime"] == 10
+
+
+def test_isitepower_missing_day_prevents_partial_week_total(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    api.call_energy_balance = Mock(return_value={"data": {}})
+    api.get_week_data = Mock(return_value=[
+        {"data": {"totalBuyPower": "0.3 kWh"}},
+        {"data": {"totalBuyPower": "--"}},
+        {"data": {"totalBuyPower": "0.2 kWh"}},
+    ])
+    output = {"grid_consumption_week": None}
+    api.update_output_with_energy_balance(output)
+    assert output["grid_consumption_week"] is None
+    assert output["grid_consumption_today"] == 0.2
+
+
+def test_isitepower_ratio_does_not_claim_zero_without_source(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    output = {
+        "panel_production_consumption_today": None,
+        "house_load_today": "2",
+        "panel_production_today": "4",
+    }
+    api._update_output_with_self_consumption_ratios(output)
+    assert output["self_consumption_ratio_today"] is None
+    assert output["self_consumption_ratio_by_production_today"] is None
+    output["panel_production_consumption_today"] = 1
+    api._update_output_with_self_consumption_ratios(output)
+    assert output["self_consumption_ratio_today"] == 50
+    assert output["self_consumption_ratio_by_production_today"] == 25
+
+
+def test_isitepower_zero_capacity_never_proves_missing_battery(modules):
+    api = make_installation(modules)
+    api.battery_dn = None
+    api.battery_capacity = 0
+    api._is_isitepower_m = True
+    output = api._build_base_output()
+    output.update(panel_production_power=2, house_load_power=1)
+    api._parse_installation_flow_links([{
+        "description": {"label": "neteco.pvms.energy.flow.buy.power",
+                        "value": "1kW"}
+    }], output)
+    assert output["battery_injection_power"] is None
+    assert output["battery_consumption_power"] is None
+    assert output["grid_consumption_power"] is None
+
+
+def test_isitepower_installation_survives_partial_energy_sources(modules):
+    api = make_installation(modules)
+    api._get_installation_flow_data = Mock(return_value=([{
+        "mocId": 60014, "name": "neteco.pvms.devTypeLangKey.power_cube",
+        "description": {"label": "neteco.pvms.devTypeLangKey.energy_store",
+                        "value": "0.01kW"},
+        "deviceTips": {"SOC": "73%"},
+    }], []))
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api.update_output_with_battery_capacity = Mock(side_effect=KeyError("batteryCapacity"))
+    api.update_output_with_energy_balance = Mock(side_effect=KeyError("totalBuyPower"))
+    api.update_output_with_social_contribution = Mock()
+    api._update_output_with_self_consumption_ratios = Mock()
+    api._build_installation_devices = Mock(side_effect=lambda output: [output.copy()])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    data = api.get_devices()[0]
+    assert data["battery_percentage"] == 73
+    assert data["grid_consumption_lifetime"] is None
+    assert data["battery_capacity"] is None
+    assert data["exit_code"] == "SUCCESS"
+
+
+def test_isitepower_failed_energy_response_never_exposes_payload_totals(modules):
+    """Even numeric fields in a failed Huawei response cannot be trusted."""
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    api.call_energy_balance = Mock(side_effect=[
+        {"success": False, "data": {"totalBuyPower": "9999 kWh"}},
+        {"success": True, "data": {"totalBuyPower": "1.5kWh"}},
+        {"success": False, "data": {"totalBuyPower": "500 kWh"}},
+    ])
+    api.get_week_data = Mock(return_value=[
+        {"success": False, "data": {"totalBuyPower": "20 kWh"}},
+        {"success": True, "data": {"totalBuyPower": "0.3 kWh"}},
+    ])
+    output = {}
+    api.update_output_with_energy_balance(output)
+    assert output["grid_consumption_month"] is None
+    assert output["grid_consumption_year"] == 1.5
+    assert output["grid_consumption_lifetime"] is None
+    assert output["grid_consumption_today"] == 0.3
+    assert output.get("grid_consumption_week") is None
+
+
+def test_isitepower_api_disconnect_does_not_interrupt_station_updates(modules):
+    """A transient optional energy failure should not discard live SOC/power."""
+    from unittest.mock import Mock
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    api.update_output_with_battery_capacity = Mock()
+    api.update_output_with_energy_balance = Mock(
+        side_effect=modules[2].APIConnectionError("connection reset")
+    )
+    api.update_output_with_social_contribution = Mock()
+    api._update_output_with_self_consumption_ratios = Mock()
+    output = api._build_base_output()
+    output.update(
+        battery_percentage=73, panel_production_power=0.53,
+        house_load_power=0.38, grid_consumption_lifetime=None,
+    )
+    api._enrich_installation_output(output)
+    assert output["battery_percentage"] == 73
+    assert output["panel_production_power"] == 0.53
+    assert output["grid_consumption_lifetime"] is None
+    assert output["exit_code"] == "SUCCESS"
+
+
+def test_isitepower_optional_energy_disconnect_preserves_other_periods(modules):
+    api = modules[1].FusionSolarEnergyBalanceMixin()
+    api._is_isitepower_m = True
+    api.call_energy_balance = Mock(side_effect=[
+        {"data": {"totalBuyPower": "2kWh"}},
+        modules[2].APIConnectionError("temporary disconnect"),
+        {"data": {"totalBuyPower": "25kWh"}},
+    ])
+    api.get_week_data = Mock(side_effect=modules[2].APIConnectionError("daily request disconnected"))
+    output = {}
+    api.update_output_with_energy_balance(output)
+    assert output["grid_consumption_month"] == 2
+    assert output["grid_consumption_lifetime"] == 25
+    assert output.get("grid_consumption_year") is None
+    assert output.get("grid_consumption_today") is None
+
+
+@pytest.mark.parametrize(("flag", "capacity", "expected"), [
+    ("true", 0, None),
+    (True, "0", None),
+    ("TRUE", None, None),
+    ("false", 0, 0),
+    (False, 15, 15),
+    ("true", "15.0 kWh", 15.0),
+])
+def test_station_flags_prevent_isitepower_zero_capacity_poisoning(
+    modules, flag, capacity, expected
+):
+    """Station metadata is parsed before the first power_cube update."""
+    station_module = sys.modules[f"{PREFIX}.api.station"]
+    api = station_module.FusionSolarStationMixin()
+    api.station = "NE=SELECTED"
+    api.station_name = None
+    api.battery_capacity = None
+    api._update_station_metadata_from_station_list({"data": {"list": [
+        {"dn": "NE=SELECTED", "existISitePowerM": flag,
+         "batteryCapacity": capacity},
+    ]}})
+    assert api.battery_capacity == expected
+    assert api._station_is_isitepower_m is (str(flag).lower() == "true")
+
+
+def test_station_flag_keeps_unknown_battery_when_flow_node_temporarily_missing(modules):
+    """A missing power_cube on one poll must not reclassify the station."""
+    api = make_installation(modules)
+    api._station_is_isitepower_m = True
+    api.battery_capacity = None
+    api._get_installation_flow_data = Mock(return_value=([], []))
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(side_effect=lambda output: [output.copy()])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    readings = api.get_devices()[0]
+    assert api._is_isitepower_m is True
+    assert readings["battery_capacity"] is None
+    assert readings["grid_consumption_lifetime"] is None
+    assert readings["battery_injection_lifetime"] is None
