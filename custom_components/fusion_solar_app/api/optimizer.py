@@ -134,6 +134,9 @@ class FusionSolarOptimizerMixin:
             extra = record.get("optInfo") or {}
             if not isinstance(extra, dict):
                 extra = {}
+            is_disconnected = str(record.get("connectStatus") or "").strip().lower() in {
+                "disconnected", "offline"
+            }
             for name, key, dtype, icon in _FIELDS:
                 raw = (extra.get(key) if key not in ("dailyEnergy", "powerPercent", "connectStatus") else record.get(key))
                 if name == "Optimizer Running Status" and raw is None:
@@ -144,7 +147,16 @@ class FusionSolarOptimizerMixin:
                     value = _safe_number(raw)
                     if value is not None and key == "outputPower":
                         value /= 1000
-                if value is None:
+                # Retain sensor identity while removing stale instantaneous readings.
+                if is_disconnected and key in {
+                    "outputPower", "inputVoltage", "outputVoltage", "inputCurrent", "powerPercent"
+                }:
+                    value = None
+                if value is None and not (
+                    is_disconnected and key in {
+                        "outputPower", "inputVoltage", "outputVoltage", "inputCurrent", "powerPercent"
+                    }
+                ):
                     continue
                 devices.append(Device(
                     device_id=name,
