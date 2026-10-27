@@ -93,3 +93,93 @@ def aggregate_cluster_capacity(
     ):
         return None
     return round(sum(capacities), 4)
+
+SAMPLING_ENDPOINT = "/rest/neteco/monitor/v1/signal/common/sampling-signal"
+
+
+def fetch_cluster_signals(api: Any, dn: str) -> list[dict[str, Any]]:
+    """Fetch all pages using the verified form-encoded FusionSolar request."""
+    rows: list[dict[str, Any]] = []
+    total_size: int | None = None
+    page = 1
+    page_size = 20
+    while page <= 20:
+        api.refresh_csrf()
+        form = {
+            "samplingSigQueryCon.dn": dn,
+            "samplingSigQueryCon.pageSize": str(page_size),
+            "samplingSigQueryCon.pageIndex": str(page),
+            "queryScene.businessDevice": "0",
+            "queryScene.bindQuery": "false",
+            "queryScene.queryAODO": "false",
+            "filterParams.name": "",
+            "filterParams.displayGroup": "",
+            "filterParams.signalType": "AI;DI;AO;DO;OTHER",
+        }
+        _, response = api._request_json(
+            "POST",
+            f"https://{api.data_host}{SAMPLING_ENDPOINT}",
+            context="FusionSolar iSitePower-M cluster sampling",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Roarand": api.csrf,
+            },
+            data=form,
+        )
+        if not isinstance(response, dict) or response.get("code") != 0:
+            raise ValueError("iSitePower-M sampling request failed")
+        payload = response.get("data")
+        if not isinstance(payload, dict) or str(payload.get("rootDevTypeId")) != str(CLUSTER_TYPE_ID):
+            raise ValueError("Unexpected iSitePower-M cluster response type")
+        batch = payload.get("displayList")
+        if not isinstance(batch, list):
+            raise ValueError("iSitePower-M sampling response lacks displayList")
+        for row in batch:
+            if isinstance(row, dict) and row.get("dn") == dn and str(row.get("typeId")) == str(CLUSTER_TYPE_ID):
+                rows.append(row)
+        try:
+            total_size = int(payload["totalSize"])
+        except (ValueError, TypeError, KeyError):
+            raise ValueError("iSitePower-M sampling response lacks totalSize") from None
+        if total_size < 0 or total_size > 400:
+            raise ValueError("Invalid iSitePower-M signal count")
+        if len(batch) == 0 or len(rows) >= total_size:
+            break
+        page += 1
+    if total_size is not None and len(rows) < total_size:
+        raise ValueError("Incomplete iSitePower-M cluster signal pages")
+    return rows
+
+
+def build_cluster_devices(api: Any) -> tuple[list[Any], float | None]:
+    """Create per-cluster telemetry without asserting an aggregate SOC."""
+    from .models import DeviceType
+
+    definitions = (
+        ("State", "state", DeviceType.SENSOR_TEXT, "mdi:battery"),
+        ("SOC", "soc", DeviceType.SENSOR_PERCENTAGE, "mdi:battery"),
+        ("Capacity", "capacity_kwh", DeviceType.SENSOR_KWH, "mdi:battery-high"),
+    )
+    result = []
+    readings: dict[str, dict[str, Any]] = {}
+    for dn in getattr(api, "_isitepower_cluster_dns", []):
+        try:
+            rows = fetch_cluster_signals(api, dn)
+            values = parse_cluster_signals(rows)
+            readings[dn] = values
+            for label, key, dtype, icon in definitions:
+                value = values.get(key)
+                if value is None:
+                    continue
+                device = api._create_dynamic_device(
+                    f"iSitePower Cluster {label}", dtype, value, icon, dn=dn
+                )
+                if device is not None:
+                    result.append(device)
+        except Exception as ex:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Could not refresh iSitePower-M battery cluster %s: %s", dn, ex
+            )
+    return result, aggregate_cluster_capacity(getattr(api, "_isitepower_cluster_dns", []), readings)
