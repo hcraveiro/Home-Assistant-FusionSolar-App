@@ -588,6 +588,13 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self) -> bool:
         """Return availability."""
+        if self.device_id.startswith("Optimizer ") and self.device is not None:
+            if self.device_id in {
+                "Optimizer Output Power", "Optimizer Input Voltage",
+                "Optimizer Output Voltage", "Optimizer Input Current",
+                "Optimizer Power Percent",
+            } and self.device.state is None:
+                return False
         return super().available and self.device is not None
 
     @property
