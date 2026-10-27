@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import inspect
 from datetime import datetime
 from typing import Any
 
@@ -82,6 +83,19 @@ def _get_station_suffix(coordinator: FusionSolarCoordinator) -> str:
     )
 
 
+def _parent_device_link(
+    parent_device_id: str | None,
+    plant_identifier: tuple[str, str],
+) -> dict[str, Any]:
+    """Use the parent link supported by the installed HA device registry."""
+    if parent_device_id is None:
+        return {}
+    parameters = inspect.signature(dr.DeviceRegistry.async_get_or_create).parameters
+    if "via_device_id" in parameters:
+        return {"via_device_id": parent_device_id}
+    return {"via_device": plant_identifier}
+
+
 def _build_device_info(
     coordinator: FusionSolarCoordinator,
     device: Device | None = None,
@@ -129,7 +143,7 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_inverter_{identifier_dn}",
                     )
                 },
-                via_device_id=parent_device_id,
+                **_parent_device_link(parent_device_id, plant_identifier),
             )
 
         if device.device_id.startswith(POWER_SENSOR_DEVICE_SENSOR_PREFIX):
@@ -149,7 +163,7 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_power_sensor_{power_sensor_dn}",
                     )
                 },
-                via_device_id=parent_device_id,
+                **_parent_device_link(parent_device_id, plant_identifier),
             )
 
             if power_sensor_software_version:
@@ -181,7 +195,7 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_battery_{battery_dn}",
                     )
                 },
-                via_device_id=parent_device_id,
+                **_parent_device_link(parent_device_id, plant_identifier),
             )
 
     return DeviceInfo(
