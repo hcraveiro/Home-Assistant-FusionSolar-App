@@ -81,3 +81,66 @@ def test_zero_soc_is_valid_but_zero_capacity_is_not():
         {"id": 10001, "value": "unknown"},
     ])
     assert result == {"state": None, "soc": 0, "capacity_kwh": None}
+
+
+def test_sampling_uses_form_encoding_and_response_envelope():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    response = {
+        "code": 0,
+        "data": {
+            "rootDevTypeId": 37895,
+            "totalSize": 3,
+            "displayList": [
+                {"id": 10001, "value": "5", "typeId": 37895, "dn": "DEVICE_D"},
+                {"id": 10005, "value": "45", "typeId": 37895, "dn": "DEVICE_D"},
+                {"id": 2101296, "value": "9.6", "typeId": 37895, "dn": "DEVICE_D"},
+            ],
+        },
+    }
+    api = SimpleNamespace(
+        refresh_csrf=Mock(), csrf="redacted", data_host="intl.example",
+        _request_json=Mock(return_value=(None, response)),
+    )
+    rows = module.fetch_cluster_signals(api, "DEVICE_D")
+    assert len(rows) == 3
+    args, kwargs = api._request_json.call_args
+    assert args[0] == "POST"
+    assert args[1].endswith("/rest/neteco/monitor/v1/signal/common/sampling-signal")
+    assert kwargs["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
+    assert kwargs["data"]["samplingSigQueryCon.dn"] == "DEVICE_D"
+
+
+def test_sampling_paginates_according_to_total_size():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    responses = [
+        (None, {"code": 0, "data": {
+            "rootDevTypeId": 37895, "totalSize": 2,
+            "displayList": [{"id": 10005, "value": "40", "typeId": 37895, "dn": "D"}],
+        }}),
+        (None, {"code": 0, "data": {
+            "rootDevTypeId": 37895, "totalSize": 2,
+            "displayList": [{"id": 2101296, "value": "9.6", "typeId": 37895, "dn": "D"}],
+        }}),
+    ]
+    api = SimpleNamespace(refresh_csrf=Mock(), csrf="x", data_host="host",
+                          _request_json=Mock(side_effect=responses))
+    rows = module.fetch_cluster_signals(api, "D")
+    assert len(rows) == 2
+    assert [call.kwargs["data"]["samplingSigQueryCon.pageIndex"]
+            for call in api._request_json.call_args_list] == ["1", "2"]
+
+
+def test_rejects_non_cluster_response_and_mismatched_dn():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    api = SimpleNamespace(
+        refresh_csrf=Mock(), csrf="x", data_host="host",
+        _request_json=Mock(return_value=(None, {
+            "code": 0, "data": {"rootDevTypeId": 37895, "totalSize": 1,
+            "displayList": [{"id": 10005, "value": "35", "dn": "OTHER", "typeId": 37895}]},
+        })),
+    )
+    with pytest.raises(ValueError, match="Incomplete"):
+        module.fetch_cluster_signals(api, "DEVICE_D")
