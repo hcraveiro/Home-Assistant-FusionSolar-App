@@ -33,7 +33,7 @@ class ViaDeviceMigrationTests(unittest.TestCase):
             call for call in calls
             if any(keyword.arg == "via_device_id" for keyword in call.keywords)
         ]
-        self.assertEqual(len(children), 3)
+        self.assertEqual(len(children), 4)
 
     def test_parent_registered_before_entities(self):
         setup = next(
