@@ -2,6 +2,7 @@
 
 import ast
 import inspect
+from typing import Any
 from types import SimpleNamespace
 from pathlib import Path
 import unittest
@@ -42,6 +43,7 @@ class ViaDeviceMigrationTests(unittest.TestCase):
         )
         namespace = {
             "inspect": inspect,
+            "Any": Any,
             "dr": SimpleNamespace(DeviceRegistry=SimpleNamespace(
                 async_get_or_create=lambda self, *, via_device=None: None
             )),
@@ -61,6 +63,7 @@ class ViaDeviceMigrationTests(unittest.TestCase):
         )
         namespace = {
             "inspect": inspect,
+            "Any": Any,
             "dr": SimpleNamespace(DeviceRegistry=SimpleNamespace(
                 async_get_or_create=lambda self, *, via_device_id=None: None
             )),
