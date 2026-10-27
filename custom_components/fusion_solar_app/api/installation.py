@@ -397,7 +397,15 @@ class FusionSolarInstallationMixin:
     
         self._enrich_installation_output(output)
     
+        cluster_devices = []
+        if getattr(self, "_is_isitepower_m", False) and self._isitepower_cluster_dns:
+            from .isitepower import build_cluster_devices
+            cluster_devices, cluster_capacity = build_cluster_devices(self)
+            if cluster_capacity is not None:
+                output["battery_capacity"] = cluster_capacity
+
         devices = self._build_installation_devices(output)
+        devices.extend(cluster_devices)
         devices.extend(self._build_inverter_devices())
         devices.extend(self._build_battery_devices())
         devices.extend(self._build_power_sensor_devices(flow_data_nodes))
