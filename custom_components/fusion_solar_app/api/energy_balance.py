@@ -164,6 +164,22 @@ class FusionSolarEnergyBalanceMixin:
                 )
                 for category, key in fields.items():
                     output[f"{category}_{period}"] = self._optional_grid_energy(payload, key)
+                if period == "month" and isinstance(payload, dict):
+                    # iSitePower-M can omit aggregate totals while still
+                    # providing verified daily readings in monthly arrays.
+                    day_index = datetime.now().day - 1
+                    for category, array_key in (
+                        ("panel_production", "productPower"),
+                        ("panel_production_consumption", "selfUsePower"),
+                        ("house_load", "usePower"),
+                    ):
+                        samples = payload.get(array_key)
+                        if isinstance(samples, list) and day_index < len(samples):
+                            reading = self._optional_grid_energy(
+                                {"value": samples[day_index]}, "value"
+                            )
+                            if reading is not None:
+                                output[f"{category}_today"] = reading
                 if period in ("month", "year", "lifetime"):
                     for category, key in (
                         ("battery_injection", "chargePower"),
