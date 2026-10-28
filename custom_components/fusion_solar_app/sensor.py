@@ -144,7 +144,12 @@ def _build_device_info(
                 "manufacturer": "Huawei",
                 "model": meta.get("model") or "FusionSolar Optimizer",
                 "identifiers": {(DOMAIN, f"{controller_name}_{station_dn}_optimizer_{device.dn}")},
-                "via_device_id": optimizer_parent_id,
+                **_parent_device_link(
+                    optimizer_parent_id,
+                    (DOMAIN, f"{controller_name}_{station_dn}_inverter_{identifier_dn}")
+                    if parent_dn and inverter_device is not None
+                    else plant_identifier,
+                ),
             }
             if meta.get("serial"):
                 info["serial_number"] = meta["serial"]
