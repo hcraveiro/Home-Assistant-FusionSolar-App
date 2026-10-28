@@ -61,8 +61,10 @@ def sensor_module():
         DIAGNOSTIC = "diagnostic"
     register("homeassistant.helpers.entity", EntityCategory=EntityCategory)
     registry = Mock()
-    registry.async_get_or_create.return_value = types.SimpleNamespace(id="parent-id")
-    register("homeassistant.helpers.device_registry", DeviceInfo=dict, async_get=lambda hass: registry)
+    register("homeassistant.helpers.device_registry", DeviceInfo=dict,
+             DeviceRegistry=type("DeviceRegistry", (), {
+                 "async_get_or_create": lambda self, *, via_device_id=None: None
+             }), async_get=lambda hass: registry)
     register("homeassistant.helpers.entity_platform", AddEntitiesCallback=object)
     class CoordinatorEntity:
         available = True
@@ -109,13 +111,12 @@ def coordinator():
     )
     data = types.SimpleNamespace(controller_name="fusion_solar_app", forecast=None, devices=[])
     return types.SimpleNamespace(api=api, data=data, _plant_device_registry_id="parent-id",
-                                 get_device_by_id=Mock(return_value=None),
                                  get_device_by_unique_id=Mock(return_value=None))
 
 
 def device(sensor_module, device_id="House Load Power", kind=None, state=1.2):
     kind = kind or sensor_module.DeviceType.SENSOR_KW
-    return sensor_module.Device(device_id, "unique-test", kind, device_id, state, "mdi:flash")
+    return sensor_module.Device(device_id, "unique-test", kind, device_id, state, "mdi:flash", dn="inverter-1" if device_id.startswith("Inverter ") else None)
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -132,10 +133,7 @@ def test_safe_float(sensor_module, value, expected):
     ("Power Sensor Status", "_power_sensor_meter-1"),
 ])
 def test_device_info_routes_to_correct_registry(coordinator, sensor_module, device_id, fragment):
-    test_device = device(sensor_module, device_id)
-    if device_id == "Inverter Model":
-        test_device.dn = "inverter-1"
-    info = sensor_module._build_device_info(coordinator, test_device)
+    info = sensor_module._build_device_info(coordinator, device(sensor_module, device_id))
     assert any(fragment in identifier[1] for identifier in info["identifiers"])
     if device_id != "House Load Power":
         assert info["via_device_id"] == "parent-id"
@@ -251,16 +249,16 @@ async def test_sensors_discovered_after_initial_setup_without_duplicates(coordin
     batches = []
     await sensor_module.async_setup_entry(hass, entry, lambda new: batches.append(list(new)))
     assert len(batches) == 2
-    assert [sensor.device_id for sensor in batches[0] if isinstance(sensor, sensor_module.FusionSolarSensor)] == ["Panel Production Power"]
+    assert [sensor.device_id for sensor in batches[0]] == ["Panel Production Power"]
     assert len(batches[1]) == 2
     assert len(listeners) == 1
 
     # The inverter's PV string appears when production starts, without a reload.
     pv = device(sensor_module, "Inverter PV1 Voltage", state=400)
-    pv.device_unique_id = "unique-pv1-voltage"
+    pv.device_unique_id = "inverter-1-pv1-voltage"
     coordinator.data.devices = [first, pv]
     listeners[0]()
-    assert [sensor.device_id for sensor in batches[-1]] == ["Inverter PV1 Voltage"]
+    assert [sensor.device_id for sensor in batches[-1] if isinstance(sensor, sensor_module.FusionSolarSensor)] == ["Inverter PV1 Voltage"]
     count = len(batches)
     listeners[0]()
     assert len(batches) == count
@@ -287,3 +285,43 @@ async def test_dynamic_sensor_reappearing_with_same_identity_is_not_recreated(co
     coordinator.data.devices = [device(sensor_module, "Inverter PV1 Current", state=4)]
     listener[0]()
     assert len(batches) == 2
+
+
+def test_optimizer_registry_uses_inverter_parent_when_registered(coordinator, sensor_module, monkeypatch):
+    """Optimizer entities belong to their parent inverter without changing their DN-based IDs."""
+    inverter = types.SimpleNamespace(id="inverter-registry-id")
+    registry = types.SimpleNamespace(async_get_device=Mock(return_value=inverter))
+    monkeypatch.setattr(sensor_module.dr, "async_get", lambda hass: registry)
+    coordinator.hass = object()
+    coordinator.api.inverters = {"NE=INV_1": types.SimpleNamespace(canonical_dn="NE=INV_1")}
+    coordinator.api._optimizers = {
+        "NE=OPT_2": {
+            "parent_dn": "NE=INV_1",
+            "position": "1.1.2",
+            "model": "MERC-600W-PA0",
+            "serial": "OPT_SN_2",
+        }
+    }
+    optimizer = sensor_module.Device(
+        "Optimizer Output Power", "station-opt2-output", sensor_module.DeviceType.SENSOR_KW,
+        "Output Power", 0.1096, "mdi:solar-power", dn="NE=OPT_2",
+    )
+    info = sensor_module._build_device_info(coordinator, optimizer)
+    assert info["name"] == "Optimizer 1.1.2"
+    assert info["model"] == "MERC-600W-PA0"
+    assert info["via_device_id"] == "inverter-registry-id"
+    assert ("fusion_solar_app", "fusion_solar_app_Plant/1_optimizer_NE=OPT_2") in info["identifiers"]
+    assert registry.async_get_device.call_count == 1
+
+
+def test_optimizer_registry_falls_back_to_plant(coordinator, sensor_module, monkeypatch):
+    registry = types.SimpleNamespace(async_get_device=Mock(return_value=None))
+    monkeypatch.setattr(sensor_module.dr, "async_get", lambda hass: registry)
+    coordinator.hass = object()
+    coordinator.api.inverters = {}
+    coordinator.api._optimizers = {"NE=OPT_2": {"parent_dn": "NE=INV_1", "position": "1.1.2"}}
+    optimizer = sensor_module.Device(
+        "Optimizer Energy Today", "station-opt2-energy", sensor_module.DeviceType.SENSOR_KWH,
+        "Energy Today", 0.11, "mdi:solar-power", dn="NE=OPT_2",
+    )
+    assert sensor_module._build_device_info(coordinator, optimizer)["via_device_id"] == "parent-id"

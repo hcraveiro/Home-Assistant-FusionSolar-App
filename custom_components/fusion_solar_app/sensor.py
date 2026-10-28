@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import inspect
 from datetime import datetime
 from typing import Any
 
@@ -82,6 +83,19 @@ def _get_station_suffix(coordinator: FusionSolarCoordinator) -> str:
     )
 
 
+def _parent_device_link(
+    parent_device_id: str | None,
+    plant_identifier: tuple[str, str],
+) -> dict[str, Any]:
+    """Use the parent link supported by the installed HA device registry."""
+    if parent_device_id is None:
+        return {}
+    parameters = inspect.signature(dr.DeviceRegistry.async_get_or_create).parameters
+    if "via_device_id" in parameters:
+        return {"via_device_id": parent_device_id}
+    return {"via_device": plant_identifier}
+
+
 def _build_device_info(
     coordinator: FusionSolarCoordinator,
     device: Device | None = None,
@@ -103,6 +117,39 @@ def _build_device_info(
     parent_device_id = getattr(coordinator, "_plant_device_registry_id", None)
 
     if device is not None:
+        if device.device_id.startswith("iSitePower Cluster ") and device.dn:
+            return DeviceInfo(
+                name=f"iSitePower-M Battery Cluster ({device.dn})",
+                manufacturer="Huawei",
+                model="iSitePower-M Lithium Battery Cluster",
+                identifiers={(DOMAIN, f"{controller_name}_{station_dn}_cluster_{device.dn}")},
+                **_parent_device_link(parent_device_id, plant_identifier),
+            )
+        if device.device_id.startswith("Optimizer ") and device.dn:
+            meta = getattr(coordinator.api, "_optimizers", {}).get(device.dn, {})
+            parent_dn = meta.get("parent_dn")
+            optimizer_parent_id = parent_device_id
+            if parent_dn:
+                inverter_info = getattr(coordinator.api, "inverters", {}).get(parent_dn)
+                identifier_dn = getattr(inverter_info, "canonical_dn", None) or parent_dn
+                inverter_device = dr.async_get(coordinator.hass).async_get_device(
+                    identifiers={
+                        (DOMAIN, f"{controller_name}_{station_dn}_inverter_{identifier_dn}")
+                    }
+                )
+                if inverter_device is not None:
+                    optimizer_parent_id = inverter_device.id
+            info = {
+                "name": f"Optimizer {meta.get('position') or device.dn}",
+                "manufacturer": "Huawei",
+                "model": meta.get("model") or "FusionSolar Optimizer",
+                "identifiers": {(DOMAIN, f"{controller_name}_{station_dn}_optimizer_{device.dn}")},
+                "via_device_id": optimizer_parent_id,
+            }
+            if meta.get("serial"):
+                info["serial_number"] = meta["serial"]
+            return DeviceInfo(**info)
+
         if device.device_id.startswith(INVERTER_DEVICE_SENSOR_PREFIX):
             inverter_dn = device.dn or "unknown_inverter"
             info = getattr(coordinator.api, "inverters", {}).get(inverter_dn)
@@ -129,7 +176,7 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_inverter_{identifier_dn}",
                     )
                 },
-                via_device_id=parent_device_id,
+                **_parent_device_link(parent_device_id, plant_identifier),
             )
 
         if device.device_id.startswith(POWER_SENSOR_DEVICE_SENSOR_PREFIX):
@@ -149,7 +196,7 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_power_sensor_{power_sensor_dn}",
                     )
                 },
-                via_device_id=parent_device_id,
+                **_parent_device_link(parent_device_id, plant_identifier),
             )
 
             if power_sensor_software_version:
@@ -181,7 +228,7 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_battery_{battery_dn}",
                     )
                 },
-                via_device_id=parent_device_id,
+                **_parent_device_link(parent_device_id, plant_identifier),
             )
 
     return DeviceInfo(
@@ -541,6 +588,13 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self) -> bool:
         """Return availability."""
+        if self.device_id.startswith("Optimizer ") and self.device is not None:
+            if self.device_id in {
+                "Optimizer Output Power", "Optimizer Input Voltage",
+                "Optimizer Output Voltage", "Optimizer Input Current",
+                "Optimizer Power Percent",
+            } and self.device.state is None:
+                return False
         return super().available and self.device is not None
 
     @property

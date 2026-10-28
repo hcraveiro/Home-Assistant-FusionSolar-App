@@ -56,7 +56,7 @@ DEVICES = [
     {"id": "Grid Injection Year", "type": DeviceType.SENSOR_KWH, "icon": "mdi:transmission-tower-import"},
     {"id": "Grid Injection Lifetime", "type": DeviceType.SENSOR_KWH, "icon": "mdi:transmission-tower-import"},
     {"id": "Battery Percentage", "type": DeviceType.SENSOR_PERCENTAGE, "icon": ""},
-    {"id": "Battery Capacity", "type": DeviceType.SENSOR_KW, "icon": "mdi:home-lightning-bolt-outline"},
+    {"id": "Battery Capacity", "type": DeviceType.SENSOR_KWH, "icon": "mdi:home-lightning-bolt-outline"},
     {"id": "Standard Coal Saved", "type": DeviceType.SENSOR_KG, "icon": "mdi:mine"},
     {"id": "Standard Coal Saved This Year", "type": DeviceType.SENSOR_KG, "icon": "mdi:mine"},
     {"id": "CO2 Avoided", "type": DeviceType.SENSOR_KG, "icon": "mdi:molecule-co2"},

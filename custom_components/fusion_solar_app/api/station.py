@@ -29,8 +29,25 @@ class FusionSolarStationMixin:
         if not self.station_name:
             self.station_name = selected_station.get("name")
 
+        # Station flags are available before the first realtime flow update.
+        # For iSitePower-M, a missing/zero conventional batteryCapacity is
+        # not evidence that the installed battery clusters are absent.
+        raw_isitepower = selected_station.get("existISitePowerM")
+        self._station_is_isitepower_m = (
+            raw_isitepower is True
+            or isinstance(raw_isitepower, str)
+            and raw_isitepower.strip().lower() == "true"
+        )
         if self.battery_capacity is None or self.battery_capacity == 0.0:
-            self.battery_capacity = selected_station.get("batteryCapacity")
+            candidate = selected_station.get("batteryCapacity")
+            if self._station_is_isitepower_m:
+                from .energy_balance import FusionSolarEnergyBalanceMixin
+                candidate = FusionSolarEnergyBalanceMixin._optional_grid_energy(
+                    {"capacity": candidate}, "capacity"
+                )
+                if candidate is None or candidate <= 0:
+                    candidate = None
+            self.battery_capacity = candidate
 
     def get_station_id(self):
         """Return the first station DN from the station list response."""
