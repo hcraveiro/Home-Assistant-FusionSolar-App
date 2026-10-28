@@ -107,7 +107,6 @@ async def _async_migrate_inverter_unique_ids(
     old_prefix = f"{DOMAIN}-{api.controller_name}{station_suffix}_inverter_"
     registry = er.async_get(hass)
     devices = dr.async_get(hass)
-    devices = dr.async_get(hass)
     valid_dns = {api.sanitize_id_segment(dn): dn for dn in inverter_dns}
 
     @callback
@@ -150,7 +149,7 @@ async def _async_migrate_inverter_unique_ids(
         if registry.async_get_entity_id(
             entity_entry.domain, entity_entry.platform, new_unique_id
         ):
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "Skipping migration of %s: unique ID %s is already registered",
                 entity_entry.entity_id,
                 new_unique_id,
