@@ -358,7 +358,7 @@ class FusionSolarAuthMixin:
 
             redirect_url = details["redirectURL"]
             # Never follow SSO tickets to a different origin.
-            for step in range(2):
+            for step in range(5):
                 target = urljoin(base_url, redirect_url)
                 parsed = urlparse(target)
                 if parsed.scheme != "https" or parsed.netloc != self.login_host:
@@ -379,6 +379,8 @@ class FusionSolarAuthMixin:
                         raise APIAuthError("JP5 SSO redirect missing Location")
                 else:
                     break
+            else:
+                raise APIAuthError("JP5 SSO redirect limit exceeded")
 
             dp_session = self.session.cookies.get("dp-session")
             if not dp_session:
