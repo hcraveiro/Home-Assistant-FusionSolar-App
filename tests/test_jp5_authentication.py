@@ -77,11 +77,12 @@ def test_jp5_login_success_with_two_redirects():
     client = fake_client(
         response(200, {"code": 0, "payload": {"redirectURL": "/rest/dp/uidm/auth/v1/on-sso-credential-ready?ticket=secret"}}),
         [response(302, location="/rest/pvms/web/login/v1/redirecturl?isFirst=false"),
-         response(302, location="/uniportal/pvmswebsite/assets/build/cloud.html")],
+         response(302, location="/uniportal/pvmswebsite/assets/build/cloud.html"),
+         response(200)],
     )
     assert load_method()(client) == (True, "station")
     assert client.connected
-    assert client.session.get.call_count == 2
+    assert client.session.get.call_count == 3
     kwargs = client.session.post.call_args.kwargs
     assert kwargs["json"] == {"username": "example", "password": "placeholder", "verifycode": ""}
     assert kwargs["headers"]["App-Id"] == "smartpvms"
@@ -111,7 +112,7 @@ def test_jp5_rejects_external_ticket_redirect():
 def test_jp5_requires_session_cookie():
     client = fake_client(
         response(200, {"code": 0, "payload": {"redirectURL": "/sso"}}),
-        [response(302, location="/redirect"), response(302, location="/landing")],
+        [response(302, location="/redirect"), response(302, location="/landing"), response(200)],
         cookie=None,
     )
     with pytest.raises(APIAuthError, match="cookie"):
@@ -130,3 +131,22 @@ def test_jp5_dispatch_is_exact_host_match():
     source = SOURCE.read_text(encoding="utf-8")
     assert 'self.login_host == "jp5.fusionsolar.huawei.com"' in source
     assert 'return self._login_jp5()' in source
+
+def test_jp5_rejects_external_location_on_second_redirect():
+    client = fake_client(
+        response(200, {"code": 0, "payload": {"redirectURL": "/sso"}}),
+        [response(302, location="https://outside.example/ticket")],
+    )
+    with pytest.raises(APIAuthError, match="unexpected origin"):
+        load_method()(client)
+    assert client.session.get.call_count == 1
+
+
+def test_jp5_stops_at_redirect_limit():
+    client = fake_client(
+        response(200, {"code": 0, "payload": {"redirectURL": "/sso"}}),
+        [response(302, location="/sso") for _ in range(5)],
+    )
+    with pytest.raises(APIAuthError, match="limit exceeded"):
+        load_method()(client)
+    assert client.session.get.call_count == 5
