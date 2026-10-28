@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import requests
 
@@ -56,6 +56,9 @@ class FusionSolarAuthMixin:
 
     def login(self) -> bool:
         """Connect to api."""
+        if self.login_host == "jp5.fusionsolar.huawei.com":
+            _LOGGER.debug("Using JP5 login flow")
+            return self._login_jp5()
         if any(host in self.login_host for host in ("la5", "intl")):
             _LOGGER.debug("Using LA5 login flow")
             return self._login_la5()
