@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
 
@@ -357,12 +357,25 @@ class FusionSolarAuthMixin:
                 raise APIAuthError("JP5 login missing SSO redirect")
 
             redirect_url = details["redirectURL"]
+            redirect_info = urlparse(urljoin(base_url, redirect_url))
+            if (
+                redirect_info.path == service_path
+                and "redirectionAddress" not in parse_qs(redirect_info.query)
+            ):
+                return_address = base_url + FINAL_AUTH_URL_LA5
+                separator = "&" if redirect_info.query else "?"
+                redirect_url += (
+                    separator + "redirectionAddress=" + quote(return_address, safe="")
+                )
+
+            _LOGGER.debug("JP5 authentication accepted; processing SSO redirects")
             # Never follow SSO tickets to a different origin.
             for step in range(5):
                 target = urljoin(base_url, redirect_url)
                 parsed = urlparse(target)
                 if parsed.scheme != "https" or parsed.netloc != self.login_host:
                     raise APIAuthError("JP5 SSO redirect has unexpected origin")
+                _LOGGER.debug("JP5 SSO redirect step %s", step + 1)
                 redirect_response = self.session.get(
                     target,
                     headers={"App-Id": "smartpvms"},
@@ -382,6 +395,7 @@ class FusionSolarAuthMixin:
             else:
                 raise APIAuthError("JP5 SSO redirect limit exceeded")
 
+            _LOGGER.debug("JP5 SSO redirect chain completed")
             dp_session = self.session.cookies.get("dp-session")
             if not dp_session:
                 raise APIAuthError("JP5 session cookie not found")
@@ -397,9 +411,15 @@ class FusionSolarAuthMixin:
             return True, self.station
         except requests.RequestException as err:
             self.connected = False
+            _LOGGER.warning("JP5 authentication failed: transport error (%s)", type(err).__name__)
             raise APIConnectionError("JP5 login transport failure") from err
-        except Exception:
+        except APIAuthError as err:
             self.connected = False
+            _LOGGER.warning("JP5 authentication failed: %s", err)
+            raise
+        except Exception as err:
+            self.connected = False
+            _LOGGER.warning("JP5 authentication failed during initialization (%s)", type(err).__name__)
             raise
 
     def _login_la5(self) -> bool:
