@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import pytest
 import requests
@@ -36,6 +36,9 @@ def load_method():
         "datetime": datetime,
         "timezone": timezone,
         "urljoin": urljoin,
+        "parse_qs": parse_qs,
+        "quote": quote,
+        "FINAL_AUTH_URL_LA5": "/rest/pvms/web/login/v1/redirecturl?isFirst=false",
         "urlparse": urlparse,
         "requests": requests,
         "_LOGGER": Mock(),
@@ -83,6 +86,12 @@ def test_jp5_login_success_with_two_redirects():
     assert load_method()(client) == (True, "station")
     assert client.connected
     assert client.session.get.call_count == 3
+    first_url = client.session.get.call_args_list[0].args[0]
+    query = parse_qs(urlparse(first_url).query)
+    assert query["ticket"] == ["secret"]
+    assert query["redirectionAddress"] == [
+        "https://jp5.fusionsolar.huawei.com/rest/pvms/web/login/v1/redirecturl?isFirst=false"
+    ]
     kwargs = client.session.post.call_args.kwargs
     assert kwargs["json"] == {"username": "example", "password": "placeholder", "verifycode": ""}
     assert kwargs["headers"]["App-Id"] == "smartpvms"
@@ -150,3 +159,34 @@ def test_jp5_stops_at_redirect_limit():
     with pytest.raises(APIAuthError, match="limit exceeded"):
         load_method()(client)
     assert client.session.get.call_count == 5
+
+
+def test_jp5_preserves_existing_redirection_address():
+    existing_return = "https://jp5.fusionsolar.huawei.com/rest/pvms/web/login/v1/redirecturl?isFirst=false"
+    redirect = "/rest/dp/uidm/auth/v1/on-sso-credential-ready?ticket=secret&redirectionAddress=" + quote(existing_return, safe="")
+    client = fake_client(
+        response(200, {"code": 0, "payload": {"redirectURL": redirect}}),
+        [response(200)],
+    )
+    assert load_method()(client) == (True, "station")
+    query = parse_qs(urlparse(client.session.get.call_args.args[0]).query)
+    assert query["redirectionAddress"] == [existing_return]
+
+
+def test_jp5_does_not_add_return_address_to_unrelated_redirect():
+    client = fake_client(
+        response(200, {"code": 0, "payload": {"redirectURL": "/another-sso?ticket=secret"}}),
+        [response(200)],
+    )
+    assert load_method()(client) == (True, "station")
+    assert "redirectionAddress" not in parse_qs(urlparse(client.session.get.call_args.args[0]).query)
+
+
+def test_jp5_diagnostics_do_not_log_sso_ticket():
+    client = fake_client(
+        response(200, {"code": 0, "payload": {"redirectURL": "/sso?ticket=very-secret-ticket"}}),
+        [response(302, location="https://console.antoeco.huawei.com/?ticket=very-secret-ticket")],
+    )
+    with pytest.raises(APIAuthError, match="unexpected origin"):
+        load_method()(client)
+    assert not client.connected
