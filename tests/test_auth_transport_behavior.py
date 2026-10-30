@@ -147,3 +147,33 @@ def test_reset_session_clears_authentication_state(auth_module, monkeypatch):
     assert api.csrf_time is None
     assert api.captcha_input is None
     assert api.captcha_img is None
+
+
+@pytest.mark.parametrize(("response_text", "expected"), [
+    ("true", True),
+    ("false", False),
+    ('{"success":true}', True),
+    ('{"success":false}', False),
+    ('{"valid":true}', True),
+    ('{"valid":false}', False),
+    ('{"result":"success"}', True),
+    ('{"result":"invalid"}', False),
+    ("invalid", False),
+    ("unexpected-response", False),
+    ('{"errorCode":411}', False),
+])
+def test_eu5_captcha_prevalidation_accepts_only_explicit_success(
+    auth_module, response_text, expected
+):
+    api = make_api(auth_module)
+    api.login_host = "eu5.fusionsolar.huawei.com"
+    api.session.post.return_value = make_response(text=response_text)
+    assert api._prevalidate_captcha("1234") is expected
+    assert api.session.post.call_args.kwargs["data"]["verifycode"] == "1234"
+
+
+def test_eu5_captcha_prevalidation_rejects_http_errors(auth_module):
+    api = make_api(auth_module)
+    api.login_host = "eu5.fusionsolar.huawei.com"
+    api.session.post.return_value = make_response(403, text="true")
+    assert api._prevalidate_captcha("1234") is False
