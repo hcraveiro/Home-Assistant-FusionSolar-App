@@ -200,3 +200,29 @@ def test_failed_api_response_does_not_log_sensitive_headers(auth_module, caplog)
             api._request_json("GET", "https://example.invalid", context="test")
     for secret in ("secret-response-token-test", "secret-cookie-test"):
         assert secret not in caplog.text
+
+
+@pytest.mark.parametrize("response", [
+    make_response(500, text="secret-body-marker", headers={"Set-Cookie": "dp-session=secret-cookie-marker"}),
+    make_response(200, "text/html", text="<html>secret-body-marker</html>"),
+    make_response(200, text="secret-body-marker"),
+])
+def test_http_failures_never_log_secrets(auth_module, caplog, response):
+    api = make_api(auth_module, response)
+    with caplog.at_level("DEBUG"):
+        with pytest.raises((auth_module.APIConnectionError, auth_module.APIAuthError)):
+            api._request_json("GET", "https://example.invalid", context="test")
+    assert "secret-body-marker" not in caplog.text
+    assert "secret-cookie-marker" not in caplog.text
+
+
+def test_csrf_refresh_does_not_log_token(auth_module, caplog):
+    api = make_api(auth_module)
+    api.data_host = "example.invalid"
+    api.csrf = None
+    api.csrf_time = None
+    api._request_json = Mock(return_value=(None, {"payload": "secret-csrf-marker"}))
+    with caplog.at_level("DEBUG"):
+        api.refresh_csrf()
+    assert api.csrf == "secret-csrf-marker"
+    assert "secret-csrf-marker" not in caplog.text
