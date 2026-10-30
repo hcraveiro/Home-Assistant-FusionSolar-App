@@ -116,7 +116,7 @@ class FusionSolarAuthMixin:
     
         try:
             pubkey_data = response.json()
-            _LOGGER.debug("Pubkey Response: %s", pubkey_data)
+            _LOGGER.debug("EU5 public key JSON decoded.")
         except Exception as ex:
             self.connected = False
             _LOGGER.error("EU5 public key response was not valid JSON (HTTP %s)", response.status_code)
@@ -196,7 +196,7 @@ class FusionSolarAuthMixin:
     
             try:
                 login_response = response.json()
-                _LOGGER.debug("Login Response (use_service=%s): %s", use_service, login_response)
+                _LOGGER.debug("EU5 login JSON decoded (use_service=%s)", use_service)
             except Exception as ex:
                 _LOGGER.warning(
                     "EU5 login response was not valid JSON (use_service=%s).",
@@ -275,7 +275,6 @@ class FusionSolarAuthMixin:
                     self._start_session_monitor()
                     return True, self.station
     
-                _LOGGER.error("Redirect failed: %s", redirect_response.status_code)
                 _LOGGER.error("EU5 redirect failed (HTTP %s)", redirect_response.status_code)
                 self.connected = False
                 raise APIAuthError("Redirect failed.")
