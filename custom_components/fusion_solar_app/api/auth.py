@@ -112,22 +112,14 @@ class FusionSolarAuthMixin:
             headers=pubkey_headers,
             timeout=20,
         )
-        _LOGGER.debug(
-            "Pubkey Response Headers: %s\r\nResponse: %s",
-            response.headers,
-            response.text,
-        )
+        _LOGGER.debug("EU5 public key response: HTTP %s", response.status_code)
     
         try:
             pubkey_data = response.json()
             _LOGGER.debug("Pubkey Response: %s", pubkey_data)
         except Exception as ex:
             self.connected = False
-            _LOGGER.error(
-                "Error processing Pubkey response: JSON format invalid!\r\nResponse Headers: %s\r\nResponse: %s",
-                response.headers,
-                response.text,
-            )
+            _LOGGER.error("EU5 public key response was not valid JSON (HTTP %s)", response.status_code)
             raise APIAuthError(
                 "Error processing Pubkey response: JSON format invalid!"
             ) from ex
@@ -190,11 +182,8 @@ class FusionSolarAuthMixin:
             )
     
             _LOGGER.debug(
-                "Login attempt (use_service=%s): Request Headers: %s\r\nResponse Headers: %s\r\nResponse: %s",
-                use_service,
-                headers,
-                response.headers,
-                response.text,
+                "EU5 login response: use_service=%s HTTP=%s",
+                use_service, response.status_code,
             )
     
             if response.status_code != 200:
@@ -239,11 +228,11 @@ class FusionSolarAuthMixin:
                     timeout=20,
                 )
     
-                _LOGGER.debug("Redirect Response: %s", redirect_response.text)
+                _LOGGER.debug("EU5 redirect response: HTTP %s", redirect_response.status_code)
     
                 response_headers = redirect_response.headers
                 location_header = response_headers.get("Location")
-                _LOGGER.debug("Redirect Response headers: %s", response_headers)
+                _LOGGER.debug("EU5 redirect headers received.")
     
                 if location_header:
                     self.data_host = urlparse(location_header).netloc
@@ -287,7 +276,7 @@ class FusionSolarAuthMixin:
                     return True, self.station
     
                 _LOGGER.error("Redirect failed: %s", redirect_response.status_code)
-                _LOGGER.error("%s", redirect_response.text)
+                _LOGGER.error("EU5 redirect failed (HTTP %s)", redirect_response.status_code)
                 self.connected = False
                 raise APIAuthError("Redirect failed.")
     
