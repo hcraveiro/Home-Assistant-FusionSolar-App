@@ -1245,7 +1245,7 @@ def test_isitepower_invalid_realtime_flow_does_not_emit_guessed_grid(modules, pa
         api.get_devices()
 
 
-@pytest.mark.parametrize("bad_value", ["NaN", "Infinity", "--", "", None, "12 kWh"])
+@pytest.mark.parametrize("bad_value", ["NaN", "Infinity", "--", "", None, "12 joules"])
 def test_unverified_grid_energy_does_not_become_zero(modules, bad_value):
     energy = modules[1].FusionSolarEnergyBalanceMixin
     assert energy._optional_grid_energy({"value": bad_value}, "value") is None
