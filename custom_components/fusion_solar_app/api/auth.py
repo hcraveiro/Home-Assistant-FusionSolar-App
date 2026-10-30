@@ -271,7 +271,7 @@ class FusionSolarAuthMixin:
                         self.connected = False
                         raise APIAuthError("DP Session not found in cookies.")
     
-                    _LOGGER.debug("DP Session Cookie: %s", dp_session)
+                    _LOGGER.debug("DP session cookie obtained.")
     
                     self.dp_session = dp_session
                     self.connected = True
@@ -547,42 +547,31 @@ class FusionSolarAuthMixin:
         normalized_response = response_text.strip('"').lower()
 
         _LOGGER.debug(
-            "Captcha pre-validation response. Status=%s Response=%s",
+            "Captcha pre-validation response: HTTP %s",
             response.status_code,
-            response_text,
         )
 
         if response.status_code != 200:
             return False
 
-        invalid_markers = (
-            "false",
-            "fail",
-            "failed",
-            "failure",
-            "incorrect",
-            "invalid",
-            "error",
-            "411",
-        )
-
-        valid_markers = (
-            "true",
-            "success",
-            "successful",
-            "correct",
-            "valid",
-            "ok",
-            "1",
-        )
-
-        if any(marker in normalized_response for marker in invalid_markers):
-            return False
-
-        if any(marker in normalized_response for marker in valid_markers):
-            return True
-
-        return True
+        # Unknown responses are not proof of CAPTCHA success.
+        try:
+            parsed = response.json()
+        except ValueError:
+            parsed = normalized_response
+        accepted = ("true", "success", "correct", "valid", "ok", "1")
+        if isinstance(parsed, bool):
+            return parsed
+        if isinstance(parsed, str):
+            return parsed.strip().lower() in accepted
+        if isinstance(parsed, dict):
+            for key in ("success", "valid", "result"):
+                value = parsed.get(key)
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    return value.strip().lower() in accepted
+        return False
 
     def restore_session(self, dp_session: str, data_host: str) -> None:
         """Restore an authenticated session without requiring login.
