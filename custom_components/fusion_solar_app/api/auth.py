@@ -219,7 +219,7 @@ class FusionSolarAuthMixin:
                     "referer": f"https://{self.login_host}{LOGIN_HEADERS_2_STEP_REFERER}",
                 }
     
-                _LOGGER.debug("Redirect to: %s", redirect_url)
+                _LOGGER.debug("EU5 SSO redirect received.")
     
                 redirect_response = self.session.get(
                     redirect_url,
@@ -455,7 +455,7 @@ class FusionSolarAuthMixin:
                 raise APIAuthError("LA5 login missing redirect_url")
 
             sso_url = f"{base_url}{redirect_url}"
-            _LOGGER.debug("LA5 SSO redirect: %s", sso_url)
+            _LOGGER.debug("LA5 SSO redirect requested.")
 
             self.session.get(sso_url, timeout=20, allow_redirects=False)
 
