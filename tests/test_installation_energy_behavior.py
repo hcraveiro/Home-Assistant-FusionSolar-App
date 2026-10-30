@@ -1230,3 +1230,22 @@ def test_isitepower_get_devices_leaves_unverified_grid_unknown(modules):
     output = api.get_devices()[0]
     assert output["grid_consumption_power"] is None
     assert output["grid_injection_power"] is None
+
+
+@pytest.mark.parametrize("payload", [
+    {"data": {"flow": {"nodes": None, "links": []}}},
+    {"data": {"flow": {"nodes": [], "links": None}}},
+    {"data": {"flow": []}},
+])
+def test_isitepower_invalid_realtime_flow_does_not_emit_guessed_grid(modules, payload):
+    api = make_installation(modules)
+    api._station_is_isitepower_m = True
+    api._request_json.return_value = (None, payload)
+    with pytest.raises((modules[2].APIDataStructureError, TypeError, AttributeError)):
+        api.get_devices()
+
+
+@pytest.mark.parametrize("bad_value", ["NaN", "Infinity", "--", "", None, "12 kWh"])
+def test_unverified_grid_energy_does_not_become_zero(modules, bad_value):
+    energy = modules[1].FusionSolarEnergyBalanceMixin
+    assert energy._optional_grid_energy({"value": bad_value}, "value") is None
