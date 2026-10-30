@@ -115,16 +115,10 @@ class FusionSolarInstallationMixin:
         )
 
         if "data" not in data or "flow" not in data["data"]:
-            _LOGGER.error(
-                "FusionSolar realtime data response had an unexpected structure. "
-                "Cookies=%s Headers=%s Body=%s",
-                self.session.cookies.get_dict(),
-                headers,
-                str(data)[:500],
-            )
+            _LOGGER.error("FusionSolar realtime data response had an unexpected structure.")
             raise APIDataStructureError("FusionSolar realtime data structure is invalid")
 
-        _LOGGER.debug("Get Data Response: %s", data)
+        _LOGGER.debug("FusionSolar realtime flow response received.")
 
         flow_data_nodes = data["data"]["flow"].get("nodes", [])
         flow_data_links = data["data"]["flow"].get("links", [])
@@ -240,6 +234,76 @@ class FusionSolarInstallationMixin:
             else:
                 output["grid_consumption_power"] = grid_power
                 output["grid_injection_power"] = 0.0
+
+    def _parse_isitepower_grid_import(
+        self,
+        nodes: list[dict[str, Any]],
+        links: list[dict[str, Any]],
+        output: dict[str, float | int | str],
+    ) -> None:
+        """Recognize only the verified iSitePower-M Mains-to-cube import topology."""
+        if not getattr(self, "_is_isitepower_m", False):
+            return
+
+        mains = [
+            node for node in nodes
+            if isinstance(node, dict)
+            and node.get("mocId") == 60001
+            and node.get("name") == "neteco.pvms.pcs.station.energyflow.mains"
+        ]
+        cubes = [
+            node for node in nodes
+            if isinstance(node, dict)
+            and node.get("mocId") == 60014
+            and node.get("name") == "neteco.pvms.devTypeLangKey.power_cube"
+        ]
+        if len(mains) != 1 or len(cubes) != 1:
+            return
+
+        mains_node, cube_node = mains[0], cubes[0]
+        if mains_node.get("display") != "CONNECTED":
+            return
+        mains_id, cube_id = mains_node.get("id"), cube_node.get("id")
+        if mains_id is None or cube_id is None or str(mains_id) == str(cube_id):
+            return
+
+        description = mains_node.get("description")
+        if not isinstance(description, dict):
+            return
+        reading = description.get("value")
+        if not isinstance(reading, str):
+            return
+        # Only a confirmed kW reading is valid for this graph layout.
+        match = re.fullmatch(r"[ ]*([0-9]+(?:[.][0-9]*)?|[.][0-9]+)[ ]*kW[ ]*", reading, flags=re.IGNORECASE)
+        if match is None:
+            return
+        grid_power = float(match.group(1))
+        if not 0 < grid_power < float("inf"):
+            return
+
+        connected_links = [
+            link for link in links
+            if isinstance(link, dict)
+            and {
+                str(link.get("fromNode")),
+                str(link.get("toNode")),
+            } == {str(mains_id), str(cube_id)}
+        ]
+        # A single visible Mains -> cube FORWARD flow is the only validated case.
+        if len(connected_links) != 1:
+            return
+        link = connected_links[0]
+        if (
+            link.get("visible") is not True
+            or str(link.get("fromNode")) != str(mains_id)
+            or str(link.get("toNode")) != str(cube_id)
+            or link.get("flowing") != "FORWARD"
+        ):
+            return
+
+        output["grid_consumption_power"] = grid_power
+        # Export is not proven to be zero from this graph alone.
+        output["grid_injection_power"] = None
 
     def _discover_battery_dn_from_flow_nodes(self, flow_data_nodes: list[dict[str, Any]]) -> None:
         """Discover the battery DN from installation flow nodes."""
@@ -388,7 +452,12 @@ class FusionSolarInstallationMixin:
                 ):
                     output[f"{category}_{period}"] = None
             output["battery_capacity"] = None
-        self._parse_installation_flow_links(flow_data_links, output)
+        if not getattr(self, "_is_isitepower_m", False):
+            self._parse_installation_flow_links(flow_data_links, output)
+        else:
+            # The conventional energy balance cannot establish grid direction
+            # from an incomplete iSitePower-M battery topology.
+            self._parse_isitepower_grid_import(flow_data_nodes, flow_data_links, output)
     
         self._discover_battery_dn_from_flow_nodes(flow_data_nodes)
         self._discover_inverter_dns_from_flow_nodes(flow_data_nodes)
