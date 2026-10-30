@@ -1249,3 +1249,39 @@ def test_isitepower_invalid_realtime_flow_does_not_emit_guessed_grid(modules, pa
 def test_unverified_grid_energy_does_not_become_zero(modules, bad_value):
     energy = modules[1].FusionSolarEnergyBalanceMixin
     assert energy._optional_grid_energy({"value": bad_value}, "value") is None
+
+
+@pytest.mark.parametrize("failure", [
+    TimeoutError("temporary timeout"),
+    ConnectionError("temporary connection failure"),
+])
+def test_isitepower_transport_failure_does_not_replace_grid_with_zero(modules, failure):
+    api = make_installation(modules)
+    api._station_is_isitepower_m = True
+    api._request_json.side_effect = failure
+    with pytest.raises(type(failure)):
+        api.get_devices()
+    api._request_json.side_effect = None
+    api._request_json.return_value = (None, {"data": {"flow": {"nodes": [], "links": []}}})
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(side_effect=lambda output: [output.copy()])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    output = api.get_devices()[0]
+    assert output["grid_consumption_power"] is None
+    assert output["grid_injection_power"] is None
+
+
+def test_isitepower_invalid_response_does_not_log_credentials(modules, caplog):
+    api = make_installation(modules)
+    api.session.cookies.get_dict.return_value = {"dp-session": "secret-cookie-marker"}
+    api._request_json.return_value = (None, {"data": {"unexpected": "secret-payload-marker"}})
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(modules[2].APIDataStructureError):
+            api._get_installation_flow_data()
+    assert "secret-cookie-marker" not in caplog.text
+    assert "secret-payload-marker" not in caplog.text
