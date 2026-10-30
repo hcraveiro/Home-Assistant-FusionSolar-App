@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
 
@@ -56,6 +56,9 @@ class FusionSolarAuthMixin:
 
     def login(self) -> bool:
         """Connect to api."""
+        if self.login_host == "jp5.fusionsolar.huawei.com":
+            _LOGGER.debug("Using JP5 login flow")
+            return self._login_jp5()
         if any(host in self.login_host for host in ("la5", "intl")):
             _LOGGER.debug("Using LA5 login flow")
             return self._login_la5()
@@ -315,6 +318,109 @@ class FusionSolarAuthMixin:
         raise APIAuthError(
             "Login response did not include redirect information."
         )
+
+    def _login_jp5(self) -> bool:
+        """Authenticate using the JSON and SSO flow observed on the JP5 portal."""
+        base_url = f"https://{self.login_host}"
+        service_path = "/rest/dp/uidm/auth/v1/on-sso-credential-ready"
+        headers = {
+            "App-Id": "smartpvms",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Origin": base_url,
+            "Referer": f"{base_url}/pvmswebsite/login/build/index.html",
+        }
+        self.connected = False
+        try:
+            response = self.session.post(
+                f"{base_url}{LOGIN_VALIDATE_USER_URL_LA5}",
+                params={"service": service_path},
+                json={
+                    "username": self.user,
+                    "password": self.pwd,
+                    "verifycode": self.captcha_input or "",
+                },
+                headers=headers,
+                timeout=20,
+                allow_redirects=False,
+            )
+            if response.status_code != 200:
+                raise APIAuthError(f"JP5 login failed with HTTP {response.status_code}")
+            try:
+                result = response.json()
+            except ValueError as err:
+                raise APIAuthError("JP5 login did not return JSON") from err
+            if not isinstance(result, dict) or result.get("code") != 0:
+                raise APIAuthError("JP5 login was rejected")
+            details = result.get("payload")
+            if not isinstance(details, dict) or not isinstance(details.get("redirectURL"), str):
+                raise APIAuthError("JP5 login missing SSO redirect")
+
+            redirect_url = details["redirectURL"]
+            redirect_info = urlparse(urljoin(base_url, redirect_url))
+            if (
+                redirect_info.path == service_path
+                and "redirectionAddress" not in parse_qs(redirect_info.query)
+            ):
+                return_address = base_url + FINAL_AUTH_URL_LA5
+                separator = "&" if redirect_info.query else "?"
+                redirect_url += (
+                    separator + "redirectionAddress=" + quote(return_address, safe="")
+                )
+
+            _LOGGER.debug("JP5 authentication accepted; processing SSO redirects")
+            # Never follow SSO tickets to a different origin.
+            for step in range(5):
+                target = urljoin(base_url, redirect_url)
+                parsed = urlparse(target)
+                if parsed.scheme != "https" or parsed.netloc != self.login_host:
+                    raise APIAuthError("JP5 SSO redirect has unexpected origin")
+                _LOGGER.debug("JP5 SSO redirect step %s", step + 1)
+                redirect_response = self.session.get(
+                    target,
+                    headers={"App-Id": "smartpvms"},
+                    timeout=20,
+                    allow_redirects=False,
+                )
+                if redirect_response.status_code not in (200, 302):
+                    raise APIAuthError(
+                        f"JP5 SSO redirect step {step + 1} returned HTTP {redirect_response.status_code}"
+                    )
+                if redirect_response.status_code == 302:
+                    redirect_url = redirect_response.headers.get("Location")
+                    if not redirect_url:
+                        raise APIAuthError("JP5 SSO redirect missing Location")
+                else:
+                    break
+            else:
+                raise APIAuthError("JP5 SSO redirect limit exceeded")
+
+            _LOGGER.debug("JP5 SSO redirect chain completed")
+            dp_session = self.session.cookies.get("dp-session")
+            if not dp_session:
+                raise APIAuthError("JP5 session cookie not found")
+            self.dp_session = dp_session
+            self.data_host = self.login_host
+            self.last_session_time = datetime.now(timezone.utc)
+            self.connected = True
+            self.refresh_csrf()
+            station_data = self.get_station_list()
+            self._update_station_metadata_from_station_list(station_data)
+            self._start_session_monitor()
+            _LOGGER.debug("JP5 login and station initialization succeeded")
+            return True, self.station
+        except requests.RequestException as err:
+            self.connected = False
+            _LOGGER.warning("JP5 authentication failed: transport error (%s)", type(err).__name__)
+            raise APIConnectionError("JP5 login transport failure") from err
+        except APIAuthError as err:
+            self.connected = False
+            _LOGGER.warning("JP5 authentication failed: %s", err)
+            raise
+        except Exception as err:
+            self.connected = False
+            _LOGGER.warning("JP5 authentication failed during initialization (%s)", type(err).__name__)
+            raise
 
     def _login_la5(self) -> bool:
         """Login flow for la5 (SSO without pubkey)."""
