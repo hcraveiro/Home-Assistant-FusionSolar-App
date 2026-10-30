@@ -177,3 +177,26 @@ def test_eu5_captcha_prevalidation_rejects_http_errors(auth_module):
     api.login_host = "eu5.fusionsolar.huawei.com"
     api.session.post.return_value = make_response(403, text="true")
     assert api._prevalidate_captcha("1234") is False
+
+
+def test_eu5_captcha_response_does_not_log_secret_body(auth_module, caplog):
+    api = make_api(auth_module)
+    api.login_host = "eu5.fusionsolar.huawei.com"
+    secret = "secret-session-token-test"
+    api.session.post.return_value = make_response(text='{"valid":false,"secret":"'+secret+'"}')
+    with caplog.at_level("DEBUG"):
+        assert api._prevalidate_captcha("1234") is False
+    assert secret not in caplog.text
+
+
+def test_failed_api_response_does_not_log_sensitive_headers(auth_module, caplog):
+    api = make_api(auth_module, make_response(
+        code=500,
+        text="secret-response-token-test",
+        headers={"Set-Cookie": "dp-session=secret-cookie-test"},
+    ))
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(Exception):
+            api._request_json("GET", "https://example.invalid", context="test")
+    for secret in ("secret-response-token-test", "secret-cookie-test"):
+        assert secret not in caplog.text
