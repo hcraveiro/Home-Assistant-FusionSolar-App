@@ -112,22 +112,14 @@ class FusionSolarAuthMixin:
             headers=pubkey_headers,
             timeout=20,
         )
-        _LOGGER.debug(
-            "Pubkey Response Headers: %s\r\nResponse: %s",
-            response.headers,
-            response.text,
-        )
+        _LOGGER.debug("EU5 public key response: HTTP %s", response.status_code)
     
         try:
             pubkey_data = response.json()
-            _LOGGER.debug("Pubkey Response: %s", pubkey_data)
+            _LOGGER.debug("EU5 public key JSON decoded.")
         except Exception as ex:
             self.connected = False
-            _LOGGER.error(
-                "Error processing Pubkey response: JSON format invalid!\r\nResponse Headers: %s\r\nResponse: %s",
-                response.headers,
-                response.text,
-            )
+            _LOGGER.error("EU5 public key response was not valid JSON (HTTP %s)", response.status_code)
             raise APIAuthError(
                 "Error processing Pubkey response: JSON format invalid!"
             ) from ex
@@ -190,11 +182,8 @@ class FusionSolarAuthMixin:
             )
     
             _LOGGER.debug(
-                "Login attempt (use_service=%s): Request Headers: %s\r\nResponse Headers: %s\r\nResponse: %s",
-                use_service,
-                headers,
-                response.headers,
-                response.text,
+                "EU5 login response: use_service=%s HTTP=%s",
+                use_service, response.status_code,
             )
     
             if response.status_code != 200:
@@ -207,7 +196,7 @@ class FusionSolarAuthMixin:
     
             try:
                 login_response = response.json()
-                _LOGGER.debug("Login Response (use_service=%s): %s", use_service, login_response)
+                _LOGGER.debug("EU5 login JSON decoded (use_service=%s)", use_service)
             except Exception as ex:
                 _LOGGER.warning(
                     "EU5 login response was not valid JSON (use_service=%s).",
@@ -239,11 +228,11 @@ class FusionSolarAuthMixin:
                     timeout=20,
                 )
     
-                _LOGGER.debug("Redirect Response: %s", redirect_response.text)
+                _LOGGER.debug("EU5 redirect response: HTTP %s", redirect_response.status_code)
     
                 response_headers = redirect_response.headers
                 location_header = response_headers.get("Location")
-                _LOGGER.debug("Redirect Response headers: %s", response_headers)
+                _LOGGER.debug("EU5 redirect headers received.")
     
                 if location_header:
                     self.data_host = urlparse(location_header).netloc
@@ -271,7 +260,7 @@ class FusionSolarAuthMixin:
                         self.connected = False
                         raise APIAuthError("DP Session not found in cookies.")
     
-                    _LOGGER.debug("DP Session Cookie: %s", dp_session)
+                    _LOGGER.debug("DP session cookie obtained.")
     
                     self.dp_session = dp_session
                     self.connected = True
@@ -286,8 +275,7 @@ class FusionSolarAuthMixin:
                     self._start_session_monitor()
                     return True, self.station
     
-                _LOGGER.error("Redirect failed: %s", redirect_response.status_code)
-                _LOGGER.error("%s", redirect_response.text)
+                _LOGGER.error("EU5 redirect failed (HTTP %s)", redirect_response.status_code)
                 self.connected = False
                 raise APIAuthError("Redirect failed.")
     
@@ -547,42 +535,31 @@ class FusionSolarAuthMixin:
         normalized_response = response_text.strip('"').lower()
 
         _LOGGER.debug(
-            "Captcha pre-validation response. Status=%s Response=%s",
+            "Captcha pre-validation response: HTTP %s",
             response.status_code,
-            response_text,
         )
 
         if response.status_code != 200:
             return False
 
-        invalid_markers = (
-            "false",
-            "fail",
-            "failed",
-            "failure",
-            "incorrect",
-            "invalid",
-            "error",
-            "411",
-        )
-
-        valid_markers = (
-            "true",
-            "success",
-            "successful",
-            "correct",
-            "valid",
-            "ok",
-            "1",
-        )
-
-        if any(marker in normalized_response for marker in invalid_markers):
-            return False
-
-        if any(marker in normalized_response for marker in valid_markers):
-            return True
-
-        return True
+        # Unknown responses are not proof of CAPTCHA success.
+        try:
+            parsed = response.json()
+        except ValueError:
+            parsed = normalized_response
+        accepted = ("true", "success", "correct", "valid", "ok", "1")
+        if isinstance(parsed, bool):
+            return parsed
+        if isinstance(parsed, str):
+            return parsed.strip().lower() in accepted
+        if isinstance(parsed, dict):
+            for key in ("success", "valid", "result"):
+                value = parsed.get(key)
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    return value.strip().lower() in accepted
+        return False
 
     def restore_session(self, dp_session: str, data_host: str) -> None:
         """Restore an authenticated session without requiring login.
