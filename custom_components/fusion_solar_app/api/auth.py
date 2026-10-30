@@ -444,11 +444,7 @@ class FusionSolarAuthMixin:
                 timeout=20,
             )
 
-            _LOGGER.debug(
-                "LA5 Login Response Headers: %s\r\nResponse: %s",
-                response.headers,
-                response.text,
-            )
+            _LOGGER.debug("LA5 login response: HTTP %s", response.status_code)
 
             if response.status_code != 200:
                 raise APIAuthError(f"LA5 login failed: {response.status_code}")
@@ -468,10 +464,7 @@ class FusionSolarAuthMixin:
 
             final_response = self.session.get(final_url, timeout=20, allow_redirects=False)
 
-            _LOGGER.debug(
-                "LA5 Final Response Headers: %s",
-                final_response.headers,
-            )
+            _LOGGER.debug("LA5 final response: HTTP %s", final_response.status_code)
 
             dp_session = self.session.cookies.get("dp-session")
 
@@ -484,7 +477,7 @@ class FusionSolarAuthMixin:
             self.last_session_time = datetime.now(timezone.utc)
             self.data_host = self.login_host
 
-            _LOGGER.debug("LA5 Login successful. DP Session: %s", dp_session)
+            _LOGGER.debug("LA5 login succeeded.")
 
             self.refresh_csrf()
 
@@ -647,22 +640,18 @@ class FusionSolarAuthMixin:
         if self._response_looks_like_auth_failure(response):
             _LOGGER.warning(
                 "%s appears to have returned an auth page or expired session. "
-                "Status=%s Headers=%s Body=%s",
+                "HTTP=%s",
                 context,
                 response.status_code,
-                response.headers,
-                response.text[:300],
             )
             self.connected = False
             raise APIAuthError(f"{context} returned an expired or invalid session")
 
         if response.status_code != 200:
             _LOGGER.error(
-                "%s failed. Status=%s Headers=%s Body=%s",
+                "%s failed. HTTP=%s",
                 context,
                 response.status_code,
-                response.headers,
-                response.text[:300],
             )
             raise APIConnectionError(
                 f"{context} failed with HTTP {response.status_code}"
@@ -681,19 +670,17 @@ class FusionSolarAuthMixin:
             ):
                 _LOGGER.warning(
                     "%s returned HTML instead of JSON. Treating it as an expired "
-                    "session. Status=%s Body=%s",
+                    "session. HTTP=%s",
                     context,
                     response.status_code,
-                    body_preview,
                 )
                 self.connected = False
                 raise APIAuthError(f"{context} returned HTML instead of JSON") from err
 
             _LOGGER.error(
-                "%s did not return JSON. Content-Type=%s Body=%s",
+                "%s did not return JSON. Content-Type=%s",
                 context,
                 content_type,
-                body_preview,
             )
             raise APIConnectionError(f"{context} did not return JSON") from err
 
@@ -732,10 +719,8 @@ class FusionSolarAuthMixin:
         self.captcha_img = None
 
         _LOGGER.warning(
-            "Failed to fetch captcha image. Status=%s Headers=%s Body=%s",
+            "Failed to fetch captcha image. HTTP=%s",
             response.status_code,
-            response.headers,
-            response.text[:300],
         )
 
     def refresh_csrf(self):
@@ -767,15 +752,14 @@ class FusionSolarAuthMixin:
         csrf_value = roarand_json.get("payload")
         if not csrf_value:
             _LOGGER.error(
-                "Keep-alive JSON did not contain a CSRF payload. Body=%s",
-                str(roarand_json)[:300],
+                "Keep-alive JSON did not contain a CSRF payload.",
             )
             self.connected = False
             raise APIAuthError("Could not refresh CSRF token")
 
         self.csrf = csrf_value
         self.csrf_time = now
-        _LOGGER.debug("CSRF refreshed: %s", self.csrf)
+        _LOGGER.debug("CSRF refreshed successfully.")
     
     def _get_eu5_service_value(self) -> str:
         """Return the nested service value used by the EU5 web login flow."""
