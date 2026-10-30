@@ -1285,3 +1285,25 @@ def test_isitepower_invalid_response_does_not_log_credentials(modules, caplog):
             api._get_installation_flow_data()
     assert "secret-cookie-marker" not in caplog.text
     assert "secret-payload-marker" not in caplog.text
+
+
+@pytest.mark.parametrize(("raw", "expected"), [
+    ("0.00", 0.0),
+    ("123.5 Wh", 0.1235),
+    ("1.25 kWh", 1.25),
+    ("--", None),
+    ("unknown", None),
+    ("NaN", None),
+    ("Infinity", None),
+    (True, None),
+    (None, None),
+])
+def test_energy_counter_distinguishes_measured_zero_from_missing(modules, raw, expected):
+    converter = modules[1].FusionSolarEnergyBalanceMixin._optional_grid_energy
+    assert converter({"value": raw}, "value") == expected
+
+
+def test_energy_counter_rejects_unexpected_payload_type(modules):
+    converter = modules[1].FusionSolarEnergyBalanceMixin._optional_grid_energy
+    assert converter(["0.00"], "value") is None
+    assert converter({}, "value") is None
