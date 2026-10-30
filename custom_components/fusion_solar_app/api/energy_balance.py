@@ -124,12 +124,14 @@ class FusionSolarEnergyBalanceMixin:
                 else:
                     station_data = stations[0] if stations else {}
             capacity = station_data.get("batteryCapacity")
-            if getattr(self, "_is_isitepower_m", False):
-                # A power_cube with no conventional capacity field is still
-                # an installed battery; zero is not a verified capacity.
-                capacity = self._optional_grid_energy({"capacity": capacity}, "capacity")
-                if capacity is None or capacity <= 0:
-                    capacity = None
+            # Normalize numeric strings for every station type. Unknown
+            # capacity must not be interpreted as a battery-free system.
+            capacity = self._optional_grid_energy({"capacity": capacity}, "capacity")
+            if getattr(self, "_is_isitepower_m", False) and (
+                capacity is None or capacity <= 0
+            ):
+                # iSitePower-M may have installed clusters despite zero here.
+                capacity = None
             output["battery_capacity"] = capacity
             self.battery_capacity = capacity
         else:

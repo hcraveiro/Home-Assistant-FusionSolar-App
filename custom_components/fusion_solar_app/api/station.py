@@ -40,13 +40,12 @@ class FusionSolarStationMixin:
         )
         if self.battery_capacity is None or self.battery_capacity == 0.0:
             candidate = selected_station.get("batteryCapacity")
-            if self._station_is_isitepower_m:
-                from .energy_balance import FusionSolarEnergyBalanceMixin
-                candidate = FusionSolarEnergyBalanceMixin._optional_grid_energy(
-                    {"capacity": candidate}, "capacity"
-                )
-                if candidate is None or candidate <= 0:
-                    candidate = None
+            from .energy_balance import FusionSolarEnergyBalanceMixin
+            candidate = FusionSolarEnergyBalanceMixin._optional_grid_energy(
+                {"capacity": candidate}, "capacity"
+            )
+            if self._station_is_isitepower_m and (candidate is None or candidate <= 0):
+                candidate = None
             self.battery_capacity = candidate
 
     def get_station_id(self):
