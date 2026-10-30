@@ -989,6 +989,10 @@ def test_isitepower_optional_energy_disconnect_preserves_other_periods(modules):
     (True, "0", None),
     ("TRUE", None, None),
     ("false", 0, 0),
+    ("false", "0.00", 0.0),
+    ("false", "15.5", 15.5),
+    ("false", "--", None),
+    ("true", "0.00", None),
     (False, 15, 15),
     ("true", "15.0 kWh", 15.0),
 ])
@@ -1028,3 +1032,51 @@ def test_station_flag_keeps_unknown_battery_when_flow_node_temporarily_missing(m
     assert readings["battery_capacity"] is None
     assert readings["grid_consumption_lifetime"] is None
     assert readings["battery_injection_lifetime"] is None
+
+
+def test_batteryless_station_string_capacity_restores_grid_power(modules):
+    """Reproduce #103 with a battery-free SUN2000 station-list response."""
+    station_module = sys.modules[f"{PREFIX}.api.station"]
+    station_api = station_module.FusionSolarStationMixin()
+    station_api.station = "NE=SELECTED"
+    station_api.station_name = None
+    station_api.battery_capacity = None
+    station_api._update_station_metadata_from_station_list({"data": {"list": [{
+        "dn": "NE=SELECTED", "existISitePowerM": False,
+        "batteryCapacity": "0.00",
+    }]}})
+    assert station_api.battery_capacity == 0.0
+
+    api = make_installation(modules)
+    api.battery_capacity = station_api.battery_capacity
+    output = api._build_base_output()
+    api._parse_installation_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.string",
+         "description": {"value": "3.668 kW"}},
+        {"name": "neteco.pvms.KPI.kpiView.electricalLoad",
+         "description": {"value": "0.614 kW"}},
+    ], output)
+    api._parse_installation_flow_links([{
+        "description": {
+            "label": "neteco.pvms.energy.flow.buy.power",
+            "value": "3.054 kW",
+        },
+    }], output)
+    assert output["battery_consumption_power"] == 0.0
+    assert output["battery_injection_power"] == 0.0
+    assert output["grid_injection_power"] == 3.054
+    assert output["grid_consumption_power"] == 0.0
+
+
+@pytest.mark.parametrize("capacity", ["--", None, "unavailable", "NaN"])
+def test_unknown_station_capacity_does_not_invent_missing_battery(modules, capacity):
+    station_module = sys.modules[f"{PREFIX}.api.station"]
+    station_api = station_module.FusionSolarStationMixin()
+    station_api.station = "NE=SELECTED"
+    station_api.station_name = None
+    station_api.battery_capacity = None
+    station_api._update_station_metadata_from_station_list({"data": {"list": [{
+        "dn": "NE=SELECTED", "existISitePowerM": False,
+        "batteryCapacity": capacity,
+    }]}})
+    assert station_api.battery_capacity is None
