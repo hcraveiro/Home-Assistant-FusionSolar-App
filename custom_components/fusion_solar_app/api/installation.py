@@ -115,16 +115,10 @@ class FusionSolarInstallationMixin:
         )
 
         if "data" not in data or "flow" not in data["data"]:
-            _LOGGER.error(
-                "FusionSolar realtime data response had an unexpected structure. "
-                "Cookies=%s Headers=%s Body=%s",
-                self.session.cookies.get_dict(),
-                headers,
-                str(data)[:500],
-            )
+            _LOGGER.error("FusionSolar realtime data response had an unexpected structure.")
             raise APIDataStructureError("FusionSolar realtime data structure is invalid")
 
-        _LOGGER.debug("Get Data Response: %s", data)
+        _LOGGER.debug("FusionSolar realtime flow response received.")
 
         flow_data_nodes = data["data"]["flow"].get("nodes", [])
         flow_data_links = data["data"]["flow"].get("links", [])
