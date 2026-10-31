@@ -3,7 +3,42 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from custom_components.fusion_solar_app.api.installation import FusionSolarInstallationMixin
+import ast
+import logging
+from pathlib import Path
+
+# Extract only the two pure discovery/build methods. The CI test environment
+# deliberately does not install the Home Assistant runtime.
+source_path = (
+    Path(__file__).resolve().parents[1]
+    / "custom_components/fusion_solar_app/api/installation.py"
+)
+module_ast = ast.parse(source_path.read_text(encoding="utf-8"))
+class_ast = next(
+    node for node in module_ast.body
+    if isinstance(node, ast.ClassDef) and node.name == "FusionSolarInstallationMixin"
+)
+methods = [
+    node for node in class_ast.body
+    if isinstance(node, ast.FunctionDef)
+    and node.name in {
+        "_discover_battery_dn_from_flow_nodes",
+        "_build_battery_devices",
+    }
+]
+test_ast = ast.Module(
+    body=[ast.ClassDef(
+        name="FusionSolarInstallationMixin",
+        bases=[],
+        keywords=[],
+        body=methods,
+        decorator_list=[],
+    )],
+    type_ignores=[],
+)
+namespace = {"Any": object, "_LOGGER": logging.getLogger(__name__)}
+exec(compile(ast.fix_missing_locations(test_ast), str(source_path), "exec"), namespace)
+FusionSolarInstallationMixin = namespace["FusionSolarInstallationMixin"]
 
 
 def _fake_api():
