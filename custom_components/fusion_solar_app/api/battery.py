@@ -293,7 +293,7 @@ class FusionSolarBatteryMixin:
         for device_id, device_type, raw_value, icon in battery_realtime_definitions:
             device = self._create_dynamic_device(
                 device_id, device_type, raw_value, icon,
-                dn=getattr(self, "_battery_entity_dn", None),
+                **({"dn": self._battery_entity_dn} if getattr(self, "_battery_entity_dn", None) else {}),
             )
             if device is not None:
                 devices.append(device)
@@ -417,7 +417,7 @@ class FusionSolarBatteryMixin:
         for device_id, device_type, raw_value, icon in battery_module_definitions:
             device = self._create_dynamic_device(
                 device_id, device_type, raw_value, icon,
-                dn=getattr(self, "_battery_entity_dn", None),
+                **({"dn": self._battery_entity_dn} if getattr(self, "_battery_entity_dn", None) else {}),
             )
             if device is not None:
                 devices.append(device)
@@ -479,7 +479,7 @@ class FusionSolarBatteryMixin:
                 device_id = f"Battery Module {module_id} Pack {pack_index} {metric_name}"
                 device = self._create_dynamic_device(
                 device_id, device_type, raw_value, icon,
-                dn=getattr(self, "_battery_entity_dn", None),
+                **({"dn": self._battery_entity_dn} if getattr(self, "_battery_entity_dn", None) else {}),
             )
                 if device is not None:
                     devices.append(device)
