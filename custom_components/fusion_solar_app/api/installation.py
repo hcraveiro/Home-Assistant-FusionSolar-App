@@ -242,20 +242,29 @@ class FusionSolarInstallationMixin:
                 output["grid_injection_power"] = 0.0
 
     def _discover_battery_dn_from_flow_nodes(self, flow_data_nodes: list[dict[str, Any]]) -> None:
-        """Discover the battery DN from installation flow nodes."""
-        if self.battery_dn is not None:
-            return
+        """Discover every battery DN while preserving the legacy primary battery."""
+        if not hasattr(self, "battery_dns"):
+            self.battery_dns = []
+        if self.battery_dn and self.battery_dn not in self.battery_dns:
+            self.battery_dns.insert(0, self.battery_dn)
 
         for node in flow_data_nodes:
-            if node.get("name") != "neteco.pvms.devTypeLangKey.energy_store":
+            if "energy_store" not in str(node.get("name", "")):
                 continue
 
-            dev_ids = node.get("devIds") or []
-            dn = dev_ids[0] if dev_ids else node.get("devDn")
-            if dn:
-                self.battery_dn = dn
-                _LOGGER.info("Discovered battery DN: %s", self.battery_dn)
-                return
+            dev_ids = node.get("devIds")
+            candidates = dev_ids if isinstance(dev_ids, list) and dev_ids else [node.get("devDn")]
+            for candidate in candidates:
+                if not isinstance(candidate, (str, int)) or not str(candidate).strip():
+                    continue
+                dn = str(candidate)
+                if dn not in self.battery_dns:
+                    self.battery_dns.append(dn)
+
+        if self.battery_dns:
+            if self.battery_dn is None:
+                self.battery_dn = self.battery_dns[0]
+            _LOGGER.info("Discovered battery DNs: %s", self.battery_dns)
 
     def _enrich_installation_output(
         self,
@@ -347,12 +356,45 @@ class FusionSolarInstallationMixin:
         return devices
 
     def _build_battery_devices(self) -> list[Device]:
-        """Build battery device entities."""
-        try:
-            return self.get_battery_devices()
-        except Exception as ex:
-            _LOGGER.warning("Failed to fetch battery devices: %s", ex)
+        """Build each battery independently, retaining primary legacy entity IDs."""
+        battery_dns = list(dict.fromkeys(getattr(self, "battery_dns", []) or []))
+        if self.battery_dn and self.battery_dn not in battery_dns:
+            battery_dns.insert(0, self.battery_dn)
+        if not battery_dns:
             return []
+
+        primary_dn = self.battery_dn or battery_dns[0]
+        devices: list[Device] = []
+        original_dn = self.battery_dn
+        metadata_fields = (
+            "battery_model",
+            "battery_serial_number",
+            "battery_software_version",
+        )
+        primary_metadata = {field: getattr(self, field, None) for field in metadata_fields}
+        try:
+            for dn in battery_dns:
+                self.battery_dn = dn
+                # Only secondary batteries receive a DN scope, preserving legacy IDs.
+                self._battery_entity_dn = dn if dn != primary_dn else None
+                if dn != primary_dn:
+                    for field in metadata_fields:
+                        setattr(self, field, None)
+                try:
+                    devices.extend(self.get_battery_devices())
+                except Exception as ex:
+                    _LOGGER.warning("Failed to fetch battery devices for %s: %s", dn, ex)
+                finally:
+                    if dn == primary_dn:
+                        primary_metadata = {
+                            field: getattr(self, field, None) for field in metadata_fields
+                        }
+        finally:
+            self.battery_dn = original_dn
+            self._battery_entity_dn = None
+            for field, value in primary_metadata.items():
+                setattr(self, field, value)
+        return devices
 
     def _build_power_sensor_devices(
         self,
