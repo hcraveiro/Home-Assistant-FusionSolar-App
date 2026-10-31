@@ -56,6 +56,8 @@ class FusionSolarAPI(
         self.inverters: Dict[str, InverterInfo] = {}
 
         self.battery_dn = None
+        self.battery_dns: list[str] = []
+        self._battery_entity_dn: str | None = None
         self.battery_model = None
         self.battery_serial_number = None
         self.battery_software_version = None
