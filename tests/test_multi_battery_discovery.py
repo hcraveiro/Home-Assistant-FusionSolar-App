@@ -36,7 +36,7 @@ test_ast = ast.Module(
     )],
     type_ignores=[],
 )
-namespace = {"Any": object, "_LOGGER": logging.getLogger(__name__)}
+namespace = {"Any": object, "Device": object, "_LOGGER": logging.getLogger(__name__)}
 exec(compile(ast.fix_missing_locations(test_ast), str(source_path), "exec"), namespace)
 FusionSolarInstallationMixin = namespace["FusionSolarInstallationMixin"]
 
