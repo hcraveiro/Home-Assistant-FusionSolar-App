@@ -447,3 +447,51 @@ def test_aggregate_station_soc_and_capacity_are_not_assigned_to_individual_batte
     )
     assert api.battery_dn == "BAT_A"
     assert api._battery_entity_dn is None
+
+
+def test_station_aggregate_soc_and_capacity_are_not_copied_to_individual_batteries():
+    """Station-wide SoC/capacity must not masquerade as per-battery telemetry.
+
+    The legacy installation sensors remain intact. Individual battery SoC and
+    capacity need independently verified Huawei API fields before being added.
+    """
+    battery_source = (source_path.parent / "battery.py").read_text(encoding="utf-8")
+    battery_tree = ast.parse(battery_source)
+    battery_mixin = next(
+        node for node in battery_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "FusionSolarBatteryMixin"
+    )
+    battery_builder = next(
+        node for node in battery_mixin.body
+        if isinstance(node, ast.FunctionDef) and node.name == "get_battery_devices"
+    )
+    battery_labels = {
+        node.value for node in ast.walk(battery_builder)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert "Battery Percentage" not in battery_labels
+    assert "Battery Capacity" not in battery_labels
+
+    installation_builder = next(
+        node for node in class_ast.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_build_installation_devices"
+    )
+    installation_source = ast.get_source_segment(
+        source_path.read_text(encoding="utf-8"), installation_builder
+    )
+    assert "for device in DEVICES" in installation_source
+
+    # A discovered secondary battery must not inherit station-level aggregate
+    # readings merely because both battery DNs are now available.
+    api = _fake_api()
+    api.battery_dn = "BAT_A"
+    api.battery_dns = ["BAT_A", "BAT_B"]
+    api.station_output = {"battery_percentage": 63, "battery_capacity": 30.0}
+
+    def per_battery_readings():
+        return [{"dn": api.battery_dn, "name": "Battery Charge/Discharge Power"}]
+
+    api.get_battery_devices = per_battery_readings
+    actual = api._build_battery_devices()
+    assert [device["dn"] for device in actual] == ["BAT_A", "BAT_B"]
+    assert all(device["name"] not in {"Battery Percentage", "Battery Capacity"} for device in actual)
