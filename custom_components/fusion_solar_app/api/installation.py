@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 from typing import Any
 from urllib.parse import unquote
 
@@ -268,6 +269,59 @@ class FusionSolarInstallationMixin:
                 self.battery_dn = self.battery_dns[0]
             _LOGGER.info("Discovered battery DNs: %s", self.battery_dns)
 
+    def _discover_additional_batteries_from_v3(self) -> None:
+        """Probe v3 for secondary batteries only on multi-inverter stations.
+
+        The existing v2 flow remains authoritative for all live power and
+        installation measurements. This optional v3 request only supplements
+        battery discovery when it confirms the primary battery DN.
+        """
+        if (
+            getattr(self, "_is_isitepower_m", False)
+            or len(getattr(self, "inverters", {})) < 2
+            or len(getattr(self, "battery_dns", [])) > 1
+            or not self.battery_dn
+        ):
+            return
+
+        now = time.monotonic()
+        if now < getattr(self, "_battery_v3_next_probe", 0):
+            return
+        # Never add an additional API request on every 60-second refresh.
+        self._battery_v3_next_probe = now + 3600
+        try:
+            _, response = self._request_json(
+                "GET",
+                f"https://{self.data_host}/rest/pvms/web/station/v3/overview/energy-flow",
+                context="FusionSolar secondary battery discovery",
+                headers={"Accept": "application/json"},
+                params={"stationDn": unquote(self.station), "featureId": "aifc"},
+            )
+            if not isinstance(response, dict) or response.get("success") is not True:
+                return
+            flow = response.get("data", {}).get("flow", {})
+            nodes = flow.get("nodes") if isinstance(flow, dict) else None
+            if not isinstance(nodes, list):
+                return
+            candidates = []
+            for node in nodes:
+                if not isinstance(node, dict) or node.get("name") != "neteco.pvms.devTypeLangKey.energy_store":
+                    continue
+                ids = node.get("devIds")
+                if not isinstance(ids, list):
+                    continue
+                candidates.extend(
+                    str(dn).strip() for dn in ids
+                    if isinstance(dn, (str, int)) and not isinstance(dn, bool) and str(dn).strip()
+                )
+            # A different v3 primary ID could represent a different device
+            # namespace. Never introduce duplicate or unrelated battery devices.
+            if self.battery_dn not in candidates or len(set(candidates)) < 2:
+                return
+            self._discover_battery_dn_from_flow_nodes(nodes)
+        except Exception as ex:
+            _LOGGER.debug("Secondary battery v3 discovery unavailable: %s", type(ex).__name__)
+
     def _enrich_installation_output(
         self,
         output: dict[str, float | int | str],
@@ -436,6 +490,7 @@ class FusionSolarInstallationMixin:
     
         self._discover_battery_dn_from_flow_nodes(flow_data_nodes)
         self._discover_inverter_dns_from_flow_nodes(flow_data_nodes)
+        self._discover_additional_batteries_from_v3()
         for inverter_dn in self.inverters:
             self._ensure_inverter_metadata_loaded(inverter_dn)
     
