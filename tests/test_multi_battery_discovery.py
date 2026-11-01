@@ -341,3 +341,55 @@ def test_v3_failure_does_not_change_primary_and_is_rate_limited():
     assert len(calls) == 1
     assert api.battery_dn == "BAT_A"
     assert api.battery_dns == ["BAT_A"]
+
+
+def test_battery_discovery_order_changes_never_replace_primary():
+    api = _fake_api()
+    api._discover_battery_dn_from_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.energy_store", "devIds": ["BAT_A", "BAT_B"]},
+    ])
+    original_primary = api.battery_dn
+    for ids in (["BAT_B", "BAT_A"], ["BAT_B"], ["BAT_A", "BAT_B"]):
+        api._discover_battery_dn_from_flow_nodes([
+            {"name": "neteco.pvms.devTypeLangKey.energy_store", "devIds": ids},
+        ])
+        assert api.battery_dn == original_primary
+        assert api.battery_dns == ["BAT_A", "BAT_B"]
+
+
+def test_v3_reversed_order_does_not_reassign_primary():
+    api = _fake_api()
+    _configure_v3_api(api, [
+        {"name": "neteco.pvms.devTypeLangKey.energy_store",
+         "devIds": ["BAT_B", "BAT_A"]},
+    ])
+    api._discover_additional_batteries_from_v3()
+    assert api.battery_dn == "BAT_A"
+    assert api.battery_dns == ["BAT_A", "BAT_B"]
+
+
+def test_v3_retries_after_cooldown_and_recovers_from_missing_flow():
+    api = _fake_api()
+    calls = _configure_v3_api(api, [])
+    times = iter([1000, 1001, 4601])
+    original_request = api._request_json
+
+    def request(method, url, **kwargs):
+        if len(calls) == 0:
+            calls.append((method, url, kwargs))
+            return None, {"success": True, "data": {"flow": {}}}
+        return original_request(method, url, **kwargs)
+
+    api._request_json = request
+    module_time = FusionSolarInstallationMixin._discover_additional_batteries_from_v3.__globals__["time"]
+    old_monotonic = module_time.monotonic
+    try:
+        module_time.monotonic = lambda: next(times)
+        api._discover_additional_batteries_from_v3()
+        api._discover_additional_batteries_from_v3()
+        api._discover_additional_batteries_from_v3()
+    finally:
+        module_time.monotonic = old_monotonic
+    assert len(calls) == 2
+    assert api.battery_dn == "BAT_A"
+    assert api.battery_dns == ["BAT_A"]
