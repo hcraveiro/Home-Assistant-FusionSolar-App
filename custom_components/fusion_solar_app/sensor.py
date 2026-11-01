@@ -216,17 +216,33 @@ def _build_device_info(
             device.device_id in BATTERY_DEVICE_SENSOR_IDS
             or device.device_id.startswith("Battery Module ")
         ):
-            battery_dn = getattr(coordinator.api, "battery_dn", None) or "unknown_battery"
-            battery_model = getattr(coordinator.api, "battery_model", None) or "FusionSolar Battery"
-            battery_software_version = getattr(coordinator.api, "battery_software_version", None) or "1.0"
-            battery_serial_number = getattr(coordinator.api, "battery_serial_number", None)
+            # Primary battery retains its exact legacy registry identifier.
+            # Secondary telemetry is scoped by its own DN and never inherits
+            # the primary battery's model, serial number or firmware.
+            is_secondary = device.dn is not None
+            battery_dn = (
+                device.dn if is_secondary
+                else getattr(coordinator.api, "battery_dn", None)
+            ) or "unknown_battery"
+            battery_model = (
+                "FusionSolar Battery" if is_secondary
+                else getattr(coordinator.api, "battery_model", None) or "FusionSolar Battery"
+            )
+            battery_software_version = (
+                None if is_secondary
+                else getattr(coordinator.api, "battery_software_version", None) or "1.0"
+            )
+            battery_serial_number = (
+                None if is_secondary
+                else getattr(coordinator.api, "battery_serial_number", None)
+            )
 
             return DeviceInfo(
-                name="Fusion Solar Battery",
+                name="Fusion Solar Battery" if not is_secondary else f"Fusion Solar Battery ({battery_dn})",
                 manufacturer="Huawei",
                 model=battery_model,
-                sw_version=battery_software_version,
-                serial_number=battery_serial_number,
+                **({"sw_version": battery_software_version} if battery_software_version else {}),
+                **({"serial_number": battery_serial_number} if battery_serial_number else {}),
                 identifiers={
                     (
                         DOMAIN,
