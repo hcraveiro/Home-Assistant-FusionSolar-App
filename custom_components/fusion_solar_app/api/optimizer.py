@@ -13,6 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 _LAYOUT = "/rest/pvms/web/station/v1/layout"
 _COUNTS = "/rest/pvms/web/station/v1/layout/station-simple-devicedata"
 _SAMPLING = "/rest/pvms/web/station/v1/layout/device-sampling-data"
+_LOGICAL_TREE = "/rest/pvms/web/station/v1/layout/device-tree-page"
 
 # Values from device-sampling-data. Optimizer power is reported in watts.
 _FIELDS = (
@@ -59,6 +60,56 @@ def _parse_optimizer_layout(data: dict[str, Any]) -> dict[str, dict[str, str]]:
             "model": str(info.get("modelVersion") or "FusionSolar Optimizer"),
             "serial": str(info.get("bindNode") or ""),
         }
+    return found
+
+
+
+def _parse_optimizer_logical_tree(data: Any) -> dict[str, dict[str, str]]:
+    """Discover optimizer DNs from the logical inverter tree when no physical layout exists.
+
+    The logical tree uses bindInverterDn for optimizer ownership. parentDn
+    is not an inverter reference in this topology.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+        return {}
+
+    inverters = {
+        node["dn"] for node in data["list"]
+        if isinstance(node, dict)
+        and str(node.get("mocId")) == "20822"
+        and isinstance(node.get("dn"), str)
+        and node["dn"].strip()
+    }
+    found: dict[str, dict[str, str]] = {}
+    conflicting: set[str] = set()
+    for inverter in data["list"]:
+        if not isinstance(inverter, dict) or str(inverter.get("mocId")) != "20822":
+            continue
+        children = inverter.get("children")
+        if not isinstance(children, list):
+            continue
+        for child in children:
+            if not isinstance(child, dict) or str(child.get("mocId")) != "20814":
+                continue
+            dn = child.get("dn")
+            parent = child.get("bindInverterDn")
+            if (
+                not isinstance(dn, str) or not dn.strip()
+                or not isinstance(parent, str) or parent not in inverters
+                or parent != inverter.get("dn") or dn in conflicting
+            ):
+                continue
+            entry = {
+                "parent_dn": parent,
+                "position": str(child.get("pvNum") or child.get("deviceNumber") or ""),
+                "model": str(child.get("meType") or "FusionSolar Optimizer"),
+                "serial": str(child.get("sn") or ""),
+            }
+            if dn in found and found[dn]["parent_dn"] != parent:
+                del found[dn]
+                conflicting.add(dn)
+            else:
+                found[dn] = entry
     return found
 
 
@@ -110,12 +161,33 @@ class FusionSolarOptimizerMixin:
             if not isinstance(counts, dict) or _safe_number(counts.get("optimizerNum")) in (None, 0):
                 self._optimizers = {}
                 return []
-            layout = self._optimizer_request(
-                "GET", _LAYOUT,
-                params={"stationDn": self.station, "sheetNO": 0, "callerType": 0, "queryType": 0},
-            )
-            topology = _parse_optimizer_layout({"data": layout})
-            # Do not permanently cache a malformed topology; retry next poll.
+            try:
+                layout = self._optimizer_request(
+                    "GET", _LAYOUT,
+                    params={"stationDn": self.station, "sheetNO": 0, "callerType": 0, "queryType": 0},
+                )
+                topology = _parse_optimizer_layout({"data": layout})
+            except Exception as ex:
+                _LOGGER.debug("Physical optimizer layout unavailable: %s", type(ex).__name__)
+                topology = {}
+            if not topology:
+                # HAR-confirmed logical-layout fallback for master/slave systems.
+                # Do not change the existing physical-layout discovery path.
+                try:
+                    tree = self._optimizer_request(
+                        "POST", _LOGICAL_TREE,
+                        json_body={
+                            "stationDn": self.station,
+                            "layoutType": 2,
+                            "deviceDn": self.station,
+                            "invertDnlist": [],
+                        },
+                    )
+                    topology = _parse_optimizer_logical_tree(tree)
+                except Exception as ex:
+                    _LOGGER.debug("Logical optimizer discovery unavailable: %s", type(ex).__name__)
+                    topology = {}
+            # Retry a missing or malformed topology at the next refresh.
             if not topology:
                 return []
             self._optimizers = topology
