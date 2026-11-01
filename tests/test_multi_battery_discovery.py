@@ -436,7 +436,7 @@ def test_aggregate_station_soc_and_capacity_are_not_assigned_to_individual_batte
     battery_devices = api._build_battery_devices()
 
     assert {device.device_id: device.state for device in station_devices} == aggregate
-    assert all(device.dn is None for device in station_devices)
+    assert all(getattr(device, "dn", None) is None for device in station_devices)
     assert {device.device_unique_id for device in station_devices} == {
         "station-Battery Percentage", "station-Battery Capacity"
     }
