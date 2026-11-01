@@ -2,6 +2,7 @@
 
 import html
 import json
+from unittest.mock import patch
 from pathlib import Path
 import importlib.util
 import sys
@@ -261,3 +262,59 @@ def test_logical_layout_fallback_preserves_scoped_optimizer_ids(optimizer_module
     assert tree_call[0] == "POST"
     assert tree_call[2]["json_body"]["layoutType"] == 2
     assert tree_call[2]["json_body"]["invertDnlist"] == []
+
+
+def test_zero_optimizer_count_is_rechecked_after_cooldown(optimizer_module):
+    api = FakeOptimizerAPI(optimizer_module, [], count=0)
+    with patch.object(optimizer_module.time, "monotonic", return_value=1000):
+        assert api.get_optimizer_devices() == []
+        assert api.get_optimizer_devices() == []
+    assert len(api._calls) == 1
+    api.count = 2
+    with patch.object(optimizer_module.time, "monotonic", return_value=1901):
+        api.get_optimizer_devices()
+    assert len([call for call in api._calls if call[1].endswith("station-simple-devicedata")]) == 2
+    assert len(api._optimizers) == 2
+
+
+def test_empty_logical_topology_is_rate_limited_and_recovers(optimizer_module, logical_tree):
+    class RecoveringAPI(FakeOptimizerAPI):
+        available = False
+
+        def _optimizer_request(self, method, endpoint, **kwargs):
+            self._calls.append((method, endpoint, kwargs))
+            if endpoint.endswith("station-simple-devicedata"):
+                return {"optimizerNum": 12}
+            if endpoint.endswith("/layout"):
+                return {"schemaData": json.dumps({"areas": [], "buildings": []})}
+            if endpoint.endswith("device-tree-page"):
+                return logical_tree if self.available else {"list": []}
+            return []
+    api = RecoveringAPI(optimizer_module, [])
+    with patch.object(optimizer_module.time, "monotonic", return_value=1000):
+        api.get_optimizer_devices()
+        api.get_optimizer_devices()
+    assert sum(c[1].endswith("device-tree-page") for c in api._calls) == 1
+    api.available = True
+    with patch.object(optimizer_module.time, "monotonic", return_value=1901):
+        api.get_optimizer_devices()
+    assert len(api._optimizers) == 12
+
+
+def test_physical_layout_never_calls_logical_fallback(api):
+    api.get_optimizer_devices()
+    assert not any(call[1].endswith("device-tree-page") for call in api._calls)
+
+
+def test_offline_optimizer_keeps_status_but_not_stale_power(api):
+    api.records[0]["connectStatus"] = "offline"
+    api.records[0]["dailyEnergy"] = "0.21"
+    results = api.get_optimizer_devices()
+    values = {(d.dn, d.device_id): d.state for d in results}
+    assert values[("NE=OPT_2", "Optimizer Output Power")] is None
+    assert values[("NE=OPT_2", "Optimizer Input Voltage")] is None
+    assert values[("NE=OPT_2", "Optimizer Energy Today")] == 0.21
+    assert values[("NE=OPT_2", "Optimizer Connection")] == "offline"
+    api.records[0]["connectStatus"] = "connected"
+    fresh = {(d.dn, d.device_id): d.state for d in api.get_optimizer_devices()}
+    assert fresh[("NE=OPT_2", "Optimizer Output Power")] == pytest.approx(0.1096)
