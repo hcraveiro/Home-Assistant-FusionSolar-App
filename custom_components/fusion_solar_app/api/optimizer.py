@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import time
 from typing import Any
 
 from .models import Device, DeviceType
@@ -154,12 +155,13 @@ class FusionSolarOptimizerMixin:
         if not self.station:
             return []
         topology = getattr(self, "_optimizers", None)
-        if topology is None:
+        if topology is None or (not topology and time.monotonic() >= getattr(self, "_optimizer_next_probe", 0)):
             counts = self._optimizer_request(
                 "GET", _COUNTS, params={"stationDn": self.station}
             )
             if not isinstance(counts, dict) or _safe_number(counts.get("optimizerNum")) in (None, 0):
                 self._optimizers = {}
+                self._optimizer_next_probe = time.monotonic() + 900
                 return []
             try:
                 layout = self._optimizer_request(
@@ -189,6 +191,8 @@ class FusionSolarOptimizerMixin:
                     topology = {}
             # Retry a missing or malformed topology at the next refresh.
             if not topology:
+                self._optimizers = {}
+                self._optimizer_next_probe = time.monotonic() + 900
                 return []
             self._optimizers = topology
         if not topology:
