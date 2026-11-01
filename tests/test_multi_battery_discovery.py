@@ -117,3 +117,56 @@ def test_secondary_failure_does_not_remove_primary():
     api.get_battery_devices = fetch
     assert api._build_battery_devices() == ["primary"]
     assert api.battery_dn == "BAT_A"
+
+
+def test_repeated_discovery_preserves_primary_and_stable_order():
+    api = _fake_api()
+    api.battery_dn = "BAT_A"
+    api._discover_battery_dn_from_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.energy_store", "devIds": ["BAT_B", "BAT_A"]},
+    ])
+    api._discover_battery_dn_from_flow_nodes([
+        {"name": "neteco.pvms.devTypeLangKey.energy_store", "devIds": ["BAT_C", "BAT_B"]},
+    ])
+    assert api.battery_dn == "BAT_A"
+    assert api.battery_dns == ["BAT_A", "BAT_B", "BAT_C"]
+
+
+def test_discovery_ignores_missing_and_malformed_identifiers():
+    api = _fake_api()
+    api._discover_battery_dn_from_flow_nodes([
+        {"name": "unrelated", "devIds": ["IGNORE"]},
+        {"name": "neteco.pvms.devTypeLangKey.energy_store", "devIds": [None, "", " ", {}, False]},
+        {"name": "neteco.pvms.devTypeLangKey.energy_store", "devDn": None},
+    ])
+    assert api.battery_dns == []
+    assert api.battery_dn is None
+
+
+def test_all_secondary_failures_restore_primary_state():
+    api = _fake_api()
+    api.battery_dn = "BAT_A"
+    api.battery_dns = ["BAT_A", "BAT_B", "BAT_C"]
+    api.get_battery_devices = lambda: (["primary"] if api.battery_dn == "BAT_A"
+                                      else (_ for _ in ()).throw(RuntimeError("temporary failure")))
+    assert api._build_battery_devices() == ["primary"]
+    assert api.battery_dn == "BAT_A"
+    assert api._battery_entity_dn is None
+    assert api.battery_model == "primary"
+    assert api.battery_serial_number == "serial-primary"
+
+
+def test_secondary_scoping_is_stable_across_refreshes():
+    api = _fake_api()
+    api.battery_dn = "BAT_A"
+    api.battery_dns = ["BAT_A", "BAT_B"]
+    seen = []
+
+    def fetch():
+        seen.append((api.battery_dn, api._battery_entity_dn))
+        return [api.battery_dn]
+
+    api.get_battery_devices = fetch
+    assert api._build_battery_devices() == ["BAT_A", "BAT_B"]
+    assert api._build_battery_devices() == ["BAT_A", "BAT_B"]
+    assert seen == [("BAT_A", None), ("BAT_B", "BAT_B")] * 2
