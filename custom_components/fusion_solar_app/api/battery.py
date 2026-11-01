@@ -478,9 +478,9 @@ class FusionSolarBatteryMixin:
                 raw_value = module_name_map.get(f"{pack_prefix}{metric_name}")
                 device_id = f"Battery Module {module_id} Pack {pack_index} {metric_name}"
                 device = self._create_dynamic_device(
-                device_id, device_type, raw_value, icon,
-                **({"dn": self._battery_entity_dn} if getattr(self, "_battery_entity_dn", None) else {}),
-            )
+                    device_id, device_type, raw_value, icon,
+                    **({"dn": self._battery_entity_dn} if getattr(self, "_battery_entity_dn", None) else {}),
+                )
                 if device is not None:
                     devices.append(device)
     
