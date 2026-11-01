@@ -5,9 +5,11 @@ from unittest.mock import Mock
 
 import ast
 import logging
+import time
 from pathlib import Path
+from urllib.parse import unquote
 
-# Extract only the two pure discovery/build methods. The CI test environment
+# Extract the independent discovery/build methods. The CI test environment
 # deliberately does not install the Home Assistant runtime.
 source_path = (
     Path(__file__).resolve().parents[1]
@@ -24,6 +26,7 @@ methods = [
     and node.name in {
         "_discover_battery_dn_from_flow_nodes",
         "_build_battery_devices",
+        "_discover_additional_batteries_from_v3",
     }
 ]
 test_ast = ast.Module(
@@ -36,7 +39,7 @@ test_ast = ast.Module(
     )],
     type_ignores=[],
 )
-namespace = {"Any": object, "Device": object, "_LOGGER": logging.getLogger(__name__)}
+namespace = {"Any": object, "Device": object, "_LOGGER": logging.getLogger(__name__), "time": time, "unquote": unquote}
 exec(compile(ast.fix_missing_locations(test_ast), str(source_path), "exec"), namespace)
 FusionSolarInstallationMixin = namespace["FusionSolarInstallationMixin"]
 
@@ -52,6 +55,9 @@ def _fake_api():
     )
     api._discover_battery_dn_from_flow_nodes = (
         lambda nodes: FusionSolarInstallationMixin._discover_battery_dn_from_flow_nodes(api, nodes)
+    )
+    api._discover_additional_batteries_from_v3 = (
+        lambda: FusionSolarInstallationMixin._discover_additional_batteries_from_v3(api)
     )
     api._build_battery_devices = (
         lambda: FusionSolarInstallationMixin._build_battery_devices(api)
@@ -266,3 +272,72 @@ def test_secondary_and_primary_unique_ids_remain_distinct():
     assert primary == "fusion_solar_app_station-a_battery_module_1_pack_1_soh"
     assert secondary != primary
     assert "bat_b" in secondary
+
+
+def _configure_v3_api(api, nodes, inverter_count=2):
+    api.station = "NE=STATION"
+    api.data_host = "example.invalid"
+    api.inverters = {f"INV_{i}": object() for i in range(inverter_count)}
+    api.battery_dn = "BAT_A"
+    api.battery_dns = ["BAT_A"]
+    calls = []
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return None, {"success": True, "data": {"flow": {"nodes": nodes}}}
+
+    api._request_json = request
+    return calls
+
+
+def test_v3_supplements_only_battery_discovery_for_two_inverters():
+    api = _fake_api()
+    calls = _configure_v3_api(api, [
+        {"name": "neteco.pvms.devTypeLangKey.energy_store",
+         "devIds": ["BAT_A", "BAT_B"]},
+    ])
+    api._discover_additional_batteries_from_v3()
+    assert api.battery_dn == "BAT_A"
+    assert api.battery_dns == ["BAT_A", "BAT_B"]
+    assert len(calls) == 1
+    assert calls[0][0] == "GET"
+    assert "/station/v3/overview/energy-flow" in calls[0][1]
+    assert calls[0][2]["params"]["featureId"] == "aifc"
+    api._discover_additional_batteries_from_v3()
+    assert len(calls) == 1
+
+
+def test_v3_never_probes_single_inverter_installations():
+    api = _fake_api()
+    calls = _configure_v3_api(api, [], inverter_count=1)
+    api._discover_additional_batteries_from_v3()
+    assert calls == []
+    assert api.battery_dns == ["BAT_A"]
+
+
+def test_v3_rejects_unrelated_or_ambiguous_battery_ids():
+    api = _fake_api()
+    calls = _configure_v3_api(api, [
+        {"name": "neteco.pvms.devTypeLangKey.energy_store",
+         "devIds": ["OTHER_1", "OTHER_2"]},
+    ])
+    api._discover_additional_batteries_from_v3()
+    assert len(calls) == 1
+    assert api.battery_dn == "BAT_A"
+    assert api.battery_dns == ["BAT_A"]
+
+
+def test_v3_failure_does_not_change_primary_and_is_rate_limited():
+    api = _fake_api()
+    calls = _configure_v3_api(api, [])
+
+    def failing_request(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise RuntimeError("HTTP 500")
+
+    api._request_json = failing_request
+    api._discover_additional_batteries_from_v3()
+    api._discover_additional_batteries_from_v3()
+    assert len(calls) == 1
+    assert api.battery_dn == "BAT_A"
+    assert api.battery_dns == ["BAT_A"]
