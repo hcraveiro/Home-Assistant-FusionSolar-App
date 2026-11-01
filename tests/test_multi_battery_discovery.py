@@ -408,7 +408,7 @@ def test_aggregate_station_soc_and_capacity_are_not_assigned_to_individual_batte
         if isinstance(node, ast.FunctionDef) and node.name == "_build_installation_devices"
     )
     station_namespace = {
-        "Device": lambda **kwargs: SimpleNamespace(**kwargs),
+        "Device": lambda **kwargs: SimpleNamespace(dn=None, **kwargs),
         "DEVICES": [
             {"id": "Battery Percentage", "type": "percentage", "icon": "mdi:battery"},
             {"id": "Battery Capacity", "type": "energy", "icon": "mdi:battery"},
