@@ -307,14 +307,14 @@ def test_physical_layout_never_calls_logical_fallback(api):
 
 
 def test_offline_optimizer_keeps_status_but_not_stale_power(api):
-    api.records[0]["connectStatus"] = "offline"
-    api.records[0]["dailyEnergy"] = "0.21"
+    api.records[1]["connectStatus"] = "offline"
+    api.records[1]["dailyEnergy"] = "0.21"
     results = api.get_optimizer_devices()
     values = {(d.dn, d.device_id): d.state for d in results}
     assert values[("NE=OPT_2", "Optimizer Output Power")] is None
     assert values[("NE=OPT_2", "Optimizer Input Voltage")] is None
     assert values[("NE=OPT_2", "Optimizer Energy Today")] == 0.21
     assert values[("NE=OPT_2", "Optimizer Connection")] == "offline"
-    api.records[0]["connectStatus"] = "connected"
+    api.records[1]["connectStatus"] = "connected"
     fresh = {(d.dn, d.device_id): d.state for d in api.get_optimizer_devices()}
     assert fresh[("NE=OPT_2", "Optimizer Output Power")] == pytest.approx(0.1096)
