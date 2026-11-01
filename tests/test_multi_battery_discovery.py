@@ -170,3 +170,53 @@ def test_secondary_scoping_is_stable_across_refreshes():
     assert api._build_battery_devices() == ["BAT_A", "BAT_B"]
     assert api._build_battery_devices() == ["BAT_A", "BAT_B"]
     assert seen == [("BAT_A", None), ("BAT_B", "BAT_B")] * 2
+
+
+def test_primary_failure_does_not_prevent_secondary_polling():
+    api = _fake_api()
+    api.battery_dn = "BAT_A"
+    api.battery_dns = ["BAT_A", "BAT_B"]
+    seen = []
+
+    def fetch():
+        seen.append((api.battery_dn, api._battery_entity_dn))
+        if api.battery_dn == "BAT_A":
+            raise RuntimeError("primary offline")
+        return ["secondary"]
+
+    api.get_battery_devices = fetch
+    assert api._build_battery_devices() == ["secondary"]
+    assert seen == [("BAT_A", None), ("BAT_B", "BAT_B")]
+    assert api.battery_dn == "BAT_A"
+    assert api._battery_entity_dn is None
+    assert api.battery_model == "primary"
+
+
+def test_primary_metadata_is_restored_after_secondary_mutation():
+    api = _fake_api()
+    api.battery_dn = "BAT_A"
+    api.battery_dns = ["BAT_A", "BAT_B"]
+
+    def fetch():
+        api.battery_model = "model-" + api.battery_dn
+        api.battery_serial_number = "serial-" + api.battery_dn
+        api.battery_software_version = "version-" + api.battery_dn
+        return [api.battery_dn]
+
+    api.get_battery_devices = fetch
+    assert api._build_battery_devices() == ["BAT_A", "BAT_B"]
+    assert api.battery_model == "model-BAT_A"
+    assert api.battery_serial_number == "serial-BAT_A"
+    assert api.battery_software_version == "version-BAT_A"
+    assert api._battery_entity_dn is None
+
+
+def test_repeated_polling_never_changes_primary_dn():
+    api = _fake_api()
+    api.battery_dn = "BAT_A"
+    api.battery_dns = ["BAT_B", "BAT_A", "BAT_B"]
+    api.get_battery_devices = lambda: [api.battery_dn]
+    for _ in range(3):
+        assert api._build_battery_devices().count("BAT_A") == 1
+        assert api.battery_dn == "BAT_A"
+        assert api._battery_entity_dn is None
