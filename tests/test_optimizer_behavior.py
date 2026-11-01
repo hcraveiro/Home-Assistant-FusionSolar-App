@@ -177,3 +177,87 @@ def test_failed_response_rejected(optimizer_module):
             return None, {"success": False}
     with pytest.raises(ValueError):
         Dummy()._optimizer_request("GET", optimizer_module._COUNTS)
+
+
+@pytest.fixture
+def logical_tree():
+    """Minimal, synthetic form of the verified master/slave logical layout."""
+    return {"list": [
+        {"mocId": 20822, "dn": "NE=INV_A", "children": [
+            {"mocId": 20812, "dn": "NE=PV_A"},
+            *[{"mocId": 20814, "dn": f"NE=OPT_A_{i}",
+               "parentDn": "NE=STATION", "bindInverterDn": "NE=INV_A",
+               "pvNum": f"A.{i}", "meType": "MERC-600W-PA0"}
+              for i in range(4)],
+        ]},
+        {"mocId": 20822, "dn": "NE=INV_B", "children": [
+            {"mocId": 20812, "dn": "NE=PV_B"},
+            *[{"mocId": 20814, "dn": f"NE=OPT_B_{i}",
+               "parentDn": "NE=STATION", "bindInverterDn": "NE=INV_B",
+               "pvNum": f"B.{i}", "meType": "MERC-600W-PA0"}
+              for i in range(8)],
+        ]},
+    ]}
+
+
+def test_logical_tree_discovers_twelve_correctly_associated_optimizers(
+    optimizer_module, logical_tree
+):
+    result = optimizer_module._parse_optimizer_logical_tree(logical_tree)
+    assert len(result) == 12
+    assert sum(x["parent_dn"] == "NE=INV_A" for x in result.values()) == 4
+    assert sum(x["parent_dn"] == "NE=INV_B" for x in result.values()) == 8
+    assert result["NE=OPT_B_7"]["position"] == "B.7"
+
+
+@pytest.mark.parametrize("payload", [{}, None, [], {"list": {}}, {"list": "bad"}])
+def test_logical_tree_rejects_malformed_responses(optimizer_module, payload):
+    assert optimizer_module._parse_optimizer_logical_tree(payload) == {}
+
+
+def test_logical_tree_rejects_unbound_or_conflicting_optimizer_dns(optimizer_module):
+    payload = {"list": [
+        {"mocId": 20822, "dn": "INV_A", "children": [
+            {"mocId": 20814, "dn": "GOOD", "bindInverterDn": "INV_A"},
+            {"mocId": 20814, "dn": "BAD", "bindInverterDn": "UNKNOWN"},
+            {"mocId": 20814, "dn": "", "bindInverterDn": "INV_A"},
+            {"mocId": 20814, "dn": "DUP", "bindInverterDn": "INV_A"},
+        ]},
+        {"mocId": 20822, "dn": "INV_B", "children": [
+            {"mocId": 20814, "dn": "DUP", "bindInverterDn": "INV_B"},
+        ]},
+    ]}
+    found = optimizer_module._parse_optimizer_logical_tree(payload)
+    assert set(found) == {"GOOD"}
+
+
+def test_logical_layout_fallback_preserves_scoped_optimizer_ids(optimizer_module, logical_tree):
+    class LogicalAPI(FakeOptimizerAPI):
+        def _optimizer_request(self, method, endpoint, **kwargs):
+            self._calls.append((method, endpoint, kwargs))
+            if endpoint.endswith("station-simple-devicedata"):
+                return {"optimizerNum": 12}
+            if endpoint.endswith("/layout"):
+                return {"schemaData": json.dumps({"areas": [], "buildings": [], "version": "1"})}
+            if endpoint.endswith("device-tree-page"):
+                return logical_tree
+            return [
+                {"mocId": 20814, "dn": "NE=OPT_A_0",
+                 "dailyEnergy": "0.2", "optInfo": {"outputPower": "150"}},
+                {"mocId": 20814, "dn": "NE=OPT_B_0",
+                 "dailyEnergy": "0.1", "optInfo": {"outputPower": "80"}},
+            ]
+    api = LogicalAPI(optimizer_module, [])
+    first = api.get_optimizer_devices()
+    second = api.get_optimizer_devices()
+    assert len(api._optimizers) == 12
+    assert {d.dn for d in first} == {"NE=OPT_A_0", "NE=OPT_B_0"}
+    assert [d.device_unique_id for d in second] == [d.device_unique_id for d in first]
+    assert next(d for d in first if d.dn == "NE=OPT_A_0").device_unique_id.startswith(
+        "station_opt_NE=OPT_A_0_"
+    )
+    assert sum(endpoint.endswith("device-tree-page") for _, endpoint, _ in api._calls) == 1
+    tree_call = next(x for x in api._calls if x[1].endswith("device-tree-page"))
+    assert tree_call[0] == "POST"
+    assert tree_call[2]["json_body"]["layoutType"] == 2
+    assert tree_call[2]["json_body"]["invertDnlist"] == []
