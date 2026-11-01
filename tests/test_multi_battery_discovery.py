@@ -254,7 +254,7 @@ def test_secondary_and_primary_unique_ids_remain_distinct():
     methods = [node for node in cls.body if isinstance(node, ast.FunctionDef)
                and node.name in {"get_device_unique_id", "sanitize_id_segment"}]
     assert len(methods) == 2
-    namespace = {}
+    namespace = {"DeviceType": object}
     module = ast.Module(body=[ast.ClassDef(name="API", bases=[], keywords=[],
                          body=methods, decorator_list=[])], type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), str(source_path), "exec"), namespace)
