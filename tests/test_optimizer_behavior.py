@@ -318,3 +318,32 @@ def test_offline_optimizer_keeps_status_but_not_stale_power(api):
     api.records[1]["connectStatus"] = "connected"
     fresh = {(d.dn, d.device_id): d.state for d in api.get_optimizer_devices()}
     assert fresh[("NE=OPT_2", "Optimizer Output Power")] == pytest.approx(0.1096)
+
+
+def test_optimizer_inverter_lookup_is_scoped_to_config_entry():
+    """Prevent deprecated, cross-entry-ambiguous device-registry lookups."""
+    import ast
+
+    source = (ROOT / "sensor.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    old_calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "async_get_device"
+    ]
+    assert not old_calls
+
+    scoped_calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "async_get_device_by_identifier"
+    ]
+    assert scoped_calls
+    assert any(
+        len(call.args) >= 2
+        and isinstance(call.args[1], ast.Attribute)
+        and call.args[1].attr == "entry_id"
+        for call in scoped_calls
+    )
