@@ -220,3 +220,49 @@ def test_repeated_polling_never_changes_primary_dn():
         assert api._build_battery_devices().count("BAT_A") == 1
         assert api.battery_dn == "BAT_A"
         assert api._battery_entity_dn is None
+
+
+def test_primary_battery_registry_identity_remains_legacy():
+    """Guard registry contract: old installations must not migrate IDs."""
+    sensor_source = (source_path.parent.parent / "sensor.py").read_text(encoding="utf-8")
+    sensor_ast = ast.parse(sensor_source)
+    function = next(node for node in sensor_ast.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "_build_device_info")
+    battery_section = ast.get_source_segment(sensor_source, function)
+    assert 'device.dn is not None' in battery_section
+    assert 'getattr(coordinator.api, "battery_dn", None)' in battery_section
+    assert 'f"{controller_name}_{station_dn}_battery_{battery_dn}"' in battery_section
+    assert 'name="Fusion Solar Battery" if not is_secondary' in battery_section
+
+
+def test_secondary_battery_uses_its_own_device_dn_not_primary_metadata():
+    sensor_source = (source_path.parent.parent / "sensor.py").read_text(encoding="utf-8")
+    sensor_ast = ast.parse(sensor_source)
+    function = next(node for node in sensor_ast.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "_build_device_info")
+    section = ast.get_source_segment(sensor_source, function)
+    assert 'device.dn if is_secondary' in section
+    assert '"FusionSolar Battery" if is_secondary' in section
+    assert 'None if is_secondary' in section
+
+
+def test_secondary_and_primary_unique_ids_remain_distinct():
+    api_source = (source_path.parent / "__init__.py").read_text(encoding="utf-8")
+    api_ast = ast.parse(api_source)
+    cls = next(node for node in api_ast.body if isinstance(node, ast.ClassDef)
+               and node.name == "FusionSolarAPI")
+    methods = [node for node in cls.body if isinstance(node, ast.FunctionDef)
+               and node.name in {"get_device_unique_id", "sanitize_id_segment"}]
+    assert len(methods) == 2
+    namespace = {}
+    module = ast.Module(body=[ast.ClassDef(name="API", bases=[], keywords=[],
+                         body=methods, decorator_list=[])], type_ignores=[])
+    exec(compile(ast.fix_missing_locations(module), str(source_path), "exec"), namespace)
+    api = namespace["API"]()
+    api.station = "station-A"
+    api.controller_name = "fusion_solar_app"
+    primary = api.get_device_unique_id("Battery Module 1 Pack 1 SOH", None)
+    secondary = api.get_device_unique_id("Battery Module 1 Pack 1 SOH", None, dn="BAT_B")
+    assert primary == "fusion_solar_app_station-a_battery_module_1_pack_1_soh"
+    assert secondary != primary
+    assert "bat_b" in secondary
