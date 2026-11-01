@@ -255,9 +255,11 @@ class FusionSolarInstallationMixin:
             dev_ids = node.get("devIds")
             candidates = dev_ids if isinstance(dev_ids, list) and dev_ids else [node.get("devDn")]
             for candidate in candidates:
-                if not isinstance(candidate, (str, int)) or not str(candidate).strip():
+                if isinstance(candidate, bool) or not isinstance(candidate, (str, int)):
                     continue
-                dn = str(candidate)
+                dn = str(candidate).strip()
+                if not dn:
+                    continue
                 if dn not in self.battery_dns:
                     self.battery_dns.append(dn)
 
