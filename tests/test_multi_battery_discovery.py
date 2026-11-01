@@ -393,3 +393,57 @@ def test_v3_retries_after_cooldown_and_recovers_from_missing_flow():
     assert len(calls) == 2
     assert api.battery_dn == "BAT_A"
     assert api.battery_dns == ["BAT_A"]
+
+
+
+def test_aggregate_station_soc_and_capacity_are_not_assigned_to_individual_batteries():
+    """Station-wide SOC and capacity cannot be treated as per-battery telemetry."""
+    installation_source = ast.parse(source_path.read_text(encoding="utf-8"))
+    installation_class = next(
+        node for node in installation_source.body
+        if isinstance(node, ast.ClassDef) and node.name == "FusionSolarInstallationMixin"
+    )
+    build_station = next(
+        node for node in installation_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_build_installation_devices"
+    )
+    station_namespace = {
+        "Device": lambda **kwargs: SimpleNamespace(**kwargs),
+        "DEVICES": [
+            {"id": "Battery Percentage", "type": "percentage", "icon": "mdi:battery"},
+            {"id": "Battery Capacity", "type": "energy", "icon": "mdi:battery"},
+        ],
+    }
+    exec(
+        compile(ast.fix_missing_locations(ast.Module(body=[build_station], type_ignores=[])),
+                str(source_path), "exec"),
+        station_namespace,
+    )
+
+    api = _fake_api()
+    api.battery_dn = "BAT_A"
+    api.battery_dns = ["BAT_A", "BAT_B"]
+    api.get_device_unique_id = lambda device_id, dtype: "station-" + device_id
+    api.get_device_name = lambda device_id: device_id
+    api.get_device_value = lambda device_id, dtype, output: output[device_id]
+    api.get_battery_devices = lambda: [
+        SimpleNamespace(device_id="Battery Charge/Discharge Power",
+                        dn=api._battery_entity_dn, state=1.0)
+    ]
+
+    aggregate = {"Battery Percentage": 57.0, "Battery Capacity": 30.0}
+    station_devices = station_namespace["_build_installation_devices"](api, aggregate)
+    battery_devices = api._build_battery_devices()
+
+    assert {device.device_id: device.state for device in station_devices} == aggregate
+    assert all(device.dn is None for device in station_devices)
+    assert {device.device_unique_id for device in station_devices} == {
+        "station-Battery Percentage", "station-Battery Capacity"
+    }
+    assert len(battery_devices) == 2
+    assert not any(
+        device.device_id in {"Battery Percentage", "Battery Capacity"}
+        for device in battery_devices
+    )
+    assert api.battery_dn == "BAT_A"
+    assert api._battery_entity_dn is None
