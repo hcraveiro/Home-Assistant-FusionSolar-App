@@ -76,11 +76,12 @@ def test_optional_numeric_readings(optimizer_module, value, expected):
 
 
 class FakeOptimizerAPI:
-    def __init__(self, mixin, records, count=2):
+    def __init__(self, mixin, records, count=2, optimizer_info=None):
         self._mixin = mixin
         self.station = "NE=STATION_1"
         self.records = records
         self.count = count
+        self.optimizer_info = optimizer_info or []
         self._calls = []
         self._optimizers = None
 
@@ -97,6 +98,8 @@ class FakeOptimizerAPI:
                        "devId": "NE=OPT_8", "parentDevId": "NE=INV_1"}},
             ]}
             return {"schemaData": html.escape(json.dumps(schema))}
+        if endpoint.endswith("optimizer-info"):
+            return self.optimizer_info
         return self.records
 
     def get_device_unique_id(self, name, dtype, dn=None):
@@ -118,6 +121,9 @@ def api(optimizer_module):
         {"mocId": 20814, "dn": "NE=OPT_8", "dailyEnergy": "0.10",
          "optInfo": {"outputPower": "--", "runningStatusVal": 0}},
         {"mocId": 20814, "dn": "NE=OTHER", "optInfo": {"outputPower": "9999"}},
+    ], optimizer_info=[
+        {"dn": "NE=OPT_2", "optName": "Optimizer A", "optNumber": "1.1.2", "temperature": "15.1"},
+        {"dn": "NE=OPT_8", "optName": "Optimizer B", "optNumber": "1.1.8", "temperature": "--"},
     ])
 
 
@@ -130,10 +136,34 @@ def test_optimizer_values_and_scoped_unique_ids(api):
     assert values[("NE=OPT_2", "Optimizer Input Current")] == 3.41
     assert values[("NE=OPT_2", "Optimizer Energy Today")] == 0.11
     assert values[("NE=OPT_2", "Optimizer Running Status")] == 1
+    assert values[("NE=OPT_2", "Optimizer Name")] == "Optimizer A"
+    assert values[("NE=OPT_2", "Optimizer Position")] == "1.1.2"
+    assert values[("NE=OPT_2", "Optimizer Temperature")] == 15.1
+    assert values[("NE=OPT_8", "Optimizer Position")] == "1.1.8"
+    assert ("NE=OPT_8", "Optimizer Temperature") not in values
     assert ("NE=OPT_8", "Optimizer Output Power") not in values
     assert ("NE=OTHER", "Optimizer Output Power") not in values
     assert len({d.device_unique_id for d in devices}) == len(devices)
     assert len([c for c in api._calls if c[0] == "POST"]) == 1
+    assert len([c for c in api._calls if c[1].endswith("optimizer-info")]) == 1
+    info_call = next(c for c in api._calls if c[1].endswith("optimizer-info"))
+    assert info_call[0] == "GET"
+    assert info_call[2]["params"] == {"inverterDn": "NE=INV_1"}
+
+
+def test_optimizer_info_failure_does_not_suppress_existing_telemetry(api):
+    request = api._optimizer_request
+
+    def fail_details(method, endpoint, **kwargs):
+        if endpoint.endswith("optimizer-info"):
+            raise RuntimeError("optional endpoint unavailable")
+        return request(method, endpoint, **kwargs)
+
+    api._optimizer_request = fail_details
+    devices = api.get_optimizer_devices()
+    values = {(device.dn, device.device_id): device.state for device in devices}
+    assert values[("NE=OPT_2", "Optimizer Output Power")] == pytest.approx(0.1096)
+    assert ("NE=OPT_2", "Optimizer Temperature") not in values
 
 
 def test_optimizer_topology_is_cached_but_telemetry_refreshes(api):

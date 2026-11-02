@@ -13,6 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 _LAYOUT = "/rest/pvms/web/station/v1/layout"
 _COUNTS = "/rest/pvms/web/station/v1/layout/station-simple-devicedata"
 _SAMPLING = "/rest/pvms/web/station/v1/layout/device-sampling-data"
+_OPTIMIZER_INFO = "/rest/pvms/web/station/v1/layout/optimizer-info"
 _LOGICAL_TREE = "/rest/pvms/web/station/v1/layout/device-tree-page"
 
 # Values from device-sampling-data. Optimizer power is reported in watts.
@@ -196,6 +197,26 @@ class FusionSolarOptimizerMixin:
         records = self._optimizer_request("POST", _SAMPLING, json_body=list(topology))
         if not isinstance(records, list):
             return []
+        # optimizer-info carries the human-facing name, module position and
+        # temperature. Fetch once per parent inverter and keep it optional so
+        # failures cannot suppress the existing sampling telemetry.
+        optimizer_info: dict[str, dict[str, Any]] = {}
+        for inverter_dn in dict.fromkeys(
+            item.get("parent_dn") for item in topology.values()
+            if isinstance(item.get("parent_dn"), str) and item.get("parent_dn")
+        ):
+            try:
+                info_records = self._optimizer_request(
+                    "GET", _OPTIMIZER_INFO, params={"inverterDn": inverter_dn}
+                )
+            except Exception as ex:
+                _LOGGER.debug("Optimizer details unavailable: %s", type(ex).__name__)
+                continue
+            if not isinstance(info_records, list):
+                continue
+            for info in info_records:
+                if isinstance(info, dict) and isinstance(info.get("dn"), str):
+                    optimizer_info[info["dn"]] = info
         devices = []
         for record in records:
             if not isinstance(record, dict) or str(record.get("mocId")) != "20814":
@@ -206,6 +227,34 @@ class FusionSolarOptimizerMixin:
             extra = record.get("optInfo") or {}
             if not isinstance(extra, dict):
                 extra = {}
+            info = optimizer_info.get(dn, {})
+            for name, value in (
+                ("Optimizer Name", info.get("optName")),
+                ("Optimizer Position", info.get("optNumber") or info.get("optNum") or topology[dn].get("position")),
+            ):
+                if isinstance(value, str) and value.strip() and value.strip() not in ("--", "null"):
+                    devices.append(Device(
+                        device_id=name,
+                        device_unique_id=self.get_device_unique_id(name, DeviceType.SENSOR_TEXT, dn=dn),
+                        device_type=DeviceType.SENSOR_TEXT,
+                        name=name.removeprefix("Optimizer "),
+                        state=value.strip(),
+                        icon="mdi:tag-outline" if name == "Optimizer Name" else "mdi:map-marker-outline",
+                        dn=dn,
+                    ))
+            temperature = _safe_number(info.get("temperature"))
+            if temperature is not None:
+                devices.append(Device(
+                    device_id="Optimizer Temperature",
+                    device_unique_id=self.get_device_unique_id(
+                        "Optimizer Temperature", DeviceType.SENSOR_TEMPERATURE, dn=dn
+                    ),
+                    device_type=DeviceType.SENSOR_TEMPERATURE,
+                    name="Temperature",
+                    state=temperature,
+                    icon="mdi:thermometer",
+                    dn=dn,
+                ))
             is_disconnected = str(record.get("connectStatus") or "").strip().lower() in {
                 "disconnected", "offline"
             }

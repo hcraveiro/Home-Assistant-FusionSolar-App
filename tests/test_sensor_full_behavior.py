@@ -290,9 +290,10 @@ async def test_dynamic_sensor_reappearing_with_same_identity_is_not_recreated(co
 def test_optimizer_registry_uses_inverter_parent_when_registered(coordinator, sensor_module, monkeypatch):
     """Optimizer entities belong to their parent inverter without changing their DN-based IDs."""
     inverter = types.SimpleNamespace(id="inverter-registry-id")
-    registry = types.SimpleNamespace(async_get_device=Mock(return_value=inverter))
+    registry = types.SimpleNamespace(async_get_device_by_identifier=Mock(return_value=inverter))
     monkeypatch.setattr(sensor_module.dr, "async_get", lambda hass: registry)
     coordinator.hass = object()
+    coordinator.config_entry = types.SimpleNamespace(entry_id="entry-1")
     coordinator.api.inverters = {"NE=INV_1": types.SimpleNamespace(canonical_dn="NE=INV_1")}
     coordinator.api._optimizers = {
         "NE=OPT_2": {
@@ -311,13 +312,16 @@ def test_optimizer_registry_uses_inverter_parent_when_registered(coordinator, se
     assert info["model"] == "MERC-600W-PA0"
     assert info["via_device_id"] == "inverter-registry-id"
     assert ("fusion_solar_app", "fusion_solar_app_Plant/1_optimizer_NE=OPT_2") in info["identifiers"]
-    assert registry.async_get_device.call_count == 1
+    registry.async_get_device_by_identifier.assert_called_once_with(
+        ("fusion_solar_app", "fusion_solar_app_Plant/1_inverter_NE=INV_1"), "entry-1"
+    )
 
 
 def test_optimizer_registry_falls_back_to_plant(coordinator, sensor_module, monkeypatch):
-    registry = types.SimpleNamespace(async_get_device=Mock(return_value=None))
+    registry = types.SimpleNamespace(async_get_device_by_identifier=Mock(return_value=None))
     monkeypatch.setattr(sensor_module.dr, "async_get", lambda hass: registry)
     coordinator.hass = object()
+    coordinator.config_entry = types.SimpleNamespace(entry_id="entry-1")
     coordinator.api.inverters = {}
     coordinator.api._optimizers = {"NE=OPT_2": {"parent_dn": "NE=INV_1", "position": "1.1.2"}}
     optimizer = sensor_module.Device(
@@ -325,3 +329,11 @@ def test_optimizer_registry_falls_back_to_plant(coordinator, sensor_module, monk
         "Energy Today", 0.11, "mdi:solar-power", dn="NE=OPT_2",
     )
     assert sensor_module._build_device_info(coordinator, optimizer)["via_device_id"] == "parent-id"
+
+
+@pytest.mark.parametrize("device_id", ["Battery Percentage", "Battery Capacity"])
+def test_aggregate_battery_sensors_belong_to_station_without_identity_change(coordinator, sensor_module, device_id):
+    existing = device(sensor_module, device_id)
+    sensor = sensor_module.FusionSolarSensor(coordinator, existing)
+    assert sensor.unique_id == "fusion_solar_app-unique-test"
+    assert sensor.device_info["identifiers"] == {("fusion_solar_app", "fusion_solar_app_Plant/1")}
