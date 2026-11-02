@@ -57,6 +57,9 @@ class FusionSolarAPI(
 
         self.battery_dn = None
         self.battery_dns: list[str] = []
+        # Parent inverter DNs are discovered separately from the station-wide
+        # energy-flow graph, whose storage node intentionally aggregates batteries.
+        self._battery_parent_dns: dict[str, str] = {}
         self._battery_entity_dn: str | None = None
         self.battery_model = None
         self.battery_serial_number = None

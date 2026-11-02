@@ -214,6 +214,7 @@ def _build_device_info(
 
         if (
             device.device_id in BATTERY_DEVICE_SENSOR_IDS
+            or device.device_id in {"Battery SOC", "Battery Rated Capacity"}
             or device.device_id.startswith("Battery Module ")
         ):
             # Primary battery retains its exact legacy registry identifier.
@@ -237,6 +238,19 @@ def _build_device_info(
                 else getattr(coordinator.api, "battery_serial_number", None)
             )
 
+            battery_parent_id = parent_device_id
+            parent_dn = getattr(coordinator.api, "_battery_parent_dns", {}).get(battery_dn)
+            inverter_device = None
+            if parent_dn:
+                inverter_info = getattr(coordinator.api, "inverters", {}).get(parent_dn)
+                identifier_dn = getattr(inverter_info, "canonical_dn", None) or parent_dn
+                inverter_device = dr.async_get(coordinator.hass).async_get_device_by_identifier(
+                    (DOMAIN, f"{controller_name}_{station_dn}_inverter_{identifier_dn}"),
+                    coordinator.config_entry.entry_id,
+                )
+                if inverter_device is not None:
+                    battery_parent_id = inverter_device.id
+
             return DeviceInfo(
                 name="Fusion Solar Battery" if not is_secondary else f"Fusion Solar Battery ({battery_dn})",
                 manufacturer="Huawei",
@@ -249,7 +263,12 @@ def _build_device_info(
                         f"{controller_name}_{station_dn}_battery_{battery_dn}",
                     )
                 },
-                **_parent_device_link(parent_device_id, plant_identifier),
+                **_parent_device_link(
+                    battery_parent_id,
+                    (DOMAIN, f"{controller_name}_{station_dn}_inverter_{identifier_dn}")
+                    if inverter_device is not None
+                    else plant_identifier,
+                ),
             )
 
     return DeviceInfo(

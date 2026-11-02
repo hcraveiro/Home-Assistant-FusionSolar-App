@@ -6,7 +6,7 @@ import time
 from typing import Any
 from urllib.parse import unquote
 
-from ..const import DATA_URL
+from ..const import DATA_REFERER_URL, DATA_URL
 from ..utils import extract_numeric
 from .exceptions import APIConnectionError, APIDataStructureError
 from .models import Device, DeviceType
@@ -322,6 +322,63 @@ class FusionSolarInstallationMixin:
         except Exception as ex:
             _LOGGER.debug("Secondary battery v3 discovery unavailable: %s", type(ex).__name__)
 
+    def _discover_battery_parents(self) -> None:
+        """Map known battery DNs to their inverter from the device tree.
+
+        Energy-flow reports a station-wide storage node and therefore cannot
+        establish a per-battery parent.  The portal's read-only children-list
+        response does: each battery record carries both its own DN and the
+        parent inverter DN.  Only accept batteries already discovered from
+        energy-flow, so this enrichment can never create unrelated devices.
+        """
+        battery_dns = set(getattr(self, "battery_dns", []) or [])
+        if not battery_dns or not getattr(self, "inverters", None):
+            return
+
+        parents = getattr(self, "_battery_parent_dns", {})
+        headers = {
+            "Accept": "application/json",
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+        }
+        if getattr(self, "csrf", None):
+            headers["Roarand"] = self.csrf
+
+        for inverter_dn in self.inverters:
+            try:
+                _, response = self._request_json(
+                    "GET",
+                    f"https://{self.data_host}/rest/neteco/web/config/device/v1/children-list",
+                    context="FusionSolar battery parent discovery",
+                    headers=headers,
+                    params={
+                        "conditionParams.parentDn": inverter_dn,
+                        "conditionParams.curPage": 0,
+                        "conditionParams.recordperpage": 100,
+                        "conditionParams.mocTypes": 20815,
+                        "_": int(time.time() * 1000),
+                    },
+                )
+            except Exception as ex:
+                _LOGGER.debug("Battery parent discovery failed for inverter %s: %s", inverter_dn, type(ex).__name__)
+                continue
+
+            records = response.get("data", []) if isinstance(response, dict) else []
+            if not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                battery_dn = record.get("dn")
+                parent_dn = record.get("parentDn")
+                if (
+                    isinstance(battery_dn, str)
+                    and battery_dn in battery_dns
+                    and isinstance(parent_dn, str)
+                    and parent_dn == inverter_dn
+                ):
+                    parents[battery_dn] = parent_dn
+        self._battery_parent_dns = parents
+
     def _enrich_installation_output(
         self,
         output: dict[str, float | int | str],
@@ -491,6 +548,7 @@ class FusionSolarInstallationMixin:
         self._discover_battery_dn_from_flow_nodes(flow_data_nodes)
         self._discover_inverter_dns_from_flow_nodes(flow_data_nodes)
         self._discover_additional_batteries_from_v3()
+        self._discover_battery_parents()
         for inverter_dn in self.inverters:
             self._ensure_inverter_metadata_loaded(inverter_dn)
     

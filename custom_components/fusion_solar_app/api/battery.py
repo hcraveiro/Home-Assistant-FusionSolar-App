@@ -229,6 +229,21 @@ class FusionSolarBatteryMixin:
             _LOGGER.warning("Failed to fetch battery realtime data: %s", ex)
     
         battery_realtime_definitions = [
+            # These are per-device values from device-realtime-data.  Do not
+            # substitute the station energy-flow SOC/capacity here: that node
+            # is an aggregate when multiple batteries are installed.
+            (
+                "Battery SOC",
+                DeviceType.SENSOR_PERCENTAGE,
+                realtime_data.get(10006),
+                "mdi:battery",
+            ),
+            (
+                "Battery Rated Capacity",
+                DeviceType.SENSOR_KWH,
+                realtime_data.get(10013),
+                "mdi:battery-high",
+            ),
             (
                 "Battery Operating Status",
                 DeviceType.SENSOR_TEXT,
