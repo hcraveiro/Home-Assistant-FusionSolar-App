@@ -212,6 +212,7 @@ def _build_device_info(
         if (
             device.device_id in BATTERY_DEVICE_SENSOR_IDS
             or device.device_id in {"Battery SOC", "Battery Rated Capacity"}
+            or device.device_id.startswith(("Battery Maximum ", "Battery End of ", "Battery AC Charge ", "Battery Forced ", "Battery Charge From AC", "Battery Charged Energy", "Battery Discharged Energy"))
             or device.device_id.startswith("Battery Module ")
         ):
             # Primary battery retains its exact legacy registry identifier.

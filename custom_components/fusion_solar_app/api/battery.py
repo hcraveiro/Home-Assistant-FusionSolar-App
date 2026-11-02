@@ -1,5 +1,6 @@
 import re
 import logging
+import math
 import time
 from typing import Any
 
@@ -21,6 +22,111 @@ _LOGGER = logging.getLogger(__name__)
 
 class FusionSolarBatteryMixin:
     """Battery helpers for FusionSolar API."""
+
+    def get_battery_config_devices(self) -> list[Device]:
+        """Read optional battery configuration signals at most once per hour.
+
+        A missing permission or unsupported endpoint is non-fatal. No write
+        or refresh command is ever sent to the battery.
+        """
+        if not self.battery_dn:
+            return []
+
+        cache = getattr(self, "_battery_config_cache", None)
+        if cache is None:
+            cache = self._battery_config_cache = {}
+
+        now = time.monotonic()
+        previous = cache.get(self.battery_dn)
+        if previous and now < previous[0]:
+            records = previous[1]
+        else:
+            # Keep a previous successful snapshot if this optional request
+            # temporarily fails, but cache the attempt to cap API traffic.
+            records = previous[1] if previous else {}
+            try:
+                self.refresh_csrf()
+                _, response = self._request_json(
+                    "GET",
+                    f"https://{self.data_host}/rest/pvms/web/device/v1/deviceExt/get-config-signals",
+                    context="FusionSolar battery configuration",
+                    headers={
+                        "Accept": "application/json",
+                        "Roarand": self.csrf,
+                        "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+                    },
+                    params={"dn": self.battery_dn},
+                )
+                response_code = response.get("code") if isinstance(response, dict) else None
+                groups = response.get("data") if response_code in (0, "0") else None
+                if isinstance(groups, list):
+                    records = {}
+                    for group in groups:
+                        if not isinstance(group, dict):
+                            continue
+                        signals = group.get("configSignalDisplayList")
+                        if not isinstance(signals, list):
+                            continue
+                        for signal in signals:
+                            if isinstance(signal, dict) and signal.get("id") is not None:
+                                records[str(signal["id"])] = signal.get("value")
+                    _LOGGER.debug(
+                        "Battery configuration signals retrieved: groups=%d signals=%d",
+                        len(groups), len(records),
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Battery configuration unavailable (response code %s)",
+                        response_code,
+                    )
+            except Exception as ex:
+                _LOGGER.debug("Battery configuration unavailable: %s", type(ex).__name__)
+            cache[self.battery_dn] = (now + 3600, records)
+
+        definitions = (
+            (10011, "Battery Maximum Charge Power", DeviceType.SENSOR_KW, 0.001),
+            (10012, "Battery Maximum Discharge Power", DeviceType.SENSOR_KW, 0.001),
+            (230320277, "Battery End of Charge SOC", DeviceType.SENSOR_PERCENTAGE, 1),
+            (230320278, "Battery End of Discharge SOC", DeviceType.SENSOR_PERCENTAGE, 1),
+            (230320280, "Battery AC Charge Cutoff SOC", DeviceType.SENSOR_PERCENTAGE, 1),
+            (230320129, "Battery Charged Energy", DeviceType.SENSOR_KWH, 1),
+            (230320130, "Battery Discharged Energy", DeviceType.SENSOR_KWH, 1),
+        )
+        devices: list[Device] = []
+        entity_dn = getattr(self, "_battery_entity_dn", None)
+        for signal_id, label, kind, scale in definitions:
+            raw = records.get(str(signal_id))
+            if raw in (None, "", "--", "null"):
+                continue
+            try:
+                value = float(raw) * scale
+                if not math.isfinite(value) or value < 0:
+                    continue
+                if kind == DeviceType.SENSOR_PERCENTAGE and value > 100:
+                    continue
+                item = self._create_dynamic_device(
+                    label, kind, value, "mdi:battery-cog", dn=entity_dn
+                )
+                if item is not None:
+                    devices.append(item)
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+        for signal_id, label, mapping in (
+            (230320245, "Battery Forced Charge Discharge", {"0": "Stop", "1": "Charge", "2": "Discharge"}),
+            (230320257, "Battery Forced Charge Setting Mode", {"0": "Duration", "1": "Energy"}),
+            (230320279, "Battery Charge From AC", {"0": "Disabled", "1": "Enabled"}),
+        ):
+            value = mapping.get(str(records.get(str(signal_id))))
+            if value is None:
+                continue
+            item = self._create_dynamic_device(
+                label, DeviceType.SENSOR_TEXT, value, "mdi:battery-cog", dn=entity_dn
+            )
+            if item is not None:
+                devices.append(item)
+
+        return devices
 
     def get_battery_type(self) -> dict:
         """Fetch battery type information."""
@@ -312,6 +418,8 @@ class FusionSolarBatteryMixin:
             )
             if device is not None:
                 devices.append(device)
+
+        devices.extend(self.get_battery_config_devices())
     
         module_ids = self._get_available_battery_module_ids(battery_type_data)
     
