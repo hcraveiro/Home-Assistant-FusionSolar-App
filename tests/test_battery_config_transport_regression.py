@@ -114,6 +114,7 @@ def test_successful_config_is_scoped_per_battery_and_uses_only_get(api):
         ("Battery Forced Charge Discharge", "Charge", "BAT_B"),
     ]
     assert all("_inv_bat_b_" in device.device_unique_id for device in devices)
+    assert all(device.icon == "mdi:battery" for device in devices)
     assert api.session.request.call_args.args[0] == "GET"
     assert api.session.request.call_args.kwargs["params"] == {"dn": "BAT_B"}
 

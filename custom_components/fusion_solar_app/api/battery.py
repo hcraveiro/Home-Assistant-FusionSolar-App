@@ -106,7 +106,7 @@ class FusionSolarBatteryMixin:
                 if kind == DeviceType.SENSOR_PERCENTAGE and value > 100:
                     continue
                 item = self._create_dynamic_device(
-                    label, kind, value, "mdi:battery-cog", dn=entity_dn
+                    label, kind, value, "mdi:battery", dn=entity_dn
                 )
                 if item is not None:
                     devices.append(item)
@@ -122,7 +122,7 @@ class FusionSolarBatteryMixin:
             if value is None:
                 continue
             item = self._create_dynamic_device(
-                label, DeviceType.SENSOR_TEXT, value, "mdi:battery-cog", dn=entity_dn
+                label, DeviceType.SENSOR_TEXT, value, "mdi:battery", dn=entity_dn
             )
             if item is not None:
                 devices.append(item)
