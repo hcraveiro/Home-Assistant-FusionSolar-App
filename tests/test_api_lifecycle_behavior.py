@@ -30,8 +30,7 @@ def api_module():
 def api(api_module,monkeypatch):
     obj=api_module.FusionSolarAPI("test-user","test-password","uni004eu5.fusionsolar.huawei.com",None)
     yield obj
-    obj._stop_event.set()
-    obj.session.close()
+    obj.close()
 
 def test_initialization(api):
     assert api.login_host=="eu5.fusionsolar.huawei.com"
@@ -76,41 +75,117 @@ def test_value_missing_default_and_time(api,api_module):
     api.last_session_time=datetime(2026,1,1,tzinfo=timezone.utc)
     assert api.get_device_value("time",api_module.DeviceType.SENSOR_TIME,{})==api.last_session_time
 
-def test_logout_stops_monitor(api,monkeypatch):
-    api.connected=True
-    api._stop_session_monitor=Mock()
+def test_logout_closes_local_session_once(api):
+    api.connected = True
+    api.session.close = Mock(wraps=api.session.close)
     assert api.logout() is True
+    assert api.logout() is True
+    api.close()
     assert not api.connected
-    api._stop_session_monitor.assert_called_once()
+    assert api._closed
+    api.session.close.assert_called_once_with()
 
-def test_renew_session_success(api):
-    api.reset_session=Mock()
-    api.login=Mock(return_value=True)
-    api._renew_session()
-    api.reset_session.assert_called_once()
-    api.login.assert_called_once()
+def test_restore_session_does_not_start_background_thread(api, api_module, monkeypatch):
+    thread = Mock(side_effect=AssertionError("No session monitor is needed"))
+    monkeypatch.setattr(api_module.threading, "Thread", thread)
+    api.restore_session("transferred-token", "example.invalid")
+    assert api.connected
+    assert api.session.cookies.get("dp-session") == "transferred-token"
+    thread.assert_not_called()
 
-def test_renew_session_failure(api):
-    api.reset_session=Mock()
-    api.login=Mock(side_effect=RuntimeError("offline"))
-    api.connected=True
-    api._renew_session()
+
+@pytest.mark.parametrize("operation", ["login", "reset_session", "restore_session", "request"])
+def test_closed_api_cannot_be_revived(api, api_module, operation):
+    api.close()
+    calls = {
+        "login": api.login,
+        "reset_session": api.reset_session,
+        "restore_session": lambda: api.restore_session("token", "example.invalid"),
+        "request": lambda: api._request_json("GET", "https://example.invalid", context="test"),
+    }
+    with pytest.raises(api_module.APIConnectionError, match="closed"):
+        calls[operation]()
     assert not api.connected
 
-def test_renew_session_captcha(api,api_module):
-    api.reset_session=Mock()
-    api.login=Mock(side_effect=api_module.APIAuthCaptchaError("captcha"))
-    api.connected=True
-    api._renew_session()
+
+@pytest.mark.parametrize("operation", ["close", "reset_session", "login"])
+def test_lifecycle_waits_for_inflight_transport(api, operation):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import requests
+
+    entered = threading.Event()
+    release = threading.Event()
+    lifecycle_started = threading.Event()
+    response = requests.Response()
+    response.status_code = 200
+    response._content = b'{"data": []}'
+
+    def transport(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return response
+
+    api.session.request = Mock(side_effect=transport)
+    old_session = api.session
+    old_session.close = Mock(wraps=old_session.close)
+    api._login_eu5 = Mock(return_value=True)
+
+    def lifecycle():
+        lifecycle_started.set()
+        getattr(api, operation)()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        request = pool.submit(api._request_json, "GET", "https://example.invalid", context="test")
+        try:
+            assert entered.wait(5)
+            cleanup = pool.submit(lifecycle)
+            assert lifecycle_started.wait(5)
+            old_session.close.assert_not_called()
+            api._login_eu5.assert_not_called()
+        finally:
+            release.set()
+        assert request.result(timeout=5)[1] == {"data": []}
+        cleanup.result(timeout=5)
+    if operation == "login":
+        api._login_eu5.assert_called_once()
+    else:
+        old_session.close.assert_called_once()
+    if operation == "reset_session":
+        assert api.session is not old_session
+
+
+def test_close_waits_for_login_then_prevents_reconnection(api):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    cleanup_started = threading.Event()
+
+    def regional_login():
+        entered.set()
+        assert release.wait(5)
+        api.connected = True
+        return True
+
+    def cleanup():
+        cleanup_started.set()
+        api.close()
+
+    api._login_eu5 = Mock(side_effect=regional_login)
+    api.session.close = Mock(wraps=api.session.close)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        login = pool.submit(api.login)
+        try:
+            assert entered.wait(5)
+            close = pool.submit(cleanup)
+            assert cleanup_started.wait(5)
+            api.session.close.assert_not_called()
+        finally:
+            release.set()
+        assert login.result(timeout=5)
+        close.result(timeout=5)
+    assert api._closed
     assert not api.connected
-
-def test_monitor_stops_when_renewal_fails(api):
-    api.connected=False
-    api._renew_session=Mock()
-    api._session_monitor()
-    assert api._stop_event.is_set()
-    api._renew_session.assert_called_once()
-
-def test_stop_session_monitor_without_running_thread(api):
-    api._stop_session_monitor()
-    assert api._stop_event.is_set()
+    api.session.close.assert_called_once_with()

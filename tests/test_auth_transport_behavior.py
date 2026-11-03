@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import threading
 import types
 from unittest.mock import Mock
 
@@ -42,6 +43,8 @@ def auth_module():
 
 def make_api(module, response=None, error=None):
     api = module.FusionSolarAuthMixin()
+    api._session_lock = threading.RLock()
+    api._closed = False
     api.connected = True
     api.request_timeout = 7
     api.session = Mock()
@@ -128,6 +131,8 @@ def test_reset_session_clears_authentication_state(auth_module, monkeypatch):
     replacement = requests.Session()
     monkeypatch.setattr(auth_module.requests, "Session", lambda: replacement)
     api = auth_module.FusionSolarAuthMixin()
+    api._session_lock = threading.RLock()
+    api._closed = False
     api.session = session
     api.connected = True
     api.dp_session = "dummy"
@@ -226,3 +231,40 @@ def test_csrf_refresh_does_not_log_token(auth_module, caplog):
         api.refresh_csrf()
     assert api.csrf == "secret-csrf-marker"
     assert "secret-csrf-marker" not in caplog.text
+
+
+@pytest.mark.parametrize("code", [403, 404, 500, 503])
+def test_optional_http_failure_preserves_auth_and_logs_only_debug(auth_module, caplog, code):
+    # Even a generic login-themed 403 page is a permission failure here.
+    content_type = "text/html" if code == 403 else "application/json"
+    response = make_response(code, content_type, text="<html>Login forbidden</html>")
+    api = make_api(auth_module, response)
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(auth_module.APIConnectionError, match=f"HTTP {code}"):
+            api._request_json("GET", "https://example.invalid", context="optional", optional=True)
+    assert api.connected
+    assert api.session.request.call_count == 1
+    assert "optional" not in api.session.request.call_args.kwargs
+    assert caplog.records
+    assert all(record.levelname == "DEBUG" for record in caplog.records)
+
+
+@pytest.mark.parametrize("response", [
+    make_response(401),
+    make_response(302, headers={"Location": "/unisso/login.action"}),
+    make_response(200, "text/html", text="<html>Sign in with username and password</html>"),
+])
+def test_optional_real_auth_failure_still_invalidates_session(auth_module, response):
+    api = make_api(auth_module, response)
+    with pytest.raises(auth_module.APIAuthError):
+        api._request_json("GET", "https://example.invalid", context="optional", optional=True)
+    assert not api.connected
+
+
+def test_required_http_failure_still_logs_error(auth_module, caplog):
+    api = make_api(auth_module, make_response(500))
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(auth_module.APIConnectionError):
+            api._request_json("GET", "https://example.invalid", context="required")
+    assert api.connected
+    assert any(record.levelname == "ERROR" for record in caplog.records)

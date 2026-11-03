@@ -39,44 +39,37 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # This is defined in coordinator.py
     coordinator = FusionSolarCoordinator(hass, config_entry)
 
-    # Perform an initial data load from api.
-    # async_config_entry_first_refresh() is special in that it does not log errors if it fails.
-    # ConfigEntryAuthFailed will propagate up and trigger HA's reauth flow.
-    await coordinator.async_config_entry_first_refresh()
-
-    # Test to see if api initialised correctly, else raise ConfigNotReady to make HA retry setup
-    if not coordinator.api.connected:
-        raise ConfigEntryNotReady
-
-    # Session is now live in memory — clear stale token from persistent storage
-    if "dp_session" in config_entry.data:
-        hass.config_entries.async_update_entry(
-            config_entry,
-            data={k: v for k, v in config_entry.data.items() if k not in ("dp_session", "data_host")},
-        )
-
-    # Migrate legacy station-scoped inverter entity unique IDs to DN-scoped
-    # ones now that the inverter DNs are known. Must run before the sensor
-    # platform is set up so existing entities keep their history.
+    cancel_update_listener = None
     try:
-        await _async_migrate_inverter_unique_ids(hass, config_entry, coordinator)
-    except Exception as ex:  # migration must never block setup
-        _LOGGER.warning("Inverter unique ID migration failed: %s", ex)
+        # Auth failures propagate to HA's reauth flow after resources are released.
+        await coordinator.async_config_entry_first_refresh()
+        if not coordinator.api.connected:
+            raise ConfigEntryNotReady
 
-    # Initialise a listener for config flow options changes.
-    # See config_flow for defining an options setting that shows up as configure on the integration.
-    cancel_update_listener = config_entry.add_update_listener(_async_update_listener)
+        # Session is now live in memory — clear stale token from persistent storage.
+        if "dp_session" in config_entry.data:
+            hass.config_entries.async_update_entry(
+                config_entry,
+                data={k: v for k, v in config_entry.data.items() if k not in ("dp_session", "data_host")},
+            )
 
-    # Add the coordinator and update listener to hass data to make
-    # accessible throughout your integration
-    # Note: this will change on HA2024.6 to save on the config entry.
-    hass.data[DOMAIN][config_entry.entry_id] = RuntimeData(
-        coordinator, cancel_update_listener
-    )
+        # Migrate before platform setup so existing entities keep their history.
+        try:
+            await _async_migrate_inverter_unique_ids(hass, config_entry, coordinator)
+        except Exception as ex:  # migration must never block setup
+            _LOGGER.warning("Inverter unique ID migration failed: %s", ex)
 
-    # Setup platforms (based on the list of entity types in PLATFORMS defined above)
-    # This calls the async_setup method in each of your entity type files.
-    await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+        cancel_update_listener = config_entry.add_update_listener(_async_update_listener)
+        hass.data[DOMAIN][config_entry.entry_id] = RuntimeData(
+            coordinator, cancel_update_listener
+        )
+        await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+    except BaseException:
+        if cancel_update_listener is not None:
+            cancel_update_listener()
+        hass.data[DOMAIN].pop(config_entry.entry_id, None)
+        await _async_close_coordinator(hass, coordinator)
+        raise
 
     # Return true to denote a successful setup.
     return True
@@ -177,22 +170,30 @@ async def async_remove_config_entry_device(
     return True
 
 
+async def _async_close_coordinator(
+    hass: HomeAssistant, coordinator: FusionSolarCoordinator
+) -> None:
+    """Stop polling and close HTTP resources off the event loop."""
+    try:
+        await coordinator.async_shutdown()
+    finally:
+        await hass.async_add_executor_job(coordinator.api.close)
+
+
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    # This is called when you remove your integration or shutdown HA.
-    # If you have created any custom services, they need to be removed here too.
+    """Unload platforms before releasing the coordinator and its HTTP session."""
+    runtime = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
+    if runtime is None:
+        return True
 
-    # Remove the config options update listener
-    hass.data[DOMAIN][config_entry.entry_id].cancel_update_listener()
-
-    # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry, PLATFORMS
     )
-
-    # Remove the config entry from the hass data object.
     if unload_ok:
-        hass.data[DOMAIN].pop(config_entry.entry_id)
+        runtime.cancel_update_listener()
+        try:
+            await _async_close_coordinator(hass, runtime.coordinator)
+        finally:
+            hass.data[DOMAIN].pop(config_entry.entry_id, None)
 
-    # Return that unloading was successful.
     return unload_ok

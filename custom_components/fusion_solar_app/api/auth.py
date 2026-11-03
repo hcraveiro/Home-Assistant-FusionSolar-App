@@ -56,64 +56,71 @@ class FusionSolarAuthMixin:
 
     def login(self) -> bool:
         """Connect to api."""
-        if self.login_host == "jp5.fusionsolar.huawei.com":
-            _LOGGER.debug("Using JP5 login flow")
-            return self._login_jp5()
-        if any(host in self.login_host for host in ("la5", "intl")):
-            _LOGGER.debug("Using LA5 login flow")
-            return self._login_la5()
-        else:
-            _LOGGER.debug("Using EU5 login flow")
-            return self._login_eu5()
+        with self._session_lock:
+            self._ensure_session_open()
+            if self.login_host == "jp5.fusionsolar.huawei.com":
+                _LOGGER.debug("Using JP5 login flow")
+                return self._login_jp5()
+            if any(host in self.login_host for host in ("la5", "intl")):
+                _LOGGER.debug("Using LA5 login flow")
+                return self._login_la5()
+            else:
+                _LOGGER.debug("Using EU5 login flow")
+                return self._login_eu5()
+
+    def _ensure_session_open(self) -> None:
+        """Do not let queued work revive an API that has been unloaded."""
+        if self._closed:
+            raise APIConnectionError("FusionSolar API is closed")
 
     def _login_eu5(self) -> bool:
         """Connect to API using the EU5 login flow.
-    
+
         The method first tries the modern browser-aligned flow using the nested
         service parameter. If that does not return redirect information, it falls
         back once to the legacy flow to preserve backwards compatibility.
         """
         captcha_input = ""
-    
+
         if isinstance(self.captcha_input, str):
             captcha_input = self.captcha_input.strip()
-    
+
         # Browser-aligned flow first, legacy flow second as fallback.
         login_modes = [True, False]
-    
+
         if not captcha_input:
             login_page_url = self._get_eu5_login_page_url(use_service=True)
             _LOGGER.debug("Pre-warming EU5 session by visiting login page: %s", login_page_url)
-    
+
             try:
                 self.session.get(login_page_url, timeout=20)
             except Exception as ex:
                 _LOGGER.warning("Failed to pre-warm EU5 session: %s", ex)
-    
+
         if captcha_input:
             captcha_is_valid = self._prevalidate_captcha(captcha_input)
-    
+
             if not captcha_is_valid:
                 _LOGGER.warning("Captcha pre-validation failed.")
                 self.connected = False
                 self.set_captcha_img()
                 raise APIAuthCaptchaError("Invalid captcha.")
-    
+
         public_key_url = f"https://{self.login_host}{PUBKEY_URL}"
         pubkey_headers = {
             "Accept": "application/json",
             "Referer": self._get_eu5_login_page_url(use_service=True),
         }
-    
+
         _LOGGER.debug("Getting Public Key at: %s", public_key_url)
-    
+
         response = self.session.get(
             public_key_url,
             headers=pubkey_headers,
             timeout=20,
         )
         _LOGGER.debug("EU5 public key response: HTTP %s", response.status_code)
-    
+
         try:
             pubkey_data = response.json()
             _LOGGER.debug("EU5 public key JSON decoded.")
@@ -123,31 +130,31 @@ class FusionSolarAuthMixin:
             raise APIAuthError(
                 "Error processing Pubkey response: JSON format invalid!"
             ) from ex
-    
+
         pub_key_pem = pubkey_data["pubKey"]
         time_stamp = pubkey_data["timeStamp"]
         version = pubkey_data["version"]
-    
+
         nonce = generate_nonce()
         encrypted_password = encrypt_password(pub_key_pem, self.pwd) + version
-    
+
         payload = {
             "organizationName": "",
             "username": self.user,
             "password": encrypted_password,
             "multiRegionName": "",
         }
-    
+
         if captcha_input:
             payload["verifycode"] = captcha_input
             _LOGGER.debug("Submitting login with captcha input.")
         else:
             _LOGGER.debug("Submitting login without captcha input.")
-    
+
         last_error_code = ""
         last_error_message = ""
         last_verify_code_create = False
-    
+
         for use_service in login_modes:
             login_page_url = self._get_eu5_login_page_url(use_service=use_service)
             login_url = self._get_eu5_validate_user_url(
@@ -155,7 +162,7 @@ class FusionSolarAuthMixin:
                 nonce=nonce,
                 use_service=use_service,
             )
-    
+
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json",
@@ -166,26 +173,26 @@ class FusionSolarAuthMixin:
                 "referer": login_page_url,
                 "x-requested-with": "XMLHttpRequest",
             }
-    
+
             _LOGGER.debug(
                 "EU5 login attempt. use_service=%s login_url=%s referer=%s",
                 use_service,
                 login_url,
                 login_page_url,
             )
-    
+
             response = self.session.post(
                 login_url,
                 json=payload,
                 headers=headers,
                 timeout=20,
             )
-    
+
             _LOGGER.debug(
                 "EU5 login response: use_service=%s HTTP=%s",
                 use_service, response.status_code,
             )
-    
+
             if response.status_code != 200:
                 _LOGGER.warning(
                     "EU5 login attempt failed with HTTP %s (use_service=%s)",
@@ -193,7 +200,7 @@ class FusionSolarAuthMixin:
                     use_service,
                 )
                 continue
-    
+
             try:
                 login_response = response.json()
                 _LOGGER.debug("EU5 login JSON decoded (use_service=%s)", use_service)
@@ -208,7 +215,7 @@ class FusionSolarAuthMixin:
                         "Error processing Login response: JSON format invalid!"
                     ) from ex
                 continue
-    
+
             redirect_url = self._extract_eu5_redirect_url(login_response)
             if redirect_url:
                 redirect_headers = {
@@ -218,71 +225,70 @@ class FusionSolarAuthMixin:
                     "host": self.login_host,
                     "referer": f"https://{self.login_host}{LOGIN_HEADERS_2_STEP_REFERER}",
                 }
-    
+
                 _LOGGER.debug("EU5 SSO redirect received.")
-    
+
                 redirect_response = self.session.get(
                     redirect_url,
                     headers=redirect_headers,
                     allow_redirects=False,
                     timeout=20,
                 )
-    
+
                 _LOGGER.debug("EU5 redirect response: HTTP %s", redirect_response.status_code)
-    
+
                 response_headers = redirect_response.headers
                 location_header = response_headers.get("Location")
                 _LOGGER.debug("EU5 redirect headers received.")
-    
+
                 if location_header:
                     self.data_host = urlparse(location_header).netloc
                 else:
                     self.data_host = self.login_host
-    
+
                 if redirect_response.status_code in (200, 302):
                     dp_session = redirect_response.cookies.get("dp-session")
-    
+
                     if not dp_session:
                         raw_set_cookie = redirect_response.headers.get("Set-Cookie", "")
-    
+
                         for part in raw_set_cookie.split(","):
                             part = part.strip()
-    
+
                             if part.startswith("dp-session="):
                                 dp_session = part.split("=", 1)[1].split(";", 1)[0]
                                 break
-    
+
                     if not dp_session:
                         dp_session = self.session.cookies.get("dp-session")
-    
+
                     if not dp_session:
                         _LOGGER.error("DP Session not found in cookies.")
                         self.connected = False
                         raise APIAuthError("DP Session not found in cookies.")
-    
+
                     _LOGGER.debug("DP session cookie obtained.")
-    
+
                     self.dp_session = dp_session
                     self.connected = True
                     self.last_session_time = datetime.now(timezone.utc)
                     self.captcha_input = None
                     self.captcha_img = None
-    
+
                     self.refresh_csrf()
                     station_data = self.get_station_list()
                     self._update_station_metadata_from_station_list(station_data)
-    
-                    self._start_session_monitor()
+
                     return True, self.station
-    
+
                 _LOGGER.error("EU5 redirect failed (HTTP %s)", redirect_response.status_code)
                 self.connected = False
                 raise APIAuthError("Redirect failed.")
-    
+
             last_error_code = str(login_response.get("errorCode", ""))
             last_error_message = str(login_response.get("errorMsg", ""))
             last_verify_code_create = bool(login_response.get("verifyCodeCreate"))
-    
+
             _LOGGER.warning(
                 "EU5 login response did not include redirect information. use_service=%s errorCode=%s errorMsg=%s verifyCodeCreate=%s",
                 use_service,
@@ -290,18 +296,18 @@ class FusionSolarAuthMixin:
                 last_error_message,
                 last_verify_code_create,
             )
-    
+
             if last_error_code == "411" or last_verify_code_create:
                 self.connected = False
                 _LOGGER.warning("Captcha required or captcha challenge still active.")
                 self.set_captcha_img()
                 raise APIAuthCaptchaError("Login requires Captcha.")
-    
+
             # Only raise invalid credentials after both modes have been tried.
             if not use_service and last_error_code == "406":
                 self.connected = False
                 raise APIAuthError("Invalid username or password.")
-    
+
         self.connected = False
         raise APIAuthError(
             "Login response did not include redirect information."
@@ -394,7 +400,6 @@ class FusionSolarAuthMixin:
             self.refresh_csrf()
             station_data = self.get_station_list()
             self._update_station_metadata_from_station_list(station_data)
-            self._start_session_monitor()
             _LOGGER.debug("JP5 login and station initialization succeeded")
             return True, self.station
         except requests.RequestException as err:
@@ -484,8 +489,6 @@ class FusionSolarAuthMixin:
             station_data = self.get_station_list()
             self._update_station_metadata_from_station_list(station_data)
 
-            self._start_session_monitor()
-
             return True, self.station
 
         except Exception as ex:
@@ -560,29 +563,28 @@ class FusionSolarAuthMixin:
         Does NOT make HTTP calls — safe to call from the event loop.
         CSRF is refreshed lazily on the next API call that needs it.
         """
-        self.dp_session = dp_session
-        self.data_host = data_host
-        self.session.cookies.set("dp-session", dp_session)
-        self.session.cookies.set("locale", "en-us")
-        self.connected = True
-        self.last_session_time = datetime.now(timezone.utc)
-        self._start_session_monitor()
+        with self._session_lock:
+            self._ensure_session_open()
+            self.dp_session = dp_session
+            self.data_host = data_host
+            self.session.cookies.set("dp-session", dp_session)
+            self.session.cookies.set("locale", "en-us")
+            self.connected = True
+            self.last_session_time = datetime.now(timezone.utc)
 
     def reset_session(self):
-        """Reset HTTP session, clearing cookies and volatile auth state."""
-        try:
+        """Reset HTTP state under the request lock; must run in the executor."""
+        with self._session_lock:
+            self._ensure_session_open()
             self.session.close()
-        except Exception:
-            pass
-
-        self.session = requests.Session()
-        self.session.cookies.set("locale", "en-us")
-        self.connected = False
-        self.dp_session = ""
-        self.csrf = None
-        self.csrf_time = None
-        self.captcha_input = None
-        self.captcha_img = None
+            self.session = requests.Session()
+            self.session.cookies.set("locale", "en-us")
+            self.connected = False
+            self.dp_session = ""
+            self.csrf = None
+            self.csrf_time = None
+            self.captcha_input = None
+            self.captcha_img = None
 
     def _response_looks_like_auth_failure(self, response: requests.Response) -> bool:
         """Return True when the response looks like an expired-session login page."""
@@ -618,9 +620,31 @@ class FusionSolarAuthMixin:
         *,
         context: str,
         timeout: int | None = None,
+        optional: bool = False,
         **kwargs,
     ) -> tuple[requests.Response, dict]:
-        """Perform an HTTP request and return parsed JSON with robust auth/timeout handling."""
+        """Request JSON, serializing transport and lifecycle changes.
+
+        Optional endpoints may forbid access without invalidating the session.
+        Explicit authentication failures (401 or login HTML) still require login.
+        """
+        with self._session_lock:
+            self._ensure_session_open()
+            return self._request_json_locked(
+                method, url, context=context, timeout=timeout, optional=optional, **kwargs
+            )
+
+    def _request_json_locked(
+        self,
+        method: str,
+        url: str,
+        *,
+        context: str,
+        timeout: int | None,
+        optional: bool,
+        **kwargs,
+    ) -> tuple[requests.Response, dict]:
+        """Handle a response while the HTTP session lock is held."""
         effective_timeout = timeout or self.request_timeout
 
         try:
@@ -637,7 +661,11 @@ class FusionSolarAuthMixin:
         except requests.RequestException as err:
             raise APIConnectionError(f"{context} request failed: {err}") from err
 
-        if self._response_looks_like_auth_failure(response):
+        # A 403 on a permission-gated endpoint is not evidence of expiry,
+        # even if the portal supplies its generic HTML error page.
+        if not (optional and response.status_code == 403) and (
+            self._response_looks_like_auth_failure(response)
+        ):
             _LOGGER.warning(
                 "%s appears to have returned an auth page or expired session. "
                 "HTTP=%s",
@@ -648,7 +676,8 @@ class FusionSolarAuthMixin:
             raise APIAuthError(f"{context} returned an expired or invalid session")
 
         if response.status_code != 200:
-            _LOGGER.error(
+            log = _LOGGER.debug if optional else _LOGGER.error
+            log(
                 "%s failed. HTTP=%s",
                 context,
                 response.status_code,
@@ -677,7 +706,8 @@ class FusionSolarAuthMixin:
                 self.connected = False
                 raise APIAuthError(f"{context} returned HTML instead of JSON") from err
 
-            _LOGGER.error(
+            log = _LOGGER.debug if optional else _LOGGER.error
+            log(
                 "%s did not return JSON. Content-Type=%s",
                 context,
                 content_type,
@@ -760,22 +790,22 @@ class FusionSolarAuthMixin:
         self.csrf = csrf_value
         self.csrf_time = now
         _LOGGER.debug("CSRF refreshed successfully.")
-    
+
     def _get_eu5_service_value(self) -> str:
         """Return the nested service value used by the EU5 web login flow."""
         return "/unisess/v1/auth?service=%2Fnetecowebext%2Fhome%2Findex.html"
-        
+
     def _get_eu5_login_page_url(self, use_service: bool) -> str:
         """Return the EU5 login page URL, optionally including the nested service parameter."""
         base_url = f"https://{self.login_host}{LOGIN_FORM_URL}"
-    
+
         if not use_service:
             return base_url
-    
+
         service_value = self._get_eu5_service_value()
         encoded_service = quote(service_value, safe="")
         return f"{base_url}?service={encoded_service}"
-    
+
     def _get_eu5_validate_user_url(
         self,
         time_stamp: str,
@@ -787,24 +817,22 @@ class FusionSolarAuthMixin:
             f"https://{self.login_host}{LOGIN_VALIDATE_USER_URL}"
             f"?timeStamp={time_stamp}&nonce={nonce}"
         )
-    
+
         if not use_service:
             return base_url
-    
+
         service_value = self._get_eu5_service_value()
         encoded_service = quote(service_value, safe="")
         return f"{base_url}&service={encoded_service}"
-    
+
     def _extract_eu5_redirect_url(self, login_response: dict) -> str | None:
         """Extract the redirect URL from the EU5 login response."""
         if login_response.get("respMultiRegionName"):
             redirect_info = login_response["respMultiRegionName"][1]
             return f"https://{self.login_host}{redirect_info}"
-    
+
         if login_response.get("redirectURL"):
             redirect_info = login_response["redirectURL"]
             return f"https://{self.login_host}{redirect_info}"
-    
+
         return None
-    
-    

@@ -43,7 +43,17 @@ def _parse_optimizer_layout(data: dict[str, Any]) -> dict[str, dict[str, str]]:
         return {}
     if not isinstance(schema, dict) or not isinstance(schema.get("datas"), list):
         return {}
+    # Some layouts contain only assembly nodes. Validate ownership when the
+    # inverter nodes are present, without rejecting those older layouts.
+    inverters = {
+        info["devId"] for node in schema["datas"]
+        if isinstance(node, dict)
+        and isinstance(info := node.get("c"), dict)
+        and (info.get("nodetype") == "inverter" or str(info.get("devTypeId")) == "20822")
+        and isinstance(info.get("devId"), str) and info["devId"].strip()
+    }
     found: dict[str, dict[str, str]] = {}
+    conflicting: set[str] = set()
     for node in schema["datas"]:
         if not isinstance(node, dict):
             continue
@@ -54,6 +64,12 @@ def _parse_optimizer_layout(data: dict[str, Any]) -> dict[str, dict[str, str]]:
             continue
         dn, parent = info.get("devId"), info.get("parentDevId")
         if not isinstance(dn, str) or not dn.strip() or not isinstance(parent, str) or not parent.strip():
+            continue
+        if (inverters and parent not in inverters) or dn in conflicting:
+            continue
+        if dn in found and found[dn]["parent_dn"] != parent:
+            del found[dn]
+            conflicting.add(dn)
             continue
         found[dn] = {
             "parent_dn": parent,
@@ -144,7 +160,7 @@ class FusionSolarOptimizerMixin:
             kwargs["json"] = json_body
         _, result = self._request_json(
             method, f"https://{self.data_host}{endpoint}",
-            context="FusionSolar optimizer telemetry", **kwargs
+            context="FusionSolar optimizer telemetry", optional=True, **kwargs
         )
         if not isinstance(result, dict) or result.get("success") is not True:
             raise ValueError("FusionSolar optimizer endpoint did not succeed")
@@ -159,7 +175,12 @@ class FusionSolarOptimizerMixin:
             counts = self._optimizer_request(
                 "GET", _COUNTS, params={"stationDn": self.station}
             )
-            if not isinstance(counts, dict) or _safe_number(counts.get("optimizerNum")) in (None, 0):
+            count = _safe_number(counts.get("optimizerNum")) if isinstance(counts, dict) else None
+            if count is None or count < 0 or not count.is_integer():
+                # A malformed response says nothing about the plant topology.
+                # Leave discovery uncached so the next refresh can recover.
+                return []
+            if count == 0:
                 self._optimizers = {}
                 return []
             try:
@@ -201,6 +222,7 @@ class FusionSolarOptimizerMixin:
         # temperature. Fetch once per parent inverter and keep it optional so
         # failures cannot suppress the existing sampling telemetry.
         optimizer_info: dict[str, dict[str, Any]] = {}
+        conflicting_info: set[str] = set()
         for inverter_dn in dict.fromkeys(
             item.get("parent_dn") for item in topology.values()
             if isinstance(item.get("parent_dn"), str) and item.get("parent_dn")
@@ -215,8 +237,27 @@ class FusionSolarOptimizerMixin:
             if not isinstance(info_records, list):
                 continue
             for info in info_records:
-                if isinstance(info, dict) and isinstance(info.get("dn"), str):
-                    optimizer_info[info["dn"]] = info
+                if not isinstance(info, dict):
+                    continue
+                dn = info.get("dn")
+                if (
+                    not isinstance(dn, str) or dn not in topology
+                    or topology[dn].get("parent_dn") != inverter_dn
+                    or dn in conflicting_info
+                ):
+                    continue
+                # Do not let an unscoped/cross-inverter response overwrite the
+                # requested parent's details, or choose an arbitrary duplicate.
+                if any(
+                    key in info and info[key] != inverter_dn
+                    for key in ("inverterDn", "bindInverterDn")
+                ):
+                    continue
+                if dn in optimizer_info and optimizer_info[dn] != info:
+                    del optimizer_info[dn]
+                    conflicting_info.add(dn)
+                else:
+                    optimizer_info[dn] = info
         devices = []
         for record in records:
             if not isinstance(record, dict) or str(record.get("mocId")) != "20814":
@@ -242,8 +283,13 @@ class FusionSolarOptimizerMixin:
                         icon="mdi:tag-outline" if name == "Optimizer Name" else "mdi:map-marker-outline",
                         dn=dn,
                     ))
-            temperature = _safe_number(info.get("temperature"))
-            if temperature is not None:
+            is_disconnected = str(record.get("connectStatus") or "").strip().lower() in {
+                "disconnected", "offline", "unavailable"
+            }
+            temperature = None if is_disconnected else _safe_number(info.get("temperature"))
+            # An explicit invalid reading must clear an existing sensor, just
+            # like an offline sample, rather than preserving a live temperature.
+            if "temperature" in info or is_disconnected:
                 devices.append(Device(
                     device_id="Optimizer Temperature",
                     device_unique_id=self.get_device_unique_id(
@@ -255,9 +301,6 @@ class FusionSolarOptimizerMixin:
                     icon="mdi:thermometer",
                     dn=dn,
                 ))
-            is_disconnected = str(record.get("connectStatus") or "").strip().lower() in {
-                "disconnected", "offline"
-            }
             for name, key, dtype, icon in _FIELDS:
                 raw = (extra.get(key) if key not in ("dailyEnergy", "powerPercent", "connectStatus") else record.get(key))
                 if name == "Optimizer Running Status" and raw is None:

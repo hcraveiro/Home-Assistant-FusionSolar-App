@@ -27,6 +27,7 @@ methods = [
         "_discover_battery_dn_from_flow_nodes",
         "_build_battery_devices",
         "_discover_additional_batteries_from_v3",
+        "_discover_battery_parents",
     }
 ]
 test_ast = ast.Module(
@@ -39,7 +40,7 @@ test_ast = ast.Module(
     )],
     type_ignores=[],
 )
-namespace = {"Any": object, "Device": object, "_LOGGER": logging.getLogger(__name__), "time": time, "unquote": unquote}
+namespace = {"Any": object, "Device": object, "_LOGGER": logging.getLogger(__name__), "time": time, "unquote": unquote, "DATA_REFERER_URL": "/test"}
 exec(compile(ast.fix_missing_locations(test_ast), str(source_path), "exec"), namespace)
 FusionSolarInstallationMixin = namespace["FusionSolarInstallationMixin"]
 
@@ -303,8 +304,22 @@ def test_v3_supplements_only_battery_discovery_for_two_inverters():
     assert calls[0][0] == "GET"
     assert "/station/v3/overview/energy-flow" in calls[0][1]
     assert calls[0][2]["params"]["featureId"] == "aifc"
+    assert calls[0][2]["optional"] is True
     api._discover_additional_batteries_from_v3()
     assert len(calls) == 1
+
+
+def test_battery_parent_discovery_requests_are_optional():
+    api = _fake_api()
+    api.battery_dns = ["BAT_A"]
+    api.inverters = {"INV_A": object()}
+    api.data_host = "example.invalid"
+    api._request_json = Mock(return_value=(None, {"data": [
+        {"dn": "BAT_A", "parentDn": "INV_A"},
+    ]}))
+    FusionSolarInstallationMixin._discover_battery_parents(api)
+    assert api._request_json.call_args.kwargs["optional"] is True
+    assert api._battery_parent_dns == {"BAT_A": "INV_A"}
 
 
 def test_v3_never_probes_single_inverter_installations():
@@ -325,6 +340,55 @@ def test_v3_rejects_unrelated_or_ambiguous_battery_ids():
     assert len(calls) == 1
     assert api.battery_dn == "BAT_A"
     assert api.battery_dns == ["BAT_A"]
+
+
+def test_v3_discovers_later_third_battery_without_removing_hourly_cap(monkeypatch):
+    api = _fake_api()
+    nodes = [{"name": "neteco.pvms.devTypeLangKey.energy_store",
+              "devIds": ["BAT_B", "BAT_A"]}]
+    calls = _configure_v3_api(api, nodes)
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    api._discover_additional_batteries_from_v3()
+    assert api.battery_dns == ["BAT_A", "BAT_B"]
+    nodes[0]["devIds"] = ["BAT_C", "BAT_B", "BAT_A"]
+    clock[0] += 3599
+    api._discover_additional_batteries_from_v3()
+    assert len(calls) == 1
+    assert api.battery_dns == ["BAT_A", "BAT_B"]
+    clock[0] += 1
+    api._discover_additional_batteries_from_v3()
+    assert len(calls) == 2
+    assert api.battery_dns == ["BAT_A", "BAT_B", "BAT_C"]
+    assert api.battery_dn == "BAT_A"
+
+
+def test_v3_existing_pair_still_rejects_response_missing_primary():
+    api = _fake_api()
+    calls = _configure_v3_api(api, [
+        {"name": "neteco.pvms.devTypeLangKey.energy_store",
+         "devIds": ["BAT_B", "BAT_C"]},
+    ])
+    api.battery_dns = ["BAT_A", "BAT_B"]
+    api._discover_additional_batteries_from_v3()
+    assert len(calls) == 1
+    assert api.battery_dns == ["BAT_A", "BAT_B"]
+    assert api.battery_dn == "BAT_A"
+
+
+def test_ambiguous_primary_does_not_get_legacy_ids_from_discovery_order():
+    api = _fake_api()
+    api._battery_primary_ambiguous = True
+    api._discover_battery_dn_from_flow_nodes([
+        {"name": "energy_store", "devIds": ["BAT_B", "BAT_A"]},
+    ])
+    assert api.battery_dn is None
+    seen = []
+    api.get_battery_devices = lambda: seen.append((api.battery_dn, api._battery_entity_dn)) or []
+    api._build_battery_devices()
+    assert seen == [("BAT_B", "BAT_B"), ("BAT_A", "BAT_A")]
+    assert api.battery_dn is None
+    assert api._battery_entity_dn is None
 
 
 def test_v3_failure_does_not_change_primary_and_is_rate_limited():

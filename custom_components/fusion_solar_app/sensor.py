@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import inspect
+import math
 from datetime import datetime
 from typing import Any
 
@@ -600,10 +601,32 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         "Battery SOH",
     }
 
+    # These are nonnegative counters, including counters reset by the API at
+    # calendar boundaries. Capacity and configuration energy setpoints are not
+    # accumulated energy and deliberately have no state class.
+    ENERGY_COUNTER_SENSOR_IDS = {
+        f"{metric} {period}"
+        for metric in (
+            "House Load", "Panel Production", "Panel Production Consumption",
+            "Battery Consumption", "Battery Injection",
+            "Grid Consumption", "Grid Injection",
+        )
+        for period in ("Today", "Week", "Month", "Year", "Lifetime")
+    } | {
+        "Battery Energy Charged Today",
+        "Battery Energy Discharged Today",
+        "Power Sensor Grid Injection Total",
+        "Power Sensor Grid Consumption Total",
+        "Optimizer Energy Today",
+    }
+
     def __init__(self, coordinator: FusionSolarCoordinator, device: Device) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.device = device
+        # Keep registry routing metadata when a reading disappears, but never
+        # use that last-seen Device as a fallback for its state.
+        self._device_info_device = device
         self.device_id = device.device_id
         self._device_name = device.name
         self._device_type = device.device_type
@@ -617,23 +640,19 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
             self._device_unique_id,
         )
 
+        self.device = updated_device
         if updated_device is not None:
-            self.device = updated_device
+            self._device_info_device = updated_device
+            self._device_name = updated_device.name
+            self._device_icon = updated_device.icon
 
         _LOGGER.debug("Device: %s", self.device)
         self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
-        """Return availability."""
-        if self.device_id.startswith("Optimizer ") and self.device is not None:
-            if self.device_id in {
-                "Optimizer Output Power", "Optimizer Input Voltage",
-                "Optimizer Output Voltage", "Optimizer Input Current",
-                "Optimizer Power Percent",
-            } and self.device.state is None:
-                return False
-        return super().available and self.device is not None
+        """Require a valid reading in this snapshot, not just a successful poll."""
+        return super().available and self.native_value is not None
 
     @property
     def device_class(self) -> str | None:
@@ -646,7 +665,7 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        return _build_device_info(self.coordinator, self.device)
+        return _build_device_info(self.coordinator, self._device_info_device)
 
     @property
     def entity_category(self) -> EntityCategory | None:
@@ -681,14 +700,21 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
             return self.device.state
         if dtype == DeviceType.SENSOR_TEXT:
             return str(self.device.state)
-        if dtype == DeviceType.SENSOR_PERCENTAGE:
-            return int(self.device.state)
-        if dtype == DeviceType.SENSOR_COUNT:
-            return int(self.device.state)
-        if dtype == DeviceType.SENSOR_RATIO:
-            return round(float(self.device.state), 2)
-
-        return float(self.device.state)
+        try:
+            if isinstance(self.device.state, bool):
+                return None
+            value = float(self.device.state)
+            if not math.isfinite(value):
+                return None
+            if dtype in {DeviceType.SENSOR_PERCENTAGE, DeviceType.SENSOR_COUNT}:
+                return int(self.device.state)
+            if dtype == DeviceType.SENSOR_RATIO:
+                return round(value, 2)
+            return value
+        except (TypeError, ValueError, OverflowError):
+            # Invalid telemetry must not become a false zero or keep an old
+            # reading alive when the rest of the plant refresh succeeded.
+            return None
 
     @property
     def native_unit_of_measurement(self) -> str | None:
@@ -701,7 +727,14 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         if self._device_type in {DeviceType.SENSOR_TIME, DeviceType.SENSOR_TEXT}:
             return None
         if self._device_type == DeviceType.SENSOR_KWH:
-            return SensorStateClass.TOTAL
+            if self.device_id in self.ENERGY_COUNTER_SENSOR_IDS or (
+                self.device_id.startswith("Battery Module ")
+                and self.device_id.lower().endswith(
+                    (" total charge energy", " total discharge energy")
+                )
+            ):
+                return SensorStateClass.TOTAL_INCREASING
+            return None
         return SensorStateClass.MEASUREMENT
 
     @property

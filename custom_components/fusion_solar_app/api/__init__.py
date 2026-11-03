@@ -78,8 +78,8 @@ class FusionSolarAPI(
         self.dp_session = ""
         self.connected: bool = False
         self.last_session_time: datetime | None = None
-        self._session_thread: threading.Thread | None = None
-        self._stop_event = threading.Event()
+        # Session renewal is owned by the coordinator, never a background thread.
+        self._closed = False
         self.csrf = None
         self.csrf_time = None
         self.request_timeout = 20
@@ -214,53 +214,23 @@ class FusionSolarAPI(
 
         return value
 
+    def close(self) -> None:
+        """Release local HTTP resources; run in the executor, not the event loop.
+
+        No server-side logout is sent: a config flow may have handed its token
+        to a coordinator using a separate HTTP session.
+        """
+        with self._session_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self.connected = False
+            self.dp_session = ""
+            self.csrf = None
+            self.csrf_time = None
+            self.session.close()
+
     def logout(self) -> bool:
-        """Disconnect from api."""
-        self.connected = False
-        self._stop_session_monitor()
+        """Disconnect and release the HTTP session, idempotently."""
+        self.close()
         return True
-
-    def _renew_session(self) -> None:
-        """Simulate session renewal."""
-        _LOGGER.info("Renewing session.")
-        self.reset_session()
-        try:
-            self.login()
-        except APIAuthCaptchaError:
-            _LOGGER.error(
-                "Session renewal requires CAPTCHA. "
-                "Automated renewal is not possible. "
-                "Please reconfigure the integration."
-            )
-            self.connected = False
-        except Exception as ex:
-            _LOGGER.error("Session renewal failed: %s", ex)
-            self.connected = False
-
-    def _session_monitor(self) -> None:
-        """Monitor session and renew if needed."""
-        while not self._stop_event.is_set():
-            if not self.connected:
-                self._renew_session()
-                if not self.connected:
-                    _LOGGER.warning("Session monitor stopping: renewal failed")
-                    self._stop_event.set()
-                    break
-            self._stop_event.wait(60)
-
-    def _start_session_monitor(self) -> None:
-        """Start the session monitor thread."""
-        if self._session_thread is None or not self._session_thread.is_alive():
-            self._stop_event.clear()
-            self._session_thread = threading.Thread(target=self._session_monitor, daemon=True)
-            self._session_thread.start()
-
-    def _stop_session_monitor(self) -> None:
-        """Stop the session monitor thread."""
-        self._stop_event.set()
-        if (
-            self._session_thread is not None
-            and self._session_thread.is_alive()
-            and self._session_thread is not threading.current_thread()
-        ):
-            self._session_thread.join()

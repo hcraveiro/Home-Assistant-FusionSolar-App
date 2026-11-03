@@ -41,15 +41,16 @@ class FusionSolarBatteryMixin:
         if previous and now < previous[0]:
             records = previous[1]
         else:
-            # Keep a previous successful snapshot if this optional request
-            # temporarily fails, but cache the attempt to cap API traffic.
-            records = previous[1] if previous else {}
+            # An expired snapshot is not a fresh reading. Cache failed attempts
+            # too, but do not keep presenting old settings as current data.
+            records = {}
             try:
                 self.refresh_csrf()
                 _, response = self._request_json(
                     "GET",
                     f"https://{self.data_host}/rest/pvms/web/device/v1/deviceExt/get-config-signals",
                     context="FusionSolar battery configuration",
+                    optional=True,
                     headers={
                         "Accept": "application/json",
                         "Roarand": self.csrf,

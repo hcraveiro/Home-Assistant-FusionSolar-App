@@ -14,6 +14,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -174,23 +175,106 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             return await self.hass.async_add_executor_job(self._call_api_serialized, self.api.get_devices)
 
     def _restore_known_battery_dn(self) -> None:
-        """Recover a prior battery identity from this entry's HA device registry."""
+        """Restore the battery owning legacy unscoped IDs, never registry order.
+
+        Secondary batteries can register before the primary when its first poll
+        fails. Device registration order (or even a lone registered secondary)
+        therefore does not establish which battery owns the legacy entities.
+        """
         if self.api.battery_dn or not self.api.station:
             return
+        self.api._battery_primary_ambiguous = False
+        stored_dn = self.config_entry.data.get("primary_battery_dn")
+        if (
+            isinstance(stored_dn, str)
+            and stored_dn.strip()
+            and stored_dn != "unknown_battery"
+            and self.config_entry.data.get("primary_battery_station_dn") == self.api.station
+        ):
+            self.api.battery_dn = stored_dn
+            return
+
         prefix = f"{DOMAIN}_{self.api.station}_battery_"
         registry = dr.async_get(self.hass)
+        device_dns: dict[str, set[str]] = {}
         for device in dr.async_entries_for_config_entry(
             registry, self.config_entry.entry_id
         ):
-            for identifier_domain, identifier in device.identifiers:
-                if identifier_domain != DOMAIN or not identifier.startswith(prefix):
+            dns = {
+                identifier[len(prefix):]
+                for identifier_domain, identifier in device.identifiers
+                if identifier_domain == DOMAIN and identifier.startswith(prefix)
+                and identifier[len(prefix):] not in {"", "unknown_battery"}
+            }
+            if dns:
+                device_dns[device.id] = dns
+
+        station_suffix = self.api.sanitize_id_segment(self.api.station)
+        legacy_prefixes = (
+            f"{DOMAIN}-{DOMAIN}_{station_suffix}_battery_",
+            f"{DOMAIN}-{DOMAIN}_battery_",  # Before station-scoped unique IDs.
+        )
+        station_scope = f"{DOMAIN}-{DOMAIN}_{station_suffix}_inv_"
+        legacy_dns: set[str] = set()
+        secondary_dns: set[str] = set()
+        has_legacy_entities = False
+        for entity in er.async_entries_for_config_entry(
+            er.async_get(self.hass), self.config_entry.entry_id
+        ):
+            if entity.platform != DOMAIN:
+                continue
+            if entity.unique_id.startswith(legacy_prefixes):
+                # These installation totals exist even on stations without a
+                # battery. Only per-device telemetry can identify a primary.
+                suffix = next(
+                    entity.unique_id[len(prefix):] for prefix in legacy_prefixes
+                    if entity.unique_id.startswith(prefix)
+                )
+                if suffix in {"percentage", "capacity"} or suffix.startswith(
+                    ("consumption_", "injection_")
+                ):
                     continue
-                battery_dn = identifier[len(prefix):]
-                if not battery_dn or battery_dn == "unknown_battery":
-                    continue
-                self.api.battery_dn = battery_dn
-                _LOGGER.debug("Restored known battery DN from device registry")
-                return
+                has_legacy_entities = True
+                legacy_dns.update(device_dns.get(entity.device_id, set()))
+            elif entity.unique_id.startswith(station_scope):
+                secondary_dns.update(device_dns.get(entity.device_id, set()))
+
+        candidates = set().union(*device_dns.values()) if device_dns else set()
+        if len(legacy_dns) == 1:
+            self.api.battery_dn = next(iter(legacy_dns))
+        elif (
+            not has_legacy_entities and len(candidates) == 1
+            and not secondary_dns
+        ):
+            # Safe migration for old single-battery entries without entities.
+            self.api.battery_dn = next(iter(candidates))
+        elif candidates or has_legacy_entities:
+            # Do not let the next flow response silently assign legacy IDs to
+            # whichever battery happens to appear first. Scoped telemetry can
+            # still be polled while legacy entities remain unavailable.
+            self.api._battery_primary_ambiguous = True
+            _LOGGER.warning(
+                "Cannot safely restore the primary FusionSolar battery; "
+                "preserving legacy entity identities and using DN-scoped telemetry"
+            )
+
+    def _persist_primary_battery_dn(self) -> None:
+        """Save the primary before entities register, even if its telemetry failed."""
+        battery_dn = self.api.battery_dn
+        if (
+            not isinstance(battery_dn, str) or not battery_dn.strip()
+            or battery_dn == "unknown_battery" or not self.api.station
+        ):
+            return
+        identity = {
+            "primary_battery_dn": battery_dn,
+            "primary_battery_station_dn": self.api.station,
+        }
+        if all(self.config_entry.data.get(key) == value for key, value in identity.items()):
+            return
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, data={**self.config_entry.data, **identity}
+        )
 
     async def async_update_data(self) -> FusionSolarAPIData:
         """Fetch data from API endpoint."""
@@ -217,7 +301,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 err,
             )
             try:
-                self.api.reset_session()
+                await self.hass.async_add_executor_job(self._call_api_serialized, self.api.reset_session)
                 await self.hass.async_add_executor_job(self._call_api_serialized, self.api.login)
     
                 await self._ensure_station_dn()
@@ -237,6 +321,8 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Error communicating with FusionSolar API", exc_info=True)
             raise UpdateFailed(f"Error communicating with API: {err}") from err
     
+        self._persist_primary_battery_dn()
+
         forecast: FusionSolarForecastData | None = None
         try:
             forecast = await self._build_panel_production_forecast(devices)

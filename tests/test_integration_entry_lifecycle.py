@@ -79,6 +79,9 @@ def environment(integration):
     _, coordinator_class, _ = integration
     hass = Mock()
     hass.data = {}
+    async def executor(method, *args):
+        return method(*args)
+    hass.async_add_executor_job = AsyncMock(side_effect=executor)
     hass.config_entries.async_forward_entry_setups = AsyncMock()
     hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
     hass.config_entries.async_reload = AsyncMock()
@@ -91,6 +94,7 @@ def environment(integration):
     coordinator = Mock()
     coordinator.api.connected = True
     coordinator.async_config_entry_first_refresh = AsyncMock()
+    coordinator.async_shutdown = AsyncMock()
     coordinator_class.reset_mock()
     coordinator_class.return_value = coordinator
     return hass, entry, coordinator
@@ -138,6 +142,9 @@ async def test_setup_rejects_disconnected_session_without_platform_forward(integ
 
     hass.config_entries.async_forward_entry_setups.assert_not_awaited()
     hass.config_entries.async_update_entry.assert_not_called()
+    coordinator.async_shutdown.assert_awaited_once()
+    coordinator.api.close.assert_called_once_with()
+    hass.async_add_executor_job.assert_awaited_once_with(coordinator.api.close)
 
 
 @pytest.mark.asyncio
@@ -151,6 +158,8 @@ async def test_auth_failure_propagates_without_partial_setup(integration, enviro
         await module.async_setup_entry(hass, entry)
     assert entry.entry_id not in hass.data[module.DOMAIN]
     entry.add_update_listener.assert_not_called()
+    coordinator.async_shutdown.assert_awaited_once()
+    coordinator.api.close.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -172,12 +181,15 @@ async def test_unload_success_removes_runtime(integration, environment):
 @pytest.mark.asyncio
 async def test_unload_failure_preserves_runtime(integration, environment):
     module, _, _ = integration
-    hass, entry, _ = environment
+    hass, entry, coordinator = environment
     await module.async_setup_entry(hass, entry)
     hass.config_entries.async_unload_platforms.return_value = False
 
     assert await module.async_unload_entry(hass, entry) is False
     assert entry.entry_id in hass.data[module.DOMAIN]
+    entry.add_update_listener.return_value.assert_not_called()
+    coordinator.async_shutdown.assert_not_awaited()
+    coordinator.api.close.assert_not_called()
 
 
 @pytest.mark.asyncio

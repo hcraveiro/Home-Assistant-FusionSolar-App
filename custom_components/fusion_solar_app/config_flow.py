@@ -28,7 +28,13 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .api import FusionSolarAPI, APIAuthError, APIConnectionError, APIAuthCaptchaError
+from .api import (
+    FusionSolarAPI,
+    APIAuthError,
+    APIConnectionError,
+    APIAuthCaptchaError,
+    normalize_fusionsolar_host,
+)
 from .const import (
     CAPTCHA_INPUT,
     CONF_FORECAST_PROVIDER,
@@ -107,7 +113,7 @@ async def validate_input(
     else:
         api.user = data[CONF_USERNAME]
         api.pwd = data[CONF_PASSWORD]
-        api.login_host = data[FUSION_SOLAR_HOST]
+        api.login_host = normalize_fusionsolar_host(data[FUSION_SOLAR_HOST])
         api.captcha_input = captcha_input
 
     if station_dn:
@@ -118,9 +124,14 @@ async def validate_input(
     except APIAuthCaptchaError as err:
         raise InvalidCaptcha(api) from err
     except APIAuthError as err:
+        await hass.async_add_executor_job(api.close)
         raise InvalidAuth from err
     except APIConnectionError as err:
+        await hass.async_add_executor_job(api.close)
         raise CannotConnect from err
+    except BaseException:
+        await hass.async_add_executor_job(api.close)
+        raise
 
     return {
         "title": _build_entry_title(
@@ -140,6 +151,36 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
     _captcha_credentials: dict[str, Any] | None = None
     _target_entry: ConfigEntry | None = None
 
+    async def _async_validate_input(
+        self, data: dict[str, Any]
+    ) -> tuple[dict[str, Any], FusionSolarAPI]:
+        """Own the temporary API before awaiting login so abort can release it."""
+        await self._async_close_api()
+        self._api = FusionSolarAPI(
+            data[CONF_USERNAME],
+            data[CONF_PASSWORD],
+            data[FUSION_SOLAR_HOST],
+            data.get(CAPTCHA_INPUT),
+        )
+        return await validate_input(self.hass, data, self._api)
+
+    async def _async_close_api(self) -> None:
+        """Release a temporary API without invalidating a transferred token."""
+        api, self._api = self._api, None
+        if api is not None:
+            await self.hass.async_add_executor_job(api.close)
+
+    @callback
+    def async_remove(self) -> None:
+        """Clean up when HA removes a completed or externally aborted flow."""
+        if self._api is not None:
+            self.hass.async_create_task(self._async_close_api())
+
+    async def _async_abort(self, reason: str) -> ConfigFlowResult:
+        """Release resources before returning an abort result."""
+        await self._async_close_api()
+        return self.async_abort(reason=reason)
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
@@ -154,7 +195,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                info, api = await validate_input(self.hass, user_input)
+                info, api = await self._async_validate_input(user_input)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -176,6 +217,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._stations = station_data["data"]["list"]
                 except Exception:  # pylint: disable=broad-except
                     _LOGGER.exception("Unexpected exception while fetching station list")
+                    await self._async_close_api()
                     errors["base"] = "cannot_connect"
                 else:
                     return await self.async_step_select_station()
@@ -219,6 +261,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
                 station_dn,
             )
     
+            await self._async_close_api()
             return self.async_create_entry(title=title, data=data)
     
         # Build station selection form.
@@ -273,11 +316,17 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             station_dn,
         )
     
-        self.hass.config_entries.async_update_entry(
-            entry,
-            data=update_data,
-            title=title,
-        )
+        # Copy the token first, then close only the local transport before reload.
+        # The coordinator restores the copied token into its own requests.Session.
+        self._api = api
+        try:
+            self.hass.config_entries.async_update_entry(
+                entry,
+                data=update_data,
+                title=title,
+            )
+        finally:
+            await self._async_close_api()
         await self.hass.config_entries.async_reload(entry.entry_id)
         return self.async_abort(reason=abort_reason)
 
@@ -384,7 +433,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             }
     
             try:
-                info, api = await validate_input(self.hass, validation_data)
+                info, api = await self._async_validate_input(validation_data)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -427,11 +476,11 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
     
         entry_id = self.context.get("entry_id")
         if not entry_id:
-            return self.async_abort(reason="missing_entry_id")
+            return await self._async_abort(reason="missing_entry_id")
     
         config_entry = self.hass.config_entries.async_get_entry(entry_id)
         if config_entry is None:
-            return self.async_abort(reason="config_entry_not_found")
+            return await self._async_abort(reason="config_entry_not_found")
     
         if user_input is not None:
             validation_data = {
@@ -440,7 +489,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             }
     
             try:
-                info, api = await validate_input(self.hass, validation_data)
+                info, api = await self._async_validate_input(validation_data)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:

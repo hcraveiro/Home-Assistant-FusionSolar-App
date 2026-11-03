@@ -66,6 +66,28 @@ def test_layout_discovers_only_distinct_valid_optimizer_dns(optimizer_module, la
     assert found["NE=OPT_2"]["position"] == "1.1.2"
 
 
+@pytest.mark.parametrize("include_inverters", [True, False])
+def test_layout_rejects_conflicting_parent_associations(optimizer_module, include_inverters):
+    nodes = [
+        {"c": {"nodetype": "assembly", "devTypeId": 20814,
+               "devId": dn, "parentDevId": parent}}
+        for dn, parent in [
+            ("GOOD", "INV_A"), ("DUP", "INV_A"), ("DUP", "INV_B"),
+            ("DUP", "INV_A"), ("UNKNOWN_PARENT", "UNKNOWN"),
+        ]
+    ]
+    if include_inverters:
+        nodes += [
+            {"c": {"nodetype": "inverter", "devTypeId": 20822, "devId": dn}}
+            for dn in ("INV_A", "INV_B")
+        ]
+    result = optimizer_module._parse_optimizer_layout({
+        "data": {"schemaData": json.dumps({"datas": nodes})},
+    })
+    assert set(result) == ({"GOOD"} if include_inverters else {"GOOD", "UNKNOWN_PARENT"})
+    assert result["GOOD"]["parent_dn"] == "INV_A"
+
+
 @pytest.mark.parametrize(("value", "expected"), [
     ("109.6", 109.6), ("0", 0), (0, 0), ("--", None),
     ("null", None), ("", None), (None, None), (True, None),
@@ -140,7 +162,7 @@ def test_optimizer_values_and_scoped_unique_ids(api):
     assert values[("NE=OPT_2", "Optimizer Position")] == "1.1.2"
     assert values[("NE=OPT_2", "Optimizer Temperature")] == 15.1
     assert values[("NE=OPT_8", "Optimizer Position")] == "1.1.8"
-    assert ("NE=OPT_8", "Optimizer Temperature") not in values
+    assert values[("NE=OPT_8", "Optimizer Temperature")] is None
     assert ("NE=OPT_8", "Optimizer Output Power") not in values
     assert ("NE=OTHER", "Optimizer Output Power") not in values
     assert len({d.device_unique_id for d in devices}) == len(devices)
@@ -181,6 +203,47 @@ def test_no_optimizer_count_skips_layout_and_polling(optimizer_module):
     assert len(api._calls) == 1
 
 
+@pytest.mark.parametrize("count", [None, "--", "bad", True, False, "NaN", "inf", -1, 1.5, {}, []])
+def test_malformed_optimizer_count_recovers_next_refresh(optimizer_module, count):
+    api = FakeOptimizerAPI(optimizer_module, [
+        {"mocId": 20814, "dn": "NE=OPT_2", "optInfo": {"outputPower": "10"}},
+    ], count=count)
+    assert api.get_optimizer_devices() == []
+    assert api._optimizers is None
+    assert len(api._calls) == 1
+    api.count = 2
+    assert any(d.device_id == "Optimizer Output Power" for d in api.get_optimizer_devices())
+    assert sum(c[1].endswith("station-simple-devicedata") for c in api._calls) == 2
+
+
+@pytest.mark.parametrize("counts", [None, [], {}, {"optimizerNum": "--"}])
+def test_malformed_count_response_does_not_cache_empty_topology(optimizer_module, counts):
+    api = FakeOptimizerAPI(optimizer_module, [])
+    request = api._optimizer_request
+
+    def malformed_counts(method, endpoint, **kwargs):
+        if endpoint.endswith("station-simple-devicedata"):
+            return counts
+        return request(method, endpoint, **kwargs)
+
+    api._optimizer_request = malformed_counts
+    assert api.get_optimizer_devices() == []
+    assert api._optimizers is None
+    api._optimizer_request = request
+    api.get_optimizer_devices()
+    assert len(api._optimizers) == 2
+
+
+@pytest.mark.parametrize("count", [0, "0", 0.0])
+def test_confirmed_zero_optimizer_count_is_cached(optimizer_module, count):
+    api = FakeOptimizerAPI(optimizer_module, [], count=count)
+    assert api.get_optimizer_devices() == []
+    assert api._optimizers == {}
+    api.count = 2
+    assert api.get_optimizer_devices() == []
+    assert len(api._calls) == 1
+
+
 def test_sampling_request_uses_json_array_and_csrf(optimizer_module):
     class Dummy(optimizer_module.FusionSolarOptimizerMixin):
         data_host = "example.invalid"
@@ -195,6 +258,39 @@ def test_sampling_request_uses_json_array_and_csrf(optimizer_module):
     assert api.call[2]["json"] == ["NE=OPT_2"]
     assert api.call[2]["headers"]["Roarand"] == "renewed"
     assert api.call[2]["headers"]["Content-Type"] == "application/json"
+
+
+@pytest.mark.parametrize(("method", "endpoint_name", "request_kwargs"), [
+    ("GET", "_COUNTS", {"params": {"stationDn": "NE=STATION_1"}}),
+    ("GET", "_LAYOUT", {"params": {"stationDn": "NE=STATION_1", "sheetNO": 0}}),
+    ("POST", "_LOGICAL_TREE", {"json_body": {"stationDn": "NE=STATION_1", "layoutType": 2}}),
+    ("POST", "_SAMPLING", {"json_body": ["NE=OPT_2"]}),
+    ("GET", "_OPTIMIZER_INFO", {"params": {"inverterDn": "NE=INV_1"}}),
+])
+def test_all_optimizer_endpoints_use_optional_transport(
+    optimizer_module, method, endpoint_name, request_kwargs
+):
+    class Dummy(optimizer_module.FusionSolarOptimizerMixin):
+        data_host = "example.invalid"
+        csrf = "csrf"
+
+        def refresh_csrf(self):
+            pass
+
+        def _request_json(self, method, url, **kwargs):
+            self.call = (method, url, kwargs)
+            return None, {"success": True, "data": []}
+
+    api = Dummy()
+    endpoint = getattr(optimizer_module, endpoint_name)
+    assert api._optimizer_request(method, endpoint, **request_kwargs) == []
+    assert api.call[:2] == (method, f"https://example.invalid{endpoint}")
+    assert api.call[2]["optional"] is True
+    assert api.call[2]["context"] == "FusionSolar optimizer telemetry"
+    if "params" in request_kwargs:
+        assert api.call[2]["params"] == request_kwargs["params"]
+    if "json_body" in request_kwargs:
+        assert api.call[2]["json"] == request_kwargs["json_body"]
 
 
 def test_failed_response_rejected(optimizer_module):
@@ -271,6 +367,16 @@ def test_logical_layout_fallback_preserves_scoped_optimizer_ids(optimizer_module
                 return {"schemaData": json.dumps({"areas": [], "buildings": [], "version": "1"})}
             if endpoint.endswith("device-tree-page"):
                 return logical_tree
+            if endpoint.endswith("optimizer-info"):
+                parent = kwargs["params"]["inverterDn"]
+                suffix = "A" if parent == "NE=INV_A" else "B"
+                other = "B" if suffix == "A" else "A"
+                return [
+                    {"dn": f"NE=OPT_{suffix}_0", "optName": f"Module {suffix}",
+                     "optNumber": f"{suffix}.1", "temperature": "25" if suffix == "A" else "30"},
+                    # Some upstream responses leak details for another inverter.
+                    {"dn": f"NE=OPT_{other}_0", "optName": "Wrong parent", "temperature": "99"},
+                ]
             return [
                 {"mocId": 20814, "dn": "NE=OPT_A_0",
                  "dailyEnergy": "0.2", "optInfo": {"outputPower": "150"}},
@@ -291,3 +397,44 @@ def test_logical_layout_fallback_preserves_scoped_optimizer_ids(optimizer_module
     assert tree_call[0] == "POST"
     assert tree_call[2]["json_body"]["layoutType"] == 2
     assert tree_call[2]["json_body"]["invertDnlist"] == []
+    values = {(d.dn, d.device_id): d.state for d in first}
+    assert values[("NE=OPT_A_0", "Optimizer Name")] == "Module A"
+    assert values[("NE=OPT_B_0", "Optimizer Name")] == "Module B"
+    assert values[("NE=OPT_A_0", "Optimizer Temperature")] == 25
+    assert values[("NE=OPT_B_0", "Optimizer Temperature")] == 30
+    assert values[("NE=OPT_A_0", "Optimizer Output Power")] == pytest.approx(0.15)
+    assert values[("NE=OPT_B_0", "Optimizer Output Power")] == pytest.approx(0.08)
+    info_calls = [c for c in api._calls if c[1].endswith("optimizer-info")]
+    assert [(method, kwargs["params"]) for method, _, kwargs in info_calls] == [
+        ("GET", {"inverterDn": parent})
+        for parent in ("NE=INV_A", "NE=INV_B", "NE=INV_A", "NE=INV_B")
+    ]
+    sampling_calls = [c for c in api._calls if c[1].endswith("device-sampling-data")]
+    assert len(sampling_calls) == 2
+    assert all(method == "POST" and kwargs["json_body"] == list(api._optimizers)
+               for method, _, kwargs in sampling_calls)
+
+
+@pytest.mark.parametrize("conflicting", [True, False])
+def test_optimizer_info_rejects_conflicting_duplicates(api, conflicting):
+    original = dict(api.optimizer_info[0])
+    duplicate = dict(original, temperature="99") if conflicting else dict(original)
+    api.optimizer_info = [original, duplicate, dict(original)]
+    values = {(d.dn, d.device_id): d.state for d in api.get_optimizer_devices()}
+    assert values[("NE=OPT_2", "Optimizer Output Power")] == pytest.approx(0.1096)
+    assert values[("NE=OPT_2", "Optimizer Position")] == "1.1.2"
+    if conflicting:
+        assert ("NE=OPT_2", "Optimizer Name") not in values
+        assert ("NE=OPT_2", "Optimizer Temperature") not in values
+    else:
+        assert values[("NE=OPT_2", "Optimizer Name")] == "Optimizer A"
+        assert values[("NE=OPT_2", "Optimizer Temperature")] == 15.1
+
+
+@pytest.mark.parametrize("parent_key", ["inverterDn", "bindInverterDn"])
+def test_optimizer_info_ignores_explicit_wrong_parent(api, parent_key):
+    api.optimizer_info[0][parent_key] = "NE=WRONG_PARENT"
+    values = {(d.dn, d.device_id): d.state for d in api.get_optimizer_devices()}
+    assert ("NE=OPT_2", "Optimizer Name") not in values
+    assert ("NE=OPT_2", "Optimizer Temperature") not in values
+    assert values[("NE=OPT_2", "Optimizer Output Power")] == pytest.approx(0.1096)

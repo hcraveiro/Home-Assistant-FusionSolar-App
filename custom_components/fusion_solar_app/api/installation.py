@@ -265,7 +265,7 @@ class FusionSolarInstallationMixin:
                     self.battery_dns.append(dn)
 
         if self.battery_dns:
-            if self.battery_dn is None:
+            if self.battery_dn is None and not getattr(self, "_battery_primary_ambiguous", False):
                 self.battery_dn = self.battery_dns[0]
             _LOGGER.info("Discovered battery DNs: %s", self.battery_dns)
 
@@ -279,7 +279,6 @@ class FusionSolarInstallationMixin:
         if (
             getattr(self, "_is_isitepower_m", False)
             or len(getattr(self, "inverters", {})) < 2
-            or len(getattr(self, "battery_dns", [])) > 1
             or not self.battery_dn
         ):
             return
@@ -294,6 +293,7 @@ class FusionSolarInstallationMixin:
                 "GET",
                 f"https://{self.data_host}/rest/pvms/web/station/v3/overview/energy-flow",
                 context="FusionSolar secondary battery discovery",
+                optional=True,
                 headers={"Accept": "application/json"},
                 params={"stationDn": unquote(self.station), "featureId": "aifc"},
             )
@@ -349,6 +349,7 @@ class FusionSolarInstallationMixin:
                     "GET",
                     f"https://{self.data_host}/rest/neteco/web/config/device/v1/children-list",
                     context="FusionSolar battery parent discovery",
+                    optional=True,
                     headers=headers,
                     params={
                         "conditionParams.parentDn": inverter_dn,
@@ -476,7 +477,9 @@ class FusionSolarInstallationMixin:
         if not battery_dns:
             return []
 
-        primary_dn = self.battery_dn or battery_dns[0]
+        primary_dn = self.battery_dn
+        if primary_dn is None and not getattr(self, "_battery_primary_ambiguous", False):
+            primary_dn = battery_dns[0]
         devices: list[Device] = []
         original_dn = self.battery_dn
         metadata_fields = (

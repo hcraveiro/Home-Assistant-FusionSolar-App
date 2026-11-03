@@ -290,9 +290,12 @@ class FusionSolarEnergyBalanceMixin:
         days_previous_month = []
         days_current_month = []
 
-        for i in range(7):
+        # Only elapsed days belong to this week's total. A week crossing
+        # into next month must not reuse this month's day 1..6 readings for
+        # future dates; compare the year too for the December/January edge.
+        for i in range(today.weekday() + 1):
             current_day = start_day_week + timedelta(days=i)
-            if current_day.month < today.month:
+            if (current_day.year, current_day.month) < (today.year, today.month):
                 days_previous_month.append(current_day.day)
             else:
                 days_current_month.append(current_day.day)
