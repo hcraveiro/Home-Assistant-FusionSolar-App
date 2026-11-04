@@ -1,6 +1,82 @@
 # Offline API response profiles and replay tests
 
-## What runs today
+## Interactive developer mock mode (real HA devices/entities)
+
+The integration can now run a **separate MOCK config entry** using predefined
+HTTP responses instead of FusionSolar. This is opt-in developer functionality;
+ordinary account entries keep their normal backend even when it is enabled.
+
+1. Copy the self-contained runtime profiles from `tests/fixtures/runtime_profiles/`
+   to a developer-only directory, for example `/config/fusion_solar_mock_profiles`.
+2. Set `FUSIONSOLAR_DEV_PROFILE_DIR=/config/fusion_solar_mock_profiles` in the HA
+   process/container environment, then restart **only the development HA**.
+3. In **Settings → Devices & Services → Add Integration → Fusion Solar App**, choose
+   **Offline replay (development only)** and select the profile. It asks for no
+   credentials. An additional entry named **MOCK — …** is created alongside, not
+   instead of, any real account entry.
+4. Inspect its actual devices, entities and states on the integration page. Normal
+   polling and the entry's Reload action continue to use canned responses.
+
+For Docker Compose, add this only to the development `homeassistant` service:
+
+```yaml
+environment:
+  TZ: Europe/Lisbon
+  FUSIONSOLAR_DEV_PROFILE_DIR: /config/fusion_solar_mock_profiles
+```
+
+Initial runtime profiles:
+
+| Profile | Actual HA registration verified on 2026.10.4 |
+|---|---|
+| `single-battery-config-denied` | 1 installation, 1 inverter, 1 battery: **3 devices / 81 entities**. Optional configuration is HTTP 403; core telemetry remains available. |
+| `two-inverters-two-batteries` | 1 installation, 2 inverters, 2 separately owned batteries, 2 optimizers: **7 devices / 144 entities**. Includes forced-charge power, duration and energy and daytime optimizer temperature. |
+
+Counts include the two native forecast entities. On a development HA with Recorder
+but no useful mock production history, those two derived forecasts may be
+`unknown`, with the existing “no useful deltas” forecast warning. The replayed
+API sensors should still have the expected values. Static profiles intentionally
+do not invent a solar-production history to manufacture a forecast.
+
+These are static repeatable HTTP profiles, **not** coherent recorded installations
+or an interactive charge/discharge simulator. Rich-profile topology and sampling
+are synthetic; selected configuration/detail values come from sanitized captures.
+The `MOCK_RUNTIME_*` station/device identities and explicit MOCK device names
+prevent registry overlap with real accounts. Do not use mock entities in real
+control automations or the Energy dashboard: the development Recorder may retain
+fictional history/statistics, just as it does for any ordinary HA entity.
+
+Each mock instance has its own network-incapable session. No HA-wide requests or
+socket monkeypatch is installed. Only known read-only operations against
+`https://example.invalid` can match a route. Synthetic authentication is explicit;
+real authentication is not replayed. A missing opt-in, missing profile, changed
+station identity, unmatched request or forbidden write fails closed: it never
+switches a mock entry to real login/network access.
+
+To disable, remove only the MOCK entries through the HA UI first, then unset the
+environment variable and restart the development HA. Removing the profiles or
+opt-in while entries remain configured deliberately leaves those entries unable
+to load; it must not turn them into real-account entries.
+
+### Actual HA lifecycle verification
+
+```sh
+docker run --rm --pull never --network none --read-only --tmpfs /tmp \
+  -v "$PWD:/src:ro" -w /src --entrypoint python \
+  ghcr.io/home-assistant/home-assistant:2026.10.4 \
+  tests/api_profiles/check_runtime_homeassistant.py
+```
+
+This starts a minimal **actual HA runtime** in an ephemeral configuration, without
+an HTTP server or any real account. It drives the real config flow → integration
+setup → coordinator → complete production `get_devices()` → sensor platform →
+device/entity registries and HA state machine. It checks profile topology,
+corrected values/units/icons, refresh, reload, unload/setup and stable IDs, with
+zero external network attempts. It is distinct from the class-only smoke check
+below. UI rendering, Recorder statistics, vendor authentication, dynamic topology
+and real hardware behavior still require their own validation.
+
+## Focused offline replay tests
 
 `tests/api_profiles/` replays sanitized JSON profiles from
 `tests/fixtures/api_profiles/` through the **real** API transport decoder,
@@ -58,11 +134,12 @@ slave battery returns identical fields.
 
 ## Coverage boundaries and missing scenarios
 
-The replay tests exercise real flow fetching, DN/parent discovery, battery and
-optimizer assembly, and sensor properties/update methods. They do **not** run
-the complete `get_devices()` orchestration, coordinator polling, login, config
-entry setup, live registry registration, Recorder, UI or scheduling end to end.
-Pytest uses the existing lightweight Home Assistant/coordinator fixture stubs.
+The five focused replay profiles exercise real flow fetching, DN/parent discovery,
+battery/optimizer assembly and sensor properties/update methods, with lightweight
+HA/coordinator pytest stubs. The two **runtime** profiles and lifecycle checker
+above additionally exercise complete `get_devices()`, real config entries,
+coordinator updates, platforms, registries and states. Neither layer claims
+vendor login, Recorder/statistics, UI rendering or real hardware validation.
 
 Existing focused regression tests cover additional cases (battery registry
 restoration, third-battery discovery, optimizer ownership, authentication,
@@ -81,7 +158,7 @@ covered there is not automatically covered by a persisted replay profile.
 | Independent optional versus core endpoint failures | Expand beyond configuration 403 and missing optimizer sampling: malformed data, 418, timeout, required failure and genuine authentication expiry. |
 | v2/v3 iSitePower-M import/export | [Issue #101](https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101): collect endpoint-specific paired shapes. Do not assume v2/v3 interchangeability or infer export from import. |
 | EU / other regions / authentication | Sanitized redirect/envelope shapes, expiry and recovery, with fictional tokens only; current profiles bypass login. |
-| Full actual-HA runtime replay | Separate isolated HA instance/config entry: initial registration, reload, late entities, IDs, statistics and unavailable/recovery. Not supplied by the class smoke check below. |
+| Dynamic runtime / Recorder / UI | Static registration and refresh/reload/unload now pass in actual HA. Still add live topology changes, unavailable/recovery transitions, Recorder/statistics assertions and UI rendering checks. |
 
 ## Actual Home Assistant class smoke check
 

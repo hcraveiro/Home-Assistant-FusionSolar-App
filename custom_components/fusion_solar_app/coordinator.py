@@ -30,6 +30,7 @@ from .api import (
 from .const import (
     CAPTCHA_INPUT,
     CONF_FORECAST_PROVIDER,
+    CONF_MOCK_PROFILE,
     CONF_SOLCAST_FORECAST_TODAY_ENTITY,
     CONF_STATION_DN,
     DEFAULT_FORECAST_PROVIDER,
@@ -64,7 +65,10 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
 
     data: FusionSolarAPIData
 
-    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+    def __init__(
+        self, hass: HomeAssistant, config_entry: ConfigEntry,
+        *, mock_profile_data: dict | None = None,
+    ) -> None:
         """Initialize coordinator."""
         self.config_entry = config_entry
         self.user = config_entry.data[CONF_USERNAME]
@@ -99,6 +103,21 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=self.poll_interval),
         )
     
+        if CONF_MOCK_PROFILE in config_entry.data:
+            if (
+                mock_profile_data is None
+                or mock_profile_data["id"] != config_entry.data[CONF_MOCK_PROFILE]
+                or mock_profile_data["station"]["dn"] != config_entry.data.get(CONF_STATION_DN)
+            ):
+                raise ValueError("Mock entry/profile identity mismatch; real API fallback forbidden")
+            from .mock_api import MockFusionSolarAPI
+
+            self.api = MockFusionSolarAPI(mock_profile_data)
+            # Never restore persisted account/session fields into a mock API.
+            return
+
+        if mock_profile_data is not None:
+            raise ValueError("A mock backend requires an explicitly marked mock entry")
         self.api = FusionSolarAPI(
             user=self.user,
             pwd=self.pwd,

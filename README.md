@@ -1290,7 +1290,9 @@ Past chart data should continue to come from the real FusionSolar sensors. The f
 
 Five offline API response profiles cover a single battery with configuration denied, two inverters with separate batteries, optimizer day/offline/recovery, daytime optimizer details, and forced-charge configuration. They exercise real API readers and sensor classes without credentials or live network access. Captured excerpts and synthetic scenarios are explicitly distinguished.
 
-Run `python -m pytest -q tests/test_api_profiles.py tests/test_api_profile_privacy.py`. See the [scenario catalog and contribution guide](docs/mock-scenarios.md) for the remaining capture gaps, provenance/sanitization rules, and an isolated smoke check using real Home Assistant libraries. Neither pytest stubs nor that class smoke check constitute full HA end-to-end testing. Never collect samples by changing battery operation or commit raw HAR/authentication data.
+There is also an **opt-in developer mock mode inside the integration**: set `FUSIONSOLAR_DEV_PROFILE_DIR` to a directory containing the runtime profiles, then add a separate **MOCK** entry and select its profile in HA. It runs the real discovery/coordinator/platform and creates actual devices/entities, with an instance-local network-incapable backend. Normal account entries are not switched to mock mode.
+
+Run `python -m pytest -q tests/test_api_profiles.py tests/test_api_profile_privacy.py tests/test_runtime_mock_api.py tests/test_runtime_mock_flow.py`. See the [activation instructions, scenario catalog and contribution guide](docs/mock-scenarios.md) for runtime profiles, remaining capture gaps, safety rules, and the isolated actual-HA lifecycle checker. Never collect samples by changing battery operation or commit raw HAR/authentication data.
 
 ## Credits
 

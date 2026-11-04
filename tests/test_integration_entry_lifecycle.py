@@ -53,7 +53,7 @@ def integration():
     register("homeassistant.helpers.update_coordinator", DataUpdateCoordinator=object)
 
     package(PREFIX, ROOT)
-    register(f"{PREFIX}.const", DOMAIN="fusion_solar_app")
+    register(f"{PREFIX}.const", DOMAIN="fusion_solar_app", CONF_MOCK_PROFILE="mock_profile")
     mock_coordinator_class = Mock()
     register(f"{PREFIX}.coordinator", FusionSolarCoordinator=mock_coordinator_class)
 
@@ -205,3 +205,33 @@ async def test_device_removal_hook_returns_true(integration, environment):
     module, _, _ = integration
     hass, entry, _ = environment
     assert await module.async_remove_config_entry_device(hass, entry, Mock()) is True
+
+
+@pytest.mark.asyncio
+async def test_mock_entry_loads_profile_off_loop_and_injects_only_that_backend(
+    integration, environment, monkeypatch,
+):
+    module, coordinator_class, _ = integration
+    hass, entry, _ = environment
+    entry.data = {"mock_profile": "demo"}
+    profile = {"id": "demo", "station": {"dn": "MOCK_RUNTIME_DEMO"}}
+    load = Mock(return_value=profile)
+    monkeypatch.setitem(sys.modules, f"{PREFIX}.mock_profile", types.SimpleNamespace(load_profile=load))
+    assert await module.async_setup_entry(hass, entry)
+    hass.async_add_executor_job.assert_any_await(load, "demo")
+    coordinator_class.assert_called_once_with(hass, entry, mock_profile_data=profile)
+
+
+@pytest.mark.asyncio
+async def test_mock_entry_missing_optin_never_falls_back_to_real_coordinator(
+    integration, environment, monkeypatch,
+):
+    module, coordinator_class, not_ready = integration
+    hass, entry, _ = environment
+    entry.data = {"mock_profile": "demo"}
+    monkeypatch.setitem(sys.modules, f"{PREFIX}.mock_profile", types.SimpleNamespace(
+        load_profile=Mock(side_effect=ValueError("developer replay disabled"))
+    ))
+    with pytest.raises(not_ready, match="Mock profile unavailable"):
+        await module.async_setup_entry(hass, entry)
+    coordinator_class.assert_not_called()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import voluptuous as vol
@@ -38,6 +39,7 @@ from .api import (
 from .const import (
     CAPTCHA_INPUT,
     CONF_FORECAST_PROVIDER,
+    CONF_MOCK_PROFILE,
     CONF_SOLCAST_FORECAST_TODAY_ENTITY,
     CONF_STATION_DN,
     DEFAULT_FORECAST_PROVIDER,
@@ -190,7 +192,72 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step."""
+        """Handle a normal account, or an explicitly enabled developer replay."""
+        if user_input is not None and CONF_MOCK_PROFILE in user_input:
+            return await self.async_step_mock(user_input)
+        if user_input is None and os.environ.get("FUSIONSOLAR_DEV_PROFILE_DIR"):
+            from .mock_profile import list_profiles
+
+            try:
+                profiles = await self.hass.async_add_executor_job(list_profiles)
+            except (ValueError, OSError):
+                profiles = {}
+            if profiles:
+                return self.async_show_menu(
+                    step_id="user", menu_options=["account", "mock"]
+                )
+        return await self._async_step_account(user_input)
+
+    async def async_step_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose the ordinary account form from the developer menu."""
+        return await self._async_step_account(user_input)
+
+    async def async_step_mock(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Create an isolated mock entry, never run account validation/login."""
+        from .mock_profile import list_profiles, load_profile
+
+        try:
+            profiles = await self.hass.async_add_executor_job(list_profiles)
+        except (ValueError, OSError):
+            profiles = {}
+        if not profiles:
+            return await self._async_abort("mock_disabled")
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            profile_id = user_input.get(CONF_MOCK_PROFILE)
+            try:
+                if profile_id not in profiles:
+                    raise ValueError("Unknown mock profile")
+                profile = await self.hass.async_add_executor_job(load_profile, profile_id)
+            except (ValueError, OSError):
+                errors["base"] = "mock_profile_invalid"
+            else:
+                await self.async_set_unique_id(f"mock:{profile_id}")
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=f"MOCK — {profile['title']}",
+                    data={
+                        CONF_MOCK_PROFILE: profile_id,
+                        CONF_USERNAME: f"mock-{profile_id}",
+                        CONF_PASSWORD: "unused",
+                        FUSION_SOLAR_HOST: "example.invalid",
+                        CONF_STATION_DN: profile["station"]["dn"],
+                    },
+                )
+        return self.async_show_form(
+            step_id="mock",
+            data_schema=vol.Schema({vol.Required(CONF_MOCK_PROFILE): vol.In(profiles)}),
+            errors=errors,
+        )
+
+    async def _async_step_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Keep the normal credentials flow unchanged when replay is disabled."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -414,6 +481,8 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
         self, entry_data: dict[str, Any]
     ) -> ConfigFlowResult:
         """Handle reauth when login fails at runtime."""
+        if CONF_MOCK_PROFILE in entry_data:
+            return await self._async_abort("mock_account_action_forbidden")
         self._target_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
@@ -423,6 +492,8 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle reauth confirmation step."""
+        if self._target_entry is not None and CONF_MOCK_PROFILE in self._target_entry.data:
+            return await self._async_abort("mock_account_action_forbidden")
         errors: dict[str, str] = {}
     
         if user_input is not None:
@@ -481,6 +552,8 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
         config_entry = self.hass.config_entries.async_get_entry(entry_id)
         if config_entry is None:
             return await self._async_abort(reason="config_entry_not_found")
+        if CONF_MOCK_PROFILE in config_entry.data:
+            return await self._async_abort("mock_account_action_forbidden")
     
         if user_input is not None:
             validation_data = {

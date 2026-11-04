@@ -14,7 +14,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN
+from .const import CONF_MOCK_PROFILE, DOMAIN
 from .coordinator import FusionSolarCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,7 +37,22 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     # Initialise the coordinator that manages data updates from your api.
     # This is defined in coordinator.py
-    coordinator = FusionSolarCoordinator(hass, config_entry)
+    if CONF_MOCK_PROFILE in config_entry.data:
+        # Explicit developer entry only. Missing opt-in/profile must never
+        # fall back to constructing a real account API. Disk reads use executor.
+        from .mock_profile import load_profile
+
+        try:
+            profile = await hass.async_add_executor_job(
+                load_profile, config_entry.data[CONF_MOCK_PROFILE]
+            )
+        except (ValueError, OSError) as err:
+            raise ConfigEntryNotReady(f"Mock profile unavailable: {err}") from err
+        coordinator = FusionSolarCoordinator(
+            hass, config_entry, mock_profile_data=profile
+        )
+    else:
+        coordinator = FusionSolarCoordinator(hass, config_entry)
 
     cancel_update_listener = None
     try:

@@ -167,8 +167,19 @@ def test_real_sensor_native_values(coordinator, sensor_module, kind, state, expe
     assert obj.available
     assert obj.unique_id == "fusion_solar_app-unique-test"
     if kind == "SENSOR_MINUTES":
+        assert sensor_module.DeviceType.SENSOR_MINUTES in sensor_module.SUPPORTED_SENSOR_DEVICE_TYPES
         assert obj.native_unit_of_measurement == "min"
         assert obj.state_class == "MEASUREMENT"
+
+
+def test_mock_devices_are_visibly_marked_without_changing_identity(coordinator, sensor_module):
+    obj = sensor_module.FusionSolarSensor(coordinator, device(sensor_module))
+    original_id = obj.unique_id
+    original_info = obj.device_info
+    coordinator.api.mock_profile = {"id": "demo"}
+    assert obj.device_info["name"] == f"MOCK [demo] {original_info['name']}"
+    assert obj.device_info["identifiers"] == original_info["identifiers"]
+    assert obj.unique_id == original_id
 
 
 def test_sensor_coordinator_updates_invalidate_missing_and_recover(coordinator, sensor_module):

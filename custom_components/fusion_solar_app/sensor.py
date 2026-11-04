@@ -54,6 +54,7 @@ SUPPORTED_SENSOR_DEVICE_TYPES = {
     DeviceType.SENSOR_TEXT,
     DeviceType.SENSOR_KG,
     DeviceType.SENSOR_COUNT,
+    DeviceType.SENSOR_MINUTES,
 }
 
 INVERTER_DEVICE_SENSOR_PREFIX = "Inverter "
@@ -666,7 +667,12 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        return _build_device_info(self.coordinator, self._device_info_device)
+        info = _build_device_info(self.coordinator, self._device_info_device)
+        profile = getattr(self.coordinator.api, "mock_profile", None)
+        if isinstance(profile, dict):
+            # Make fictitious devices unmistakable beside a real account.
+            info["name"] = f"MOCK [{profile['id']}] {info['name']}"
+        return info
 
     @property
     def entity_category(self) -> EntityCategory | None:

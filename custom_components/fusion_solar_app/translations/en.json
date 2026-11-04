@@ -3,18 +3,27 @@
     "title": "Fusion Solar App Integration",
     "abort": {
       "already_configured": "Device is already configured",
+      "mock_disabled": "Developer replay is disabled or no valid profiles are installed.",
+      "mock_account_action_forbidden": "Mock entries have no real account. Manage the external replay profile instead.",
       "reconfigure_successful": "Reconfiguration successful",
       "reauth_successful": "Re-authentication successful"
     },
     "error": {
       "cannot_connect": "Failed to connect",
+      "mock_profile_invalid": "The developer replay profile is invalid or unavailable.",
       "invalid_auth": "Invalid authentication",
       "unknown": "Unexpected error",
       "captcha_required": "Captcha required",
       "invalid_captcha": "Invalid captcha. Please try again."
     },
     "step": {
+      "mock": {
+        "title": "Offline replay (development only)",
+        "description": "Creates real HA devices/entities from canned API responses. No FusionSolar account or network access is used.",
+        "data": {"mock_profile": "Replay profile"}
+      },
       "user": {
+        "menu_options": {"account": "FusionSolar account", "mock": "Offline replay (development only)"},
         "data": {
           "username": "Username",
           "password": "Password",
