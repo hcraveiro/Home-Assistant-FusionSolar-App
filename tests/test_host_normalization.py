@@ -44,6 +44,7 @@ def load_host_normalizer():
         ("EU5", "eu5.fusionsolar.huawei.com"),
         ("https://eu5.fusionsolar.huawei.com/path", "eu5.fusionsolar.huawei.com"),
         ("uni004eu5.fusionsolar.huawei.com", "eu5.fusionsolar.huawei.com"),
+        ("uni002eu5.fusionsolar.huawei.com", "eu5.fusionsolar.huawei.com"),
         ("region004eu5", "eu5.fusionsolar.huawei.com"),
         ("https://sg5.fusionsolar.huawei.com:443/", "sg5.fusionsolar.huawei.com"),
     ],
