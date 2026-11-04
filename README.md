@@ -41,6 +41,7 @@ This integration was built for FusionSolar users who only have access to the reg
   - [Notes and limitations](#notes-and-limitations)
 - [Dashboard example](#dashboard-example)
 - [FAQ](#faq)
+- [Offline API replay tests (contributors)](#offline-api-replay-tests-contributors)
 - [Credits](#credits)
 
 ## Installation
@@ -1284,6 +1285,12 @@ No.
 The Solcast provider only generates forecast points from the current moment forward.
 
 Past chart data should continue to come from the real FusionSolar sensors. The forecast curve starts at `now` and then follows the Solcast-based projection for the rest of the day.
+
+## Offline API replay tests (contributors)
+
+Five offline API response profiles cover a single battery with configuration denied, two inverters with separate batteries, optimizer day/offline/recovery, daytime optimizer details, and forced-charge configuration. They exercise real API readers and sensor classes without credentials or live network access. Captured excerpts and synthetic scenarios are explicitly distinguished.
+
+Run `python -m pytest -q tests/test_api_profiles.py tests/test_api_profile_privacy.py`. See the [scenario catalog and contribution guide](docs/mock-scenarios.md) for the remaining capture gaps, provenance/sanitization rules, and an isolated smoke check using real Home Assistant libraries. Neither pytest stubs nor that class smoke check constitute full HA end-to-end testing. Never collect samples by changing battery operation or commit raw HAR/authentication data.
 
 ## Credits
 

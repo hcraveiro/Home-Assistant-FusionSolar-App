@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "origin": "mixed",
+  "source_url": "https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/47#issuecomment-6628911985",
+  "description": "Offline synthetic topology and transitions; no login or live device control. Referenced observed-safe bodies retain their separate provenance.",
+  "frames": [
+    {
+      "name": "observed-safe-duration",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/deviceExt/get-config-signals",
+          "params": {
+            "dn": "MOCK_BAT_A"
+          },
+          "json": null,
+          "status": 200,
+          "body_file": "responses/forced-charge-duration.json"
+        }
+      ]
+    },
+    {
+      "name": "permission-denied",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/deviceExt/get-config-signals",
+          "params": {
+            "dn": "MOCK_BAT_A"
+          },
+          "json": null,
+          "status": 403,
+          "body": {
+            "code": 1020
+          }
+        }
+      ]
+    },
+    {
+      "name": "recovery",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/deviceExt/get-config-signals",
+          "params": {
+            "dn": "MOCK_BAT_A"
+          },
+          "json": null,
+          "status": 200,
+          "body_file": "responses/forced-charge-duration.json"
+        }
+      ]
+    }
+  ]
+}
