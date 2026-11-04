@@ -104,6 +104,9 @@ def test_successful_config_is_scoped_per_battery_and_uses_only_get(api):
         "data": [{"configSignalDisplayList": [
             {"id": 10011, "value": "5000"},
             {"id": "230320245", "value": "1"},
+            {"id": 230320258, "value": "3.030"},
+            {"id": 230320281, "value": "1440"},
+            {"id": 230320129, "value": "1.750"},
         ]}],
     }))
 
@@ -111,8 +114,12 @@ def test_successful_config_is_scoped_per_battery_and_uses_only_get(api):
 
     assert [(device.device_id, device.state, device.dn) for device in devices] == [
         ("Battery Maximum Charge Power", 5.0, "BAT_B"),
+        ("Battery Forced Charge Power", 3.03, "BAT_B"),
+        ("Battery Forced Charge Discharge Period", 1440.0, "BAT_B"),
+        ("Battery Charged Energy", 1.75, "BAT_B"),
         ("Battery Forced Charge Discharge", "Charge", "BAT_B"),
     ]
+    assert next(device for device in devices if device.device_id == "Battery Charged Energy").name == "Battery Forced Charge Energy"
     assert all("_inv_bat_b_" in device.device_unique_id for device in devices)
     assert all(device.icon == "mdi:battery" for device in devices)
     assert api.session.request.call_args.args[0] == "GET"

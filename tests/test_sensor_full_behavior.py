@@ -158,6 +158,7 @@ def test_device_info_routes_to_correct_registry(coordinator, sensor_module, devi
     ("SENSOR_PERCENTAGE", "87", 87),
     ("SENSOR_RATIO", "44.456", 44.46),
     ("SENSOR_COUNT", "8", 8),
+    ("SENSOR_MINUTES", "1440", 1440.0),
 ])
 def test_real_sensor_native_values(coordinator, sensor_module, kind, state, expected):
     obj = sensor_module.FusionSolarSensor(
@@ -165,6 +166,9 @@ def test_real_sensor_native_values(coordinator, sensor_module, kind, state, expe
     assert obj.native_value == expected
     assert obj.available
     assert obj.unique_id == "fusion_solar_app-unique-test"
+    if kind == "SENSOR_MINUTES":
+        assert obj.native_unit_of_measurement == "min"
+        assert obj.state_class == "MEASUREMENT"
 
 
 def test_sensor_coordinator_updates_invalidate_missing_and_recover(coordinator, sensor_module):

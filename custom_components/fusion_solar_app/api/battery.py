@@ -90,6 +90,10 @@ class FusionSolarBatteryMixin:
             (230320277, "Battery End of Charge SOC", DeviceType.SENSOR_PERCENTAGE, 1),
             (230320278, "Battery End of Discharge SOC", DeviceType.SENSOR_PERCENTAGE, 1),
             (230320280, "Battery AC Charge Cutoff SOC", DeviceType.SENSOR_PERCENTAGE, 1),
+            (230320258, "Battery Forced Charge Power", DeviceType.SENSOR_KW, 1),
+            (230320281, "Battery Forced Charge Discharge Period", DeviceType.SENSOR_MINUTES, 1),
+            # Keep these internal IDs stable for existing installs, but give
+            # the entities names that reflect their forced-operation context.
             (230320129, "Battery Charged Energy", DeviceType.SENSOR_KWH, 1),
             (230320130, "Battery Discharged Energy", DeviceType.SENSOR_KWH, 1),
         )
@@ -109,6 +113,14 @@ class FusionSolarBatteryMixin:
                     label, kind, value, "mdi:battery", dn=entity_dn
                 )
                 if item is not None:
+                    # Preserve the historical device ID/unique ID so Home
+                    # Assistant keeps the existing entity registry entry.
+                    display_name = {
+                        230320129: "Battery Forced Charge Energy",
+                        230320130: "Battery Forced Discharge Energy",
+                    }.get(signal_id)
+                    if display_name is not None and hasattr(item, "name"):
+                        item.name = display_name
                     devices.append(item)
             except (TypeError, ValueError, OverflowError):
                 continue

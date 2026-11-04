@@ -21,6 +21,7 @@ class DeviceType(StrEnum):
     SENSOR_TEXT = "sensor_text"
     SENSOR_KG = "sensor_kg"
     SENSOR_COUNT = "sensor_count"
+    SENSOR_MINUTES = "sensor_minutes"
 
 
 class ENERGY_BALANCE_CALL_TYPE(StrEnum):

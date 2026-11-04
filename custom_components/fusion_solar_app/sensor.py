@@ -582,6 +582,7 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         DeviceType.SENSOR_RESISTANCE: "MΩ",
         DeviceType.SENSOR_VAR: "var",
         DeviceType.SENSOR_KG: "kg",
+        DeviceType.SENSOR_MINUTES: "min",
     }
 
     DIAGNOSTIC_SENSOR_IDS = {

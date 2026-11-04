@@ -27,7 +27,8 @@ def _configuration_reader():
         if isinstance(node, ast.FunctionDef) and node.name == "get_battery_config_devices"
     )
     device_types = SimpleNamespace(
-        SENSOR_KW="kw", SENSOR_KWH="kwh", SENSOR_PERCENTAGE="percentage", SENSOR_TEXT="text"
+        SENSOR_KW="kw", SENSOR_KWH="kwh", SENSOR_PERCENTAGE="percentage",
+        SENSOR_TEXT="text", SENSOR_MINUTES="minutes",
     )
     namespace = {
         "Device": object,
@@ -61,6 +62,8 @@ def test_code_zero_exposes_confirmed_configuration_with_one_hour_cache():
         {"id": "10011", "value": "5000"},
         {"id": 230320277, "value": "100"},
         {"id": 230320245, "value": "1"},
+        {"id": 230320258, "value": "3.030"},
+        {"id": 230320281, "value": "1440"},
         {"id": 230320279, "value": "1"},
         {"id": 230320278, "value": "NaN"},
     ]}]})
@@ -70,6 +73,8 @@ def test_code_zero_exposes_confirmed_configuration_with_one_hour_cache():
     assert devices == [
         ("Battery Maximum Charge Power", "kw", 5.0, None),
         ("Battery End of Charge SOC", "percentage", 100.0, None),
+        ("Battery Forced Charge Power", "kw", 3.03, None),
+        ("Battery Forced Charge Discharge Period", "minutes", 1440.0, None),
         ("Battery Forced Charge Discharge", "text", "Charge", None),
         ("Battery Charge From AC", "text", "Enabled", None),
     ]
