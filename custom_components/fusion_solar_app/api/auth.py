@@ -85,6 +85,15 @@ class FusionSolarAuthMixin:
         if isinstance(self.captcha_input, str):
             captcha_input = self.captcha_input.strip()
 
+        # Keep the requested region visible in safe diagnostics while preserving
+        # the existing browser-aligned and legacy login behavior.
+        captcha_phase = "captcha_submission" if captcha_input else "initial_submission"
+        _LOGGER.debug(
+            "EU5 authentication started. host=%s phase=%s",
+            self.login_host,
+            captcha_phase,
+        )
+
         # Browser-aligned flow first, legacy flow second as fallback.
         login_modes = [True, False]
 
@@ -101,10 +110,16 @@ class FusionSolarAuthMixin:
             captcha_is_valid = self._prevalidate_captcha(captcha_input)
 
             if not captcha_is_valid:
-                _LOGGER.warning("Captcha pre-validation failed.")
+                _LOGGER.warning(
+                    "EU5 CAPTCHA pre-validation rejected. host=%s", self.login_host
+                )
                 self.connected = False
                 self.set_captcha_img()
                 raise APIAuthCaptchaError("Invalid captcha.")
+
+            _LOGGER.debug(
+                "EU5 CAPTCHA pre-validation accepted. host=%s", self.login_host
+            )
 
         public_key_url = f"https://{self.login_host}{PUBKEY_URL}"
         pubkey_headers = {
@@ -152,7 +167,6 @@ class FusionSolarAuthMixin:
             _LOGGER.debug("Submitting login without captcha input.")
 
         last_error_code = ""
-        last_error_message = ""
         last_verify_code_create = False
 
         for use_service in login_modes:
@@ -174,11 +188,13 @@ class FusionSolarAuthMixin:
                 "x-requested-with": "XMLHttpRequest",
             }
 
+            # Never include the timeStamp, nonce, or full request URL in logs.
             _LOGGER.debug(
-                "EU5 login attempt. use_service=%s login_url=%s referer=%s",
+                "EU5 login request. host=%s phase=%s use_service=%s endpoint=%s",
+                self.login_host,
+                captcha_phase,
                 use_service,
-                login_url,
-                login_page_url,
+                LOGIN_VALIDATE_USER_URL,
             )
 
             response = self.session.post(
@@ -189,8 +205,8 @@ class FusionSolarAuthMixin:
             )
 
             _LOGGER.debug(
-                "EU5 login response: use_service=%s HTTP=%s",
-                use_service, response.status_code,
+                "EU5 login response. phase=%s use_service=%s HTTP=%s",
+                captcha_phase, use_service, response.status_code,
             )
 
             if response.status_code != 200:
@@ -226,7 +242,12 @@ class FusionSolarAuthMixin:
                     "referer": f"https://{self.login_host}{LOGIN_HEADERS_2_STEP_REFERER}",
                 }
 
-                _LOGGER.debug("EU5 SSO redirect received.")
+                _LOGGER.debug(
+                    "EU5 authentication accepted; SSO redirect received. "
+                    "phase=%s use_service=%s",
+                    captcha_phase,
+                    use_service,
+                )
 
                 redirect_response = self.session.get(
                     redirect_url,
@@ -286,20 +307,30 @@ class FusionSolarAuthMixin:
                 raise APIAuthError("Redirect failed.")
 
             last_error_code = str(login_response.get("errorCode", ""))
-            last_error_message = str(login_response.get("errorMsg", ""))
             last_verify_code_create = bool(login_response.get("verifyCodeCreate"))
 
+            # A 411 after explicit pre-validation acceptance is not the same
+            # failure stage as the initial CAPTCHA challenge. Do not log the
+            # server's free-form error message (it may contain private data).
             _LOGGER.warning(
-                "EU5 login response did not include redirect information. use_service=%s errorCode=%s errorMsg=%s verifyCodeCreate=%s",
+                "EU5 authentication rejected without redirect. "
+                "host=%s phase=%s use_service=%s errorCode=%s "
+                "verifyCodeCreate=%s prevalidation_accepted=%s",
+                self.login_host,
+                captcha_phase,
                 use_service,
                 last_error_code,
-                last_error_message,
                 last_verify_code_create,
+                bool(captcha_input),
             )
 
             if last_error_code == "411" or last_verify_code_create:
                 self.connected = False
-                _LOGGER.warning("Captcha required or captcha challenge still active.")
+                _LOGGER.warning(
+                    "EU5 CAPTCHA challenge required after %s. errorCode=%s",
+                    captcha_phase,
+                    last_error_code,
+                )
                 self.set_captcha_img()
                 raise APIAuthCaptchaError("Login requires Captcha.")
 
@@ -543,6 +574,10 @@ class FusionSolarAuthMixin:
             parsed = response.json()
         except ValueError:
             parsed = normalized_response
+        # Log only the response shape, never its body or CAPTCHA value.
+        _LOGGER.debug(
+            "EU5 CAPTCHA pre-validation response type=%s", type(parsed).__name__
+        )
         accepted = ("true", "success", "correct", "valid", "ok", "1")
         if isinstance(parsed, bool):
             return parsed

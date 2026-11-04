@@ -268,3 +268,144 @@ def test_required_http_failure_still_logs_error(auth_module, caplog):
             api._request_json("GET", "https://example.invalid", context="required")
     assert api.connected
     assert any(record.levelname == "ERROR" for record in caplog.records)
+
+
+# Regression coverage for issue #111. All HTTP replies are synthetic; no
+# FusionSolar credentials, CAPTCHA answers, or live accounts are required.
+def make_eu5_login_api(auth_module, monkeypatch, captcha_input=None):
+    api = make_api(auth_module)
+    api.login_host = "eu5.fusionsolar.huawei.com"
+    api.user = "private-username-marker"
+    api.pwd = "private-password-marker"
+    api.captcha_input = captcha_input
+    api.captcha_img = None
+    api.connected = False
+    api.session.get.return_value = make_response(payload={
+        "pubKey": "mock-public-key", "timeStamp": "1234", "version": "v1"
+    })
+    monkeypatch.setattr(auth_module, "generate_nonce", lambda: "private-nonce-marker")
+    monkeypatch.setattr(
+        auth_module, "encrypt_password", lambda _key, _password: "private-cipher-marker"
+    )
+    return api
+
+
+def test_eu5_initial_411_is_distinct_from_captcha_retry(auth_module, monkeypatch, caplog):
+    api = make_eu5_login_api(auth_module, monkeypatch)
+    api.session.post.return_value = make_response(payload={
+        "errorCode": 411,
+        "errorMsg": "private-error-message-marker",
+        "verifyCodeCreate": True,
+    })
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(auth_module.APIAuthCaptchaError):
+            api._login_eu5()
+
+    assert api.session.post.call_count == 1
+    assert "phase=initial_submission" in caplog.text
+    assert "prevalidation_accepted=False" in caplog.text
+    assert "errorCode=411" in caplog.text
+    assert "private-error-message-marker" not in caplog.text
+    assert "private-nonce-marker" not in caplog.text
+
+
+def test_eu5_rejected_prevalidation_never_submits_credentials(
+    auth_module, monkeypatch, caplog
+):
+    api = make_eu5_login_api(auth_module, monkeypatch, "private-captcha-marker")
+    api.session.post.return_value = make_response(text="false")
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(auth_module.APIAuthCaptchaError):
+            api._login_eu5()
+
+    assert api.session.post.call_count == 1
+    assert api.session.post.call_args.args[0].endswith("/unisso/preValidVerifycode")
+    assert "CAPTCHA pre-validation rejected" in caplog.text
+    assert "private-captcha-marker" not in caplog.text
+    assert "private-password-marker" not in caplog.text
+
+
+def test_eu5_accepted_prevalidation_then_login_411_is_logged_separately(
+    auth_module, monkeypatch, caplog
+):
+    api = make_eu5_login_api(auth_module, monkeypatch, "private-captcha-marker")
+    api.session.post.side_effect = [
+        make_response(text="true"),
+        make_response(payload={
+            "errorCode": 411,
+            "errorMsg": "private-error-message-marker",
+            "verifyCodeCreate": True,
+        }),
+    ]
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(auth_module.APIAuthCaptchaError):
+            api._login_eu5()
+
+    assert api.session.post.call_count == 2
+    assert api.session.post.call_args_list[0].args[0].endswith(
+        "/unisso/preValidVerifycode"
+    )
+    assert "/unisso/v3/validateUser.action" in api.session.post.call_args_list[1].args[0]
+    assert "CAPTCHA pre-validation accepted" in caplog.text
+    assert "phase=captcha_submission" in caplog.text
+    assert "prevalidation_accepted=True" in caplog.text
+    assert "errorCode=411" in caplog.text
+    for secret in (
+        "private-username-marker", "private-password-marker", "private-captcha-marker",
+        "private-nonce-marker", "private-cipher-marker", "private-error-message-marker",
+    ):
+        assert secret not in caplog.text
+
+
+def test_eu5_406_preserves_legacy_fallback_without_exposing_error_message(
+    auth_module, monkeypatch, caplog
+):
+    api = make_eu5_login_api(auth_module, monkeypatch)
+    api.session.post.return_value = make_response(payload={
+        "errorCode": 406,
+        "errorMsg": "private-error-message-marker",
+        "verifyCodeCreate": False,
+    })
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(auth_module.APIAuthError):
+            api._login_eu5()
+
+    assert api.session.post.call_count == 2
+    assert "use_service=True" in caplog.text
+    assert "use_service=False" in caplog.text
+    assert "errorCode=406" in caplog.text
+    assert "private-error-message-marker" not in caplog.text
+
+
+def test_eu5_accepted_captcha_redirect_is_unchanged(auth_module, monkeypatch, caplog):
+    api = make_eu5_login_api(auth_module, monkeypatch, "private-captcha-marker")
+    api.station = "station-marker"
+    api.refresh_csrf = Mock()
+    api.get_station_list = Mock(return_value={"data": {"list": []}})
+    api._update_station_metadata_from_station_list = Mock()
+    redirect = make_response(code=302)
+    redirect.cookies.set("dp-session", "private-session-marker")
+    api.session.get.side_effect = [
+        make_response(payload={
+            "pubKey": "mock-public-key", "timeStamp": "1234", "version": "v1"
+        }),
+        redirect,
+    ]
+    api.session.post.side_effect = [
+        make_response(text="true"),
+        make_response(payload={"redirectURL": "/unisess/v1/auth?ticket=private-ticket-marker"}),
+    ]
+
+    with caplog.at_level("DEBUG"):
+        assert api._login_eu5() == (True, "station-marker")
+
+    assert api.connected
+    assert api.dp_session == "private-session-marker"
+    assert api.captcha_input is None
+    assert "authentication accepted" in caplog.text
+    for secret in ("private-captcha-marker", "private-session-marker", "private-ticket-marker"):
+        assert secret not in caplog.text
