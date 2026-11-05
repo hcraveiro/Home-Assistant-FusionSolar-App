@@ -37,6 +37,88 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+async def check_coexistence(hass, profiles, report):
+    """Keep every runtime profile loaded together and prove registry isolation."""
+    from homeassistant.config_entries import ConfigEntryState
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+    from custom_components.fusion_solar_app.mock_profile import load_profile
+
+    expected_profiles = {
+        "isitepower-mains-import", "single-battery-config-denied",
+        "transitions-energy", "transitions-failures", "two-inverters-two-batteries",
+        "transitions-pv-meter", "transitions-topology",
+    }
+    require(set(profiles) == expected_profiles,
+            f"Coexistence requires all seven profiles, got {sorted(profiles)}")
+
+    entries = []
+    stations = set()
+    for profile_id in sorted(profiles):
+        profile = await hass.async_add_executor_job(load_profile, profile_id)
+        station_dn = profile["station"]["dn"]
+        require(station_dn not in stations, f"Profiles share station DN {station_dn}")
+        stations.add(station_dn)
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "mock"})
+        require(result["type"] == "form" and result["step_id"] == "mock",
+                f"{profile_id}: mock flow failed: {result}")
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"mock_profile": profile_id}
+        )
+        require(result["type"] == "create_entry", f"{profile_id}: entry creation failed: {result}")
+        entry = result["result"]
+        entries.append((profile_id, profile, entry))
+        await hass.async_block_till_done()
+        require(entry.state is ConfigEntryState.LOADED,
+                f"{profile_id}: setup state {entry.state}; error={entry.reason}")
+        runtime = hass.data[DOMAIN][entry.entry_id]
+        require(runtime.coordinator.api.mock_profile["id"] == profile_id,
+                f"{profile_id}: wrong profile API assigned")
+
+    await hass.async_block_till_done()
+    entity_registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
+    all_entity_ids, all_unique_ids, all_device_ids, all_device_identifiers = set(), set(), set(), set()
+    result_rows = []
+    for profile_id, profile, entry in entries:
+        entities = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
+        devices = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+        require(entities and devices, f"{profile_id}: missing owned registry objects")
+        require(all_entity_ids.isdisjoint(e.entity_id for e in entities),
+                f"{profile_id}: entity_id collision with another profile")
+        require(all_unique_ids.isdisjoint(e.unique_id for e in entities),
+                f"{profile_id}: unique_id collision with another profile")
+        require(all_device_ids.isdisjoint(d.id for d in devices),
+                f"{profile_id}: device registry ID reused")
+        identifiers = {identity for device in devices for domain, identity in device.identifiers
+                       if domain == DOMAIN}
+        require(identifiers and all_device_identifiers.isdisjoint(identifiers),
+                f"{profile_id}: device identifier collision or absent integration IDs")
+        require({e.device_id for e in entities} <= {d.id for d in devices},
+                f"{profile_id}: entity points outside its config-entry-owned devices")
+        require(all(hass.states.get(e.entity_id) is not None for e in entities),
+                f"{profile_id}: entity has no live state")
+        all_entity_ids.update(e.entity_id for e in entities)
+        all_unique_ids.update(e.unique_id for e in entities)
+        all_device_ids.update(d.id for d in devices)
+        all_device_identifiers.update(identifiers)
+        result_rows.append({"profile": profile_id, "entry_id": entry.entry_id,
+                            "station_dn": profile["station"]["dn"],
+                            "entities": len(entities), "devices": len(devices)})
+
+    require(len(entries) == 7 and all(entry.state is ConfigEntryState.LOADED for _, _, entry in entries),
+            "Not all seven entries remain loaded simultaneously")
+    transition_entries = [entry for _, profile, entry in entries if profile.get("frames")]
+    require(bool(transition_entries) == hass.services.has_service(DOMAIN, "mock_scenario"),
+            "Mock service presence does not match loaded transition entries")
+    report["coexistence"] = {"status": "passed", "loaded_entries": len(entries),
+                             "unique_station_dns": len(stations),
+                             "unique_entity_ids": len(all_entity_ids),
+                             "unique_entity_unique_ids": len(all_unique_ids),
+                             "unique_device_ids": len(all_device_ids),
+                             "unique_device_identifiers": len(all_device_identifiers),
+                             "profiles": result_rows}
+
+
 async def run(report):
     # These are installed HA modules, not tests/conftest.py's stand-ins.
     from homeassistant import loader
@@ -114,7 +196,8 @@ async def run(report):
                 guards.enter_context(patch.object(FusionSolarAPI, "get_devices", observed_get_devices))
                 profiles = await hass.async_add_executor_job(list_profiles)
                 require(profiles, "No valid runtime profiles found (backend/fixtures may not be ready)")
-                if len(sys.argv) > 1:
+                coexistence_only = sys.argv[1:] == ["--coexistence"]
+                if len(sys.argv) > 1 and not coexistence_only:
                     selected = sys.argv[1:]
                     require(set(selected) <= profiles.keys(), f"Unknown profiles: {set(selected) - profiles.keys()}")
                     profiles = {key: profiles[key] for key in selected}
@@ -122,7 +205,9 @@ async def run(report):
                 # Start core lifecycle without default_config, HTTP, recorder,
                 # discovery or anything that might contact an existing HA.
                 await hass.async_start()
-                for profile_id in profiles:
+                if coexistence_only:
+                    await check_coexistence(hass, profiles, report)
+                for profile_id in (() if coexistence_only else profiles):
                     profile = await hass.async_add_executor_job(load_profile, profile_id)
                     item = {"profile": profile_id, "title": profile["title"], "status": "running"}
                     report["entries"].append(item)
