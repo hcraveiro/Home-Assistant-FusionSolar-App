@@ -221,6 +221,18 @@ class FusionSolarEnergyBalanceMixin:
             readings = readings[:count]
         return self._energy_sum(readings)
 
+    def _history_energy_payload(self, call_type):
+        """Isolate transport failures; auth and unexpected schemas still propagate.
+
+        A failed period is unknown for this snapshot and is requested again on
+        the next scheduled refresh, without replaying live device requests.
+        """
+        try:
+            return self._energy_payload(self.call_energy_balance(call_type))
+        except APIConnectionError as ex:
+            _LOGGER.warning("FusionSolar %s energy not available: %s", call_type, ex)
+            return {}
+
     def update_output_with_energy_balance(self, output: Dict[str, Optional[float | str]]):
         """Mirror Huawei readings, including corrections, without synthetic resets."""
         # Explicitly clear each snapshot, including when callers reuse a dict.
@@ -246,14 +258,18 @@ class FusionSolarEnergyBalanceMixin:
             return
         self.refresh_csrf()
         today = datetime.now()
-        payloads = {}
-        for period, call_type in (
-            ("month", ENERGY_BALANCE_CALL_TYPE.MONTH),
-            ("year", ENERGY_BALANCE_CALL_TYPE.YEAR),
-            ("lifetime", ENERGY_BALANCE_CALL_TYPE.LIFETIME),
-        ):
-            payload = self._energy_payload(self.call_energy_balance(call_type))
-            payloads[period] = payload
+        # Preserve the established request cadence: month, spaced daily/week
+        # requests (and previous month when needed), then year and lifetime.
+        payloads = {"month": self._history_energy_payload(ENERGY_BALANCE_CALL_TYPE.MONTH)}
+        days = self.get_week_data()
+        week_start = today - timedelta(days=today.weekday())
+        dates = [week_start + timedelta(days=i) for i in range(today.weekday() + 1)]
+        previous = {}
+        if any((day.year, day.month) != (today.year, today.month) for day in dates):
+            previous = self._history_energy_payload(ENERGY_BALANCE_CALL_TYPE.PREVIOUS_MONTH)
+        payloads["year"] = self._history_energy_payload(ENERGY_BALANCE_CALL_TYPE.YEAR)
+        payloads["lifetime"] = self._history_energy_payload(ENERGY_BALANCE_CALL_TYPE.LIFETIME)
+        for period, payload in payloads.items():
             for category, key in categories.items():
                 output[f"{category}_{period}"] = self._optional_grid_energy(payload, key)
             for category, key in arrays.items():
@@ -269,18 +285,12 @@ class FusionSolarEnergyBalanceMixin:
         for category, field in arrays.items():
             output[f"{category}_today"] = sample(payloads["month"], field, today.day - 1)
         output["house_load_month"] = sample(payloads["year"], "usePower", today.month - 1)
-        days = self.get_week_data()
         daily = [self._energy_payload(day) for day in days] if isinstance(days, list) else []
         for category, key in (("grid_consumption", "totalBuyPower"), ("grid_injection", "totalOnGridPower")):
             if daily:
                 output[f"{category}_today"] = self._optional_grid_energy(daily[-1], key)
             if len(daily) == today.weekday() + 1:
                 output[f"{category}_week"] = self._energy_sum([day.get(key) for day in daily])
-        week_start = today - timedelta(days=today.weekday())
-        dates = [week_start + timedelta(days=i) for i in range(today.weekday() + 1)]
-        previous = {}
-        if any((day.year, day.month) != (today.year, today.month) for day in dates):
-            previous = self._energy_payload(self.call_energy_balance(ENERGY_BALANCE_CALL_TYPE.PREVIOUS_MONTH))
         for category, field in arrays.items():
             readings = [
                 sample(payloads["month"] if (day.year, day.month) == (today.year, today.month) else previous, field, day.day - 1)
@@ -378,7 +388,11 @@ class FusionSolarEnergyBalanceMixin:
         return energy_balance_data
 
     def get_week_data(self):
-        """Return day-level energy balance data for the current week."""
+        """Return Monday-through-today responses, with None for failed dates.
+
+        Successful responses retain their date's slot; callers must not sum an
+        incomplete vector or mistake a preceding date's payload for today.
+        """
         today = datetime.now()
         start_of_week = today - timedelta(days=today.weekday())
         days_to_process = []
@@ -390,7 +404,13 @@ class FusionSolarEnergyBalanceMixin:
 
         week_data = []
         for day in days_to_process:
-            day_data = self.call_energy_balance(ENERGY_BALANCE_CALL_TYPE.DAY, specific_date=day)
+            try:
+                day_data = self.call_energy_balance(ENERGY_BALANCE_CALL_TYPE.DAY, specific_date=day)
+            except APIConnectionError as ex:
+                _LOGGER.warning("FusionSolar daily energy for %s not available: %s", day.date(), ex)
+                # Keep one slot per requested date. Dropping a failed today
+                # would incorrectly label yesterday's successful response today.
+                day_data = None
             week_data.append(day_data)
             time.sleep(1)
 
