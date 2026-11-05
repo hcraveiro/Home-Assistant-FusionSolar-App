@@ -3,13 +3,13 @@
   "id": "isitepower-mains-import",
   "title": "MOCK iSitePower-M \u2014 verified import fields",
   "station": {
-    "dn": "MOCK_RUNTIME_SINGLE_STATION",
+    "dn": "MOCK_RUNTIME_ISITEPOWER_STATION",
     "name": "MOCK Runtime Plant"
   },
   "topology": {
     "inverters": [
       {
-        "dn": "MOCK_RUNTIME_INV_A"
+        "dn": "MOCK_RUNTIME_ISITEPOWER_INV_A"
       }
     ],
     "batteries": []
@@ -27,7 +27,7 @@
       "method": "GET",
       "path": "/rest/pvms/web/station/v2/overview/energy-flow",
       "params": {
-        "stationDn": "MOCK_RUNTIME_SINGLE_STATION"
+        "stationDn": "MOCK_RUNTIME_ISITEPOWER_STATION"
       },
       "json": null,
       "status": 200,
@@ -39,7 +39,7 @@
               {
                 "name": "neteco.pvms.devTypeLangKey.inverter",
                 "devIds": [
-                  "MOCK_RUNTIME_INV_A"
+                  "MOCK_RUNTIME_ISITEPOWER_INV_A"
                 ]
               },
               {
@@ -88,7 +88,7 @@
       "method": "GET",
       "path": "/rest/neteco/web/config/device/v1/children-list",
       "params": {
-        "conditionParams.parentDn": "MOCK_RUNTIME_INV_A",
+        "conditionParams.parentDn": "MOCK_RUNTIME_ISITEPOWER_INV_A",
         "conditionParams.curPage": 0,
         "conditionParams.recordperpage": 100,
         "conditionParams.mocTypes": 20815,
@@ -100,7 +100,7 @@
         "data": [
           {
             "dn": "MOCK_RUNTIME_BAT_A",
-            "parentDn": "MOCK_RUNTIME_INV_A"
+            "parentDn": "MOCK_RUNTIME_ISITEPOWER_INV_A"
           }
         ]
       }
@@ -248,7 +248,7 @@
         "data": {
           "list": [
             {
-              "dn": "MOCK_RUNTIME_SINGLE_STATION",
+              "dn": "MOCK_RUNTIME_ISITEPOWER_STATION",
               "name": "MOCK Runtime Plant",
               "batteryCapacity": 10
             }
@@ -260,7 +260,7 @@
       "method": "GET",
       "path": "/rest/neteco/web/config/device/v1/config/query-moc-config-signal",
       "params": {
-        "dn": "MOCK_RUNTIME_INV_A",
+        "dn": "MOCK_RUNTIME_ISITEPOWER_INV_A",
         "signals": "50009,50010,50012,33595393",
         "_": "$timestamp_ms"
       },
@@ -270,8 +270,8 @@
         "data": {
           "50009": "SUN2000-MOCK",
           "50010": "MOCK_RUNTIME_SOFTWARE",
-          "50012": "MOCK_RUNTIME_SERIAL_MOCK_RUNTIME_INV_A",
-          "33595393": "Mock inverter MOCK_RUNTIME_INV_A"
+          "50012": "MOCK_RUNTIME_SERIAL_MOCK_RUNTIME_ISITEPOWER_INV_A",
+          "33595393": "Mock inverter MOCK_RUNTIME_ISITEPOWER_INV_A"
         }
       }
     },
@@ -283,21 +283,21 @@
       "status": 200,
       "body": {
         "data": {
-          "dnId": "MOCK_RUNTIME_INV_A",
-          "dn": "MOCK_RUNTIME_INV_A",
-          "parentDn": "MOCK_RUNTIME_SINGLE_STATION",
+          "dnId": "MOCK_RUNTIME_ISITEPOWER_INV_A",
+          "dn": "MOCK_RUNTIME_ISITEPOWER_INV_A",
+          "parentDn": "MOCK_RUNTIME_ISITEPOWER_STATION",
           "name": "Mock inverter"
         }
       },
       "data": {
-        "dn": "MOCK_RUNTIME_INV_A"
+        "dn": "MOCK_RUNTIME_ISITEPOWER_INV_A"
       }
     },
     {
       "method": "GET",
       "path": "/rest/pvms/web/device/v1/device-realtime-data",
       "params": {
-        "deviceDn": "MOCK_RUNTIME_INV_A",
+        "deviceDn": "MOCK_RUNTIME_ISITEPOWER_INV_A",
         "displayAccessModel": "true"
       },
       "json": null,
@@ -324,7 +324,7 @@
       "method": "GET",
       "path": "/rest/pvms/web/device/v1/device-real-kpi",
       "params": {
-        "deviceDn": "MOCK_RUNTIME_INV_A",
+        "deviceDn": "MOCK_RUNTIME_ISITEPOWER_INV_A",
         "signalIds": [
           10022,
           11001,
@@ -394,7 +394,7 @@
       "method": "GET",
       "path": "/rest/pvms/web/station/v2/overview/energy-balance",
       "params": {
-        "stationDn": "MOCK_RUNTIME_SINGLE_STATION",
+        "stationDn": "MOCK_RUNTIME_ISITEPOWER_STATION",
         "timeDim": "2",
         "queryTime": "$date_epoch_ms",
         "dateStr": "$date_midnight",
@@ -584,7 +584,7 @@
       "method": "GET",
       "path": "/rest/pvms/web/station/v2/overview/energy-balance",
       "params": {
-        "stationDn": "MOCK_RUNTIME_SINGLE_STATION",
+        "stationDn": "MOCK_RUNTIME_ISITEPOWER_STATION",
         "timeDim": "4",
         "queryTime": "$date_epoch_ms",
         "dateStr": "$date_midnight",
@@ -774,7 +774,7 @@
       "method": "GET",
       "path": "/rest/pvms/web/station/v2/overview/energy-balance",
       "params": {
-        "stationDn": "MOCK_RUNTIME_SINGLE_STATION",
+        "stationDn": "MOCK_RUNTIME_ISITEPOWER_STATION",
         "timeDim": "5",
         "queryTime": "$date_epoch_ms",
         "dateStr": "$date_midnight",
@@ -964,7 +964,7 @@
       "method": "GET",
       "path": "/rest/pvms/web/station/v2/overview/energy-balance",
       "params": {
-        "stationDn": "MOCK_RUNTIME_SINGLE_STATION",
+        "stationDn": "MOCK_RUNTIME_ISITEPOWER_STATION",
         "timeDim": "6",
         "queryTime": "$date_epoch_ms",
         "dateStr": "$date_midnight",
@@ -1154,7 +1154,7 @@
       "method": "GET",
       "path": "/rest/pvms/web/station/v1/station/social-contribution",
       "params": {
-        "dn": "MOCK_RUNTIME_SINGLE_STATION",
+        "dn": "MOCK_RUNTIME_ISITEPOWER_STATION",
         "clientTime": "$timestamp_ms",
         "timeZone": "$timezone_hours",
         "_": "$timestamp_ms"
@@ -1173,7 +1173,7 @@
       "method": "GET",
       "path": "/rest/pvms/web/station/v1/layout/station-simple-devicedata",
       "params": {
-        "stationDn": "MOCK_RUNTIME_SINGLE_STATION"
+        "stationDn": "MOCK_RUNTIME_ISITEPOWER_STATION"
       },
       "json": null,
       "status": 200,

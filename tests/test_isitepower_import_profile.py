@@ -11,6 +11,12 @@ from test_api_lifecycle_behavior import api_module
 PROFILE = Path(__file__).parent / "fixtures/runtime_profiles/isitepower-mains-import.json"
 
 
+def test_runtime_profile_station_dns_are_unique():
+    profiles = [json.loads(path.read_text()) for path in PROFILE.parent.glob("*.json")]
+    station_dns = [profile["station"]["dn"] for profile in profiles]
+    assert len(station_dns) == len(set(station_dns))
+
+
 def graph():
     profile = json.loads(PROFILE.read_text())
     return next(route["body"]["data"]["flow"] for route in profile["routes"]
