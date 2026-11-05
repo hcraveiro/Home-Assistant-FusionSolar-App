@@ -28,6 +28,7 @@ READ_ONLY_GET_PATHS = frozenset({
     "/rest/pvms/web/station/v1/station/social-contribution",
     "/rest/neteco/web/config/device/v1/children-list",
     "/rest/neteco/web/config/device/v1/config/query-moc-config-signal",
+    "/rest/neteco/web/config/device/v1/moc-type-name",
     "/rest/pvms/web/device/v1/get-battery-type",
     "/rest/pvms/web/device/v1/device-realtime-data",
     "/rest/pvms/web/device/v1/device-real-kpi",

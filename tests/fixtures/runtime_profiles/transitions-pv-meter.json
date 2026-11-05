@@ -1,0 +1,972 @@
+{
+  "schema_version": 1,
+  "id": "transitions-pv-meter",
+  "title": "MOCK conventional PV and meter, no battery",
+  "station": {
+    "dn": "MOCK_RUNTIME_PV_METER_DUAL_STATION",
+    "name": "MOCK [transitions-pv-meter] Plant"
+  },
+  "topology": {
+    "inverters": [
+      {
+        "dn": "MOCK_RUNTIME_PV_METER_INV_A"
+      }
+    ],
+    "batteries": [],
+    "meters": [
+      {
+        "dn": "MOCK_RUNTIME_PV_METER_METER"
+      }
+    ]
+  },
+  "origin": "synthetic",
+  "provenance": {
+    "synthetic": "Conventional single-inverter, meter-only installation; night/dawn/night and absent/new PV input signals are synthetic. No battery or optimizer exists.",
+    "limitations": "Fictional HTTP payloads using supported reader shapes, not a vendor capture, authentication test or hardware claim."
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/station/v2/overview/energy-flow",
+      "params": {
+        "stationDn": "MOCK_RUNTIME_PV_METER_DUAL_STATION"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": {
+          "flow": {
+            "nodes": [
+              {
+                "name": "neteco.pvms.devTypeLangKey.inverter",
+                "devIds": [
+                  "MOCK_RUNTIME_PV_METER_INV_A"
+                ]
+              },
+              {
+                "name": "neteco.pvms.devTypeLangKey.powerMeter",
+                "devIds": [
+                  "MOCK_RUNTIME_PV_METER_METER"
+                ]
+              },
+              {
+                "name": "neteco.pvms.devTypeLangKey.string",
+                "description": {
+                  "value": "0 kW"
+                }
+              },
+              {
+                "name": "neteco.pvms.KPI.kpiView.electricalLoad",
+                "description": {
+                  "value": "0.6 kW"
+                }
+              }
+            ],
+            "links": [
+              {
+                "description": {
+                  "label": "neteco.pvms.energy.flow.buy.power",
+                  "value": "0.6 kW"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/station/v3/overview/energy-flow",
+      "params": {
+        "stationDn": "MOCK_RUNTIME_PV_METER_DUAL_STATION",
+        "featureId": "aifc"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": {
+          "flow": {
+            "nodes": [
+              {
+                "name": "neteco.pvms.devTypeLangKey.inverter",
+                "devIds": [
+                  "MOCK_RUNTIME_PV_METER_INV_A"
+                ]
+              },
+              {
+                "name": "neteco.pvms.devTypeLangKey.powerMeter",
+                "devIds": [
+                  "MOCK_RUNTIME_PV_METER_METER"
+                ]
+              },
+              {
+                "name": "neteco.pvms.devTypeLangKey.string",
+                "description": {
+                  "value": "0 kW"
+                }
+              },
+              {
+                "name": "neteco.pvms.KPI.kpiView.electricalLoad",
+                "description": {
+                  "value": "0.6 kW"
+                }
+              }
+            ],
+            "links": [
+              {
+                "description": {
+                  "label": "neteco.pvms.energy.flow.buy.power",
+                  "value": "0.6 kW"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/neteco/web/config/device/v1/children-list",
+      "params": {
+        "conditionParams.parentDn": "MOCK_RUNTIME_PV_METER_INV_A",
+        "conditionParams.curPage": 0,
+        "conditionParams.recordperpage": 100,
+        "conditionParams.mocTypes": 20815,
+        "_": "$timestamp_ms"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/dpcloud/auth/v1/keep-alive",
+      "params": {},
+      "json": null,
+      "status": 200,
+      "body": {
+        "payload": "MOCK_RUNTIME_CSRF"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/rest/pvms/web/station/v1/station/station-list",
+      "params": {},
+      "json": {
+        "curPage": 1,
+        "pageSize": 10,
+        "gridConnectedTime": "",
+        "queryTime": 1666044000000,
+        "timeZone": 2,
+        "sortId": "createTime",
+        "sortDir": "DESC",
+        "locale": "en_US"
+      },
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": {
+          "list": [
+            {
+              "dn": "MOCK_RUNTIME_PV_METER_DUAL_STATION",
+              "name": "MOCK [transitions-pv-meter] Plant",
+              "batteryCapacity": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/neteco/web/config/device/v1/config/query-moc-config-signal",
+      "params": {
+        "dn": "MOCK_RUNTIME_PV_METER_INV_A",
+        "signals": "50009,50010,50012,33595393",
+        "_": "$timestamp_ms"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "data": {
+          "50009": "SUN2000-MOCK",
+          "50010": "MOCK_RUNTIME_SOFTWARE",
+          "50012": "MOCK_RUNTIME_SERIAL_MOCK_RUNTIME_PV_METER_INV_A",
+          "33595393": "Mock inverter MOCK_RUNTIME_PV_METER_INV_A"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/rest/neteco/web/config/device/v2/device-status-query",
+      "params": {},
+      "json": null,
+      "status": 200,
+      "body": {
+        "data": {
+          "dnId": "MOCK_RUNTIME_PV_METER_INV_A",
+          "dn": "MOCK_RUNTIME_PV_METER_INV_A",
+          "parentDn": "MOCK_RUNTIME_PV_METER_DUAL_STATION",
+          "name": "Mock inverter"
+        }
+      },
+      "data": {
+        "dn": "MOCK_RUNTIME_PV_METER_INV_A"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/device/v1/device-realtime-data",
+      "params": {
+        "deviceDn": "MOCK_RUNTIME_PV_METER_INV_A",
+        "displayAccessModel": "true"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": [
+          {
+            "signals": [
+              {
+                "id": 10001,
+                "value": "0"
+              },
+              {
+                "id": 10022,
+                "value": "0"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/device/v1/device-real-kpi",
+      "params": {
+        "deviceDn": "MOCK_RUNTIME_PV_METER_INV_A",
+        "signalIds": [
+          10022,
+          11001,
+          11002,
+          11004,
+          11005,
+          11007,
+          11008,
+          11010,
+          11011,
+          11013,
+          11014,
+          11016,
+          11017,
+          11019,
+          11020,
+          11022,
+          11023,
+          11025,
+          11026,
+          11028,
+          11029,
+          11031,
+          11032,
+          11034,
+          11035,
+          11037,
+          11038,
+          11040,
+          11041,
+          11043,
+          11044,
+          11046,
+          11047,
+          11049,
+          11050,
+          11052,
+          11053,
+          11055,
+          11056,
+          11058,
+          11059
+        ]
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": {
+          "signals": {
+            "10022": {
+              "value": "0"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/station/v2/overview/energy-balance",
+      "params": {
+        "stationDn": "MOCK_RUNTIME_PV_METER_DUAL_STATION",
+        "timeDim": "2",
+        "queryTime": "$date_epoch_ms",
+        "dateStr": "$date_midnight",
+        "timeZone": "0.0",
+        "timeZoneStr": "Europe/London",
+        "_": "$timestamp_ms"
+      },
+      "json": null,
+      "status": 200,
+      "body_file": "responses/pv-meter-energy-balance.json"
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/station/v2/overview/energy-balance",
+      "params": {
+        "stationDn": "MOCK_RUNTIME_PV_METER_DUAL_STATION",
+        "timeDim": "4",
+        "queryTime": "$date_epoch_ms",
+        "dateStr": "$date_midnight",
+        "timeZone": "0.0",
+        "timeZoneStr": "Europe/London",
+        "_": "$timestamp_ms"
+      },
+      "json": null,
+      "status": 200,
+      "body_file": "responses/pv-meter-energy-balance.json"
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/station/v2/overview/energy-balance",
+      "params": {
+        "stationDn": "MOCK_RUNTIME_PV_METER_DUAL_STATION",
+        "timeDim": "5",
+        "queryTime": "$date_epoch_ms",
+        "dateStr": "$date_midnight",
+        "timeZone": "0.0",
+        "timeZoneStr": "Europe/London",
+        "_": "$timestamp_ms"
+      },
+      "json": null,
+      "status": 200,
+      "body_file": "responses/pv-meter-energy-balance.json"
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/station/v2/overview/energy-balance",
+      "params": {
+        "stationDn": "MOCK_RUNTIME_PV_METER_DUAL_STATION",
+        "timeDim": "6",
+        "queryTime": "$date_epoch_ms",
+        "dateStr": "$date_midnight",
+        "timeZone": "0.0",
+        "timeZoneStr": "Europe/London",
+        "_": "$timestamp_ms"
+      },
+      "json": null,
+      "status": 200,
+      "body_file": "responses/pv-meter-energy-balance.json"
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/station/v1/station/social-contribution",
+      "params": {
+        "dn": "MOCK_RUNTIME_PV_METER_DUAL_STATION",
+        "clientTime": "$timestamp_ms",
+        "timeZone": "$timezone_hours",
+        "_": "$timestamp_ms"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "data": {
+          "standardCoalSavings": "40",
+          "co2Reduction": "120",
+          "equivalentTreePlanting": "6"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/station/v1/layout/station-simple-devicedata",
+      "params": {
+        "stationDn": "MOCK_RUNTIME_PV_METER_DUAL_STATION"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": {
+          "optimizerNum": 0
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/neteco/web/config/device/v1/config/query-moc-config-signal",
+      "params": {
+        "dn": "MOCK_RUNTIME_PV_METER_METER",
+        "signals": "50009,50010,50012,33595393,20004",
+        "_": "$timestamp_ms"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "data": {
+          "50009": "DDSU666-MOCK",
+          "50010": "MOCK firmware",
+          "50012": "MOCK_RUNTIME_PV_METER_METER_SERIAL",
+          "33595393": "MOCK meter",
+          "20004": "1"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/neteco/web/config/device/v1/moc-type-name",
+      "params": {
+        "deviceDn": "MOCK_RUNTIME_PV_METER_METER",
+        "_": "$timestamp_ms"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "data": "MOCK meter type"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/rest/pvms/web/device/v1/device-realtime-data",
+      "params": {
+        "deviceDn": "MOCK_RUNTIME_PV_METER_METER",
+        "displayAccessModel": "true"
+      },
+      "json": null,
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": [
+          {
+            "signals": [
+              {
+                "id": 10001,
+                "value": "Running"
+              },
+              {
+                "id": 10002,
+                "value": "230"
+              },
+              {
+                "id": 10004,
+                "value": "-600"
+              },
+              {
+                "id": 10008,
+                "value": "40"
+              },
+              {
+                "id": 10009,
+                "value": "20"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "frames": [
+    {
+      "id": "night",
+      "responses": [
+        {
+          "route": 0,
+          "body": {
+            "success": true,
+            "data": {
+              "flow": {
+                "nodes": [
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.inverter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_INV_A"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.powerMeter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_METER"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.string",
+                    "description": {
+                      "value": "0 kW"
+                    }
+                  },
+                  {
+                    "name": "neteco.pvms.KPI.kpiView.electricalLoad",
+                    "description": {
+                      "value": "0.6 kW"
+                    }
+                  }
+                ],
+                "links": [
+                  {
+                    "description": {
+                      "label": "neteco.pvms.energy.flow.buy.power",
+                      "value": "0.6 kW"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "route": 1,
+          "body": {
+            "success": true,
+            "data": {
+              "flow": {
+                "nodes": [
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.inverter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_INV_A"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.powerMeter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_METER"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.string",
+                    "description": {
+                      "value": "0 kW"
+                    }
+                  },
+                  {
+                    "name": "neteco.pvms.KPI.kpiView.electricalLoad",
+                    "description": {
+                      "value": "0.6 kW"
+                    }
+                  }
+                ],
+                "links": [
+                  {
+                    "description": {
+                      "label": "neteco.pvms.energy.flow.buy.power",
+                      "value": "0.6 kW"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "route": 7,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "signals": [
+                  {
+                    "id": 10001,
+                    "value": "0"
+                  },
+                  {
+                    "id": 10022,
+                    "value": "0"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "route": 8,
+          "body": {
+            "success": true,
+            "data": {
+              "signals": {
+                "10022": {
+                  "value": "0"
+                }
+              }
+            }
+          }
+        },
+        {
+          "route": 17,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "signals": [
+                  {
+                    "id": 10001,
+                    "value": "Running"
+                  },
+                  {
+                    "id": 10002,
+                    "value": "230"
+                  },
+                  {
+                    "id": 10004,
+                    "value": "-600.0"
+                  },
+                  {
+                    "id": 10008,
+                    "value": "40"
+                  },
+                  {
+                    "id": 10009,
+                    "value": "20"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dawn",
+      "responses": [
+        {
+          "route": 0,
+          "body": {
+            "success": true,
+            "data": {
+              "flow": {
+                "nodes": [
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.inverter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_INV_A"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.powerMeter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_METER"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.string",
+                    "description": {
+                      "value": "0.4 kW"
+                    }
+                  },
+                  {
+                    "name": "neteco.pvms.KPI.kpiView.electricalLoad",
+                    "description": {
+                      "value": "0.6 kW"
+                    }
+                  }
+                ],
+                "links": [
+                  {
+                    "description": {
+                      "label": "neteco.pvms.energy.flow.buy.power",
+                      "value": "0.19999999999999996 kW"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "route": 1,
+          "body": {
+            "success": true,
+            "data": {
+              "flow": {
+                "nodes": [
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.inverter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_INV_A"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.powerMeter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_METER"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.string",
+                    "description": {
+                      "value": "0.4 kW"
+                    }
+                  },
+                  {
+                    "name": "neteco.pvms.KPI.kpiView.electricalLoad",
+                    "description": {
+                      "value": "0.6 kW"
+                    }
+                  }
+                ],
+                "links": [
+                  {
+                    "description": {
+                      "label": "neteco.pvms.energy.flow.buy.power",
+                      "value": "0.19999999999999996 kW"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "route": 7,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "signals": [
+                  {
+                    "id": 10001,
+                    "value": "0.4"
+                  },
+                  {
+                    "id": 10022,
+                    "value": "0.4"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "route": 8,
+          "body": {
+            "success": true,
+            "data": {
+              "signals": {
+                "10022": {
+                  "value": "0.4"
+                },
+                "11001": {
+                  "value": "100",
+                  "latestTime": 1
+                },
+                "11002": {
+                  "value": "4",
+                  "latestTime": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "route": 17,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "signals": [
+                  {
+                    "id": 10001,
+                    "value": "Running"
+                  },
+                  {
+                    "id": 10002,
+                    "value": "230"
+                  },
+                  {
+                    "id": 10004,
+                    "value": "-199.99999999999994"
+                  },
+                  {
+                    "id": 10008,
+                    "value": "40"
+                  },
+                  {
+                    "id": 10009,
+                    "value": "20"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "night-return",
+      "responses": [
+        {
+          "route": 0,
+          "body": {
+            "success": true,
+            "data": {
+              "flow": {
+                "nodes": [
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.inverter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_INV_A"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.powerMeter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_METER"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.string",
+                    "description": {
+                      "value": "0 kW"
+                    }
+                  },
+                  {
+                    "name": "neteco.pvms.KPI.kpiView.electricalLoad",
+                    "description": {
+                      "value": "0.6 kW"
+                    }
+                  }
+                ],
+                "links": [
+                  {
+                    "description": {
+                      "label": "neteco.pvms.energy.flow.buy.power",
+                      "value": "0.6 kW"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "route": 1,
+          "body": {
+            "success": true,
+            "data": {
+              "flow": {
+                "nodes": [
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.inverter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_INV_A"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.powerMeter",
+                    "devIds": [
+                      "MOCK_RUNTIME_PV_METER_METER"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.string",
+                    "description": {
+                      "value": "0 kW"
+                    }
+                  },
+                  {
+                    "name": "neteco.pvms.KPI.kpiView.electricalLoad",
+                    "description": {
+                      "value": "0.6 kW"
+                    }
+                  }
+                ],
+                "links": [
+                  {
+                    "description": {
+                      "label": "neteco.pvms.energy.flow.buy.power",
+                      "value": "0.6 kW"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "route": 7,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "signals": [
+                  {
+                    "id": 10001,
+                    "value": "0"
+                  },
+                  {
+                    "id": 10022,
+                    "value": "0"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "route": 8,
+          "body": {
+            "success": true,
+            "data": {
+              "signals": {
+                "10022": {
+                  "value": "0"
+                },
+                "11001": {
+                  "value": "0",
+                  "latestTime": 1
+                },
+                "11002": {
+                  "value": "0",
+                  "latestTime": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "route": 17,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "signals": [
+                  {
+                    "id": 10001,
+                    "value": "Running"
+                  },
+                  {
+                    "id": 10002,
+                    "value": "230"
+                  },
+                  {
+                    "id": 10004,
+                    "value": "-600.0"
+                  },
+                  {
+                    "id": 10008,
+                    "value": "40"
+                  },
+                  {
+                    "id": 10009,
+                    "value": "20"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

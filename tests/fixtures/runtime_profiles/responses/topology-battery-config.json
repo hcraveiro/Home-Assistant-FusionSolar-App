@@ -1,0 +1,173 @@
+{
+  "code": 0,
+  "data": [
+    {
+      "groupName": "Parameters settings",
+      "configSignalDisplayList": [
+        {
+          "id": 10011,
+          "name": "Maximum charge power &#x28;W&#x29;",
+          "value": "5000",
+          "unit": "W",
+          "dataType": "UINT",
+          "display": true,
+          "edit": true,
+          "hasRights": true
+        },
+        {
+          "id": 10012,
+          "name": "Maximum discharge power &#x28;W&#x29;",
+          "value": "5000",
+          "unit": "W",
+          "dataType": "UINT",
+          "display": true,
+          "edit": true,
+          "hasRights": true
+        },
+        {
+          "id": 230320277,
+          "name": "End-of-charge SOC &#x28;%&#x29;",
+          "value": "100.0",
+          "unit": "%",
+          "dataType": "FLOAT",
+          "display": true,
+          "edit": true,
+          "hasRights": true
+        },
+        {
+          "id": 230320278,
+          "name": "End-of-discharge SOC &#x28;%&#x29;",
+          "value": "2.0",
+          "unit": "%",
+          "dataType": "FLOAT",
+          "display": true,
+          "edit": true,
+          "hasRights": true
+        },
+        {
+          "id": 230320279,
+          "name": "Charge from AC",
+          "value": "1",
+          "unit": "",
+          "dataType": "ENUM",
+          "display": true,
+          "edit": true,
+          "hasRights": true,
+          "enumListEntry": [
+            {
+              "0": "Disabled"
+            },
+            {
+              "1": "Enable"
+            }
+          ]
+        },
+        {
+          "id": 230320280,
+          "name": "AC charge cutoff SOC &#x28;%&#x29;",
+          "value": "100.0",
+          "unit": "%",
+          "dataType": "FLOAT",
+          "display": true,
+          "edit": true,
+          "hasRights": true
+        },
+        {
+          "id": 20007,
+          "name": "ESS low power",
+          "value": "0",
+          "unit": "",
+          "dataType": "ENUM",
+          "display": true,
+          "edit": true,
+          "hasRights": true
+        }
+      ]
+    },
+    {
+      "groupName": "Forced charge/discharge",
+      "configSignalDisplayList": [
+        {
+          "id": 230320245,
+          "name": "Charge/Discharge",
+          "value": "1",
+          "unit": "",
+          "dataType": "ENUM",
+          "display": true,
+          "edit": true,
+          "hasRights": true,
+          "enumListEntry": [
+            {
+              "0": "Stop"
+            },
+            {
+              "1": "Charge"
+            },
+            {
+              "2": "Discharge"
+            }
+          ]
+        },
+        {
+          "id": 230320258,
+          "name": "Forced charge power &#x28;kW&#x29;",
+          "value": "3.030",
+          "unit": "kW",
+          "dataType": "FLOAT",
+          "display": true,
+          "edit": true,
+          "hasRights": true
+        },
+        {
+          "id": 230320257,
+          "name": "Setting mode",
+          "value": "0",
+          "unit": "",
+          "dataType": "ENUM",
+          "display": true,
+          "edit": true,
+          "hasRights": true,
+          "enumListEntry": [
+            {
+              "0": "Duration"
+            },
+            {
+              "1": "Energy"
+            }
+          ]
+        },
+        {
+          "id": 230320281,
+          "name": "Forced charge/discharge period &#x28;min&#x29;",
+          "value": "1440",
+          "unit": "min",
+          "dataType": "USHORT",
+          "display": true,
+          "edit": true,
+          "hasRights": true
+        },
+        {
+          "id": 230320458,
+          "name": "Remaining charge/discharge time &#x28;min&#x29;",
+          "value": "1403",
+          "unit": "min",
+          "dataType": "USHORT",
+          "display": true,
+          "edit": false,
+          "hasRights": true
+        },
+        {
+          "id": 230320129,
+          "name": "Charged energy &#x28;kWh&#x29;",
+          "value": "1.750",
+          "unit": "kWh",
+          "dataType": "FLOAT",
+          "display": true,
+          "edit": false,
+          "hasRights": true
+        }
+      ]
+    }
+  ],
+  "description": ""
+}

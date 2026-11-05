@@ -34,6 +34,8 @@ Initial runtime profiles:
 | `two-inverters-two-batteries` | 1 installation, 2 inverters, 2 separately owned batteries, 2 optimizers: **7 devices / 144 entities**. Includes forced-charge power, duration and energy and daytime optimizer temperature. |
 | `transitions-energy` | 1 installation, 1 inverter, 1 battery: **3 devices / 92 entities**. Actual lifetime HTTP response values/invalidity/correction/zero/recovery, described below. |
 | `transitions-failures` | 1 installation, 1 inverter, 1 battery: **3 devices / 92 entities**. Optional configuration, historical-energy and required core failures/recovery, described below. |
+| `transitions-pv-meter` | **3 devices / 77 → 80 entities**. Synthetic conventional single inverter + actual meter HTTP reader, **no battery or optimizer**. Night → dawn (three late PV input sensors) → night. See topology validation below. |
+| `transitions-topology` | **7 → 8 devices / 144 → 163 entities**. Synthetic two inverters, **two batteries on inverter A**, one optimizer on each inverter. Healthy → partial telemetry → recovery → late third battery with reordered discovery → reordered again. See topology validation below. |
 
 Counts include the two native forecast entities. On a development HA with Recorder
 but no useful mock production history, those two derived forecasts may be
@@ -86,7 +88,7 @@ response shapes do not constitute captured vendor behavior or CAPTCHA coverage.
   generator or network fallback. Synthetic HTTP 418 is not a diagnosis of vendor
   anti-bot policy or a real authentication challenge.
 
-After creating either profile via the mock config flow, an **administrator-only**
+After creating any transition profile via the mock config flow, an **administrator-only**
 `fusion_solar_app.mock_scenario` action appears under **Tools → Actions**. Obtain
 its config entry ID from the integration's entry URL or the config-entry API;
 this is not an entity/device ID. Call:
@@ -106,6 +108,41 @@ writing a sensor state. The action uses `async_refresh` rather than debounced
 `async_request_refresh`, so rapid explicit steps cannot silently coalesce.
 Actions serialize per entry; an instance-local API lock applies a pending frame
 atomically immediately before the next production `get_devices()` reader.
+
+The topology profiles use the same action and exact entry guard:
+
+- `transitions-pv-meter` starts with **explicit 0 kW** plant/inverter PV, 0.6 kW
+  house load and 0.6 kW import. Dawn reports 0.4 kW PV and 0.2 kW import;
+  the meter's own signed 10004 signal is −600 → −200 → −600 W (converted by
+  the real meter reader to kW), independently of plant flow. PV input voltage/
+  current are absent at initial night, discovered at dawn, then report actual
+  zeros at night. The station reports capacity **0**, not an inherited 10 kWh;
+  no battery/optimizer device or metadata is invented. Sparse meter telemetry
+  stays unavailable rather than receiving fabricated zero values.
+- `transitions-topology` preserves primary battery A's legacy identity while
+  battery B (same inverter A), inverter B and optimizer 2 (inverter B) lose
+  realtime/module/sampling readings in a partial HTTP snapshot. Their registry
+  devices/entities are **not removed**; unavailable readings recover with the
+  same IDs and owners. Optional cached battery configuration remains legitimate
+  configuration, not evidence of current telemetry. A later third battery C is
+  discovered through reordered v2/v3/children HTTP responses. Its sensors are
+  registered through the existing coordinator listener, not injected states.
+  Reordering again must neither change the primary nor duplicate old sensors.
+  Modules/packs are sensor groups owned by each battery, not separate fictitious
+  registry hardware. Reset restores the healthy first response frame, **not** the
+  discovery cache or registry: known battery C continues to be polled. Reload/new
+  setup clears discovery, leaving its persisted entities unavailable until
+  rediscovery. In the PV profile, reset returns to the initial night with absent
+  PV inputs: the three late identities persist as unavailable (14 unavailable
+  entities in total, including 11 intentionally sparse meter/plant readings).
+  The `night-return` frame instead supplies real input zeros (11 unavailable).
+
+All topology values are explicitly **synthetic**, even when using a previously
+supported response shape. No new hardware support or real topology observation is
+claimed. New profiles use disjoint station **and child** `MOCK_RUNTIME_PV_METER_*`
+and `MOCK_RUNTIME_TOPO_*` identities. Shared response files avoid repeating
+configuration and historical arrays. Only the dev HTTP allowlist gains the existing
+read-only meter `moc-type-name` endpoint; real discovery/readers remain unchanged.
 
 Only these two operations and an exact loaded transition-mock entry are accepted;
 unknown fields, real/static entries and missing environment opt-in are rejected.
@@ -131,6 +168,20 @@ The no-`frames` format and static behavior remain backward compatible.
 Do not deploy/restart a shared development instance during an incident or another
 agent's work. Run the isolated checker below first; it never mounts live config.
 
+Development validation on **2026-11-05**, HA **2026.10.4**, integration manifest
+still **1.6.8b14** (unreleased scenarios): all seven isolated runtime profiles and
+30 combined HTTP frames passed, with zero external network attempts. The two new
+profiles' eight frames were also executed through the registered action on the
+actual development HA after credential-free config-flow creation. Its existing
+**619 entities / 22 devices** retained their IDs and owners; after late discovery
+it had **862 entities / 33 devices**. All entries remained loaded, including the
+real account's 137 available entities. No real-account poll/control/credential
+change was requested; only its natural startup occurred. Both new mocks were reset
+at the end; no entries or registry objects were deleted. The only scoped live
+warning was the existing native-forecast “no useful deltas” warning. Synthetic
+payloads do not validate vendor authentication, physical hardware or Recorder
+statistics policy.
+
 ### Actual HA lifecycle verification
 
 ```sh
@@ -150,8 +201,10 @@ below. It also calls the registered runtime action through every HTTP transition
 checks local-versus-global availability and recovery, unchanged IDs/classes/units,
 service rejection boundaries, and a reset before lifecycle regression checks.
 No test substitutes a `Device.state` snapshot for these transitions.
-UI rendering, Recorder statistics, vendor authentication, dynamic topology
-and real hardware behavior still require their own validation.
+The topology checker additionally verifies actual late registration, persistent
+registry IDs, per-inverter optimizer ownership and same-inverter battery ownership.
+UI rendering, Recorder statistics, vendor authentication and real hardware behavior
+still require their own validation.
 
 ## Focused offline replay tests
 
@@ -213,7 +266,7 @@ slave battery returns identical fields.
 
 The five focused replay profiles exercise real flow fetching, DN/parent discovery,
 battery/optimizer assembly and sensor properties/update methods, with lightweight
-HA/coordinator pytest stubs. The five **runtime** profiles and lifecycle checker
+HA/coordinator pytest stubs. The seven **runtime** profiles and lifecycle checker
 above additionally exercise complete `get_devices()`, real config entries,
 coordinator updates, platforms, registries and states. Neither layer claims
 vendor login, Recorder/statistics, UI rendering or real hardware validation.
@@ -228,14 +281,14 @@ covered there is not automatically covered by a persisted replay profile.
 | Current dev installation: raw API baseline | Fresh sanitized response bodies are still needed. Inspection of its 137 live HA sensor states is useful runtime validation, **not** a recording of underlying HTTP responses. Never export its authentication/session data. |
 | Forced **discharge** | Await a sanitized response from someone already using the mode normally. Do not infer discharge-specific power/energy signal IDs from the charge sample. |
 | **Energy** setting mode | Need actual conditional fields, units and presence/absence/null behavior; Duration mode does not establish these. |
-| Multiple batteries on the **same inverter** | A new topology/response profile, distinct from one battery per inverter. Verify ownership and aggregate versus per-battery metrics. |
-| Late third battery / changed discovery order / ambiguous legacy primary | Ordered discovery frames asserting existing IDs stay assigned correctly and new entities do not duplicate old ones. Focused unit tests already cover these, but no complete replay profile yet. |
+| Multiple batteries on the **same inverter** | Synthetic full-HTTP/runtime profile now exercises two batteries on A and a late third. Real sanitized topology captures and aggregate-versus-per-battery validation on actual hardware remain missing. |
+| Late third battery / changed discovery order / ambiguous legacy primary | Synthetic full-HTTP runtime frames now cover late third discovery and repeated ordering with a known primary. Genuinely ambiguous legacy primary migrations remain a separate evidence/test boundary. |
 | Stop mode and mode changes | Captured mode-specific payloads plus clearly synthetic transitions; current failure/recovery profiles are not evidence of real mode transitions. |
 | Optimizer conflicting or unknown inverter ownership | Captured ownership/topology if available, then adversarial synthetic mismatches. Current replay covers valid ownership; rejection cases remain in focused tests. |
 | Further optional/core failures | Runtime frames now cover optional config 403/418, required energy-flow 418/500/timeout/connection and recovery. Malformed payloads and genuine authentication expiry still need dedicated runtime profiles. |
 | iSitePower-M export / idle | [Issue #101 report](https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101#issuecomment-6650661460) confirms matching selected v2/v3 fields during **nonzero import only**. Runtime profile retains those reported fields with explicit synthetic completion, not a raw capture. Reverse, idle and conflicting directions remain unknown; actual export/idle captures are still needed. Endpoint remains v2. |
 | EU / other regions / authentication | Sanitized redirect/envelope shapes, expiry and recovery, with fictional tokens only; current profiles bypass login. |
-| Dynamic topology / Recorder / UI | Registration, refresh/reload/unload and the fixed-topology HTTP unavailable/recovery transitions above pass in actual HA. Live topology changes, Recorder/statistics assertions and UI rendering checks still need dedicated validation. |
+| Dynamic topology / Recorder / UI | Synthetic full-HTTP runtime checks cover partial telemetry, recovery, late third battery and late PV sensor registration without deleting devices. Real backend topology changes, Recorder/statistics assertions and UI rendering remain unverified. |
 
 ## Actual Home Assistant class smoke check
 

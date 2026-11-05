@@ -114,6 +114,10 @@ async def run(report):
                 guards.enter_context(patch.object(FusionSolarAPI, "get_devices", observed_get_devices))
                 profiles = await hass.async_add_executor_job(list_profiles)
                 require(profiles, "No valid runtime profiles found (backend/fixtures may not be ready)")
+                if len(sys.argv) > 1:
+                    selected = sys.argv[1:]
+                    require(set(selected) <= profiles.keys(), f"Unknown profiles: {set(selected) - profiles.keys()}")
+                    profiles = {key: profiles[key] for key in selected}
                 report["profile_count"] = len(profiles)
                 # Start core lifecycle without default_config, HTTP, recorder,
                 # discovery or anything that might contact an existing HA.
@@ -151,13 +155,13 @@ async def run(report):
                                     if device.device_type in SUPPORTED_SENSOR_DEVICE_TYPES}
                         require(expected, "Production discovery returned no supported sensors")
                         require(not (expected - by_unique.keys()), f"Missing sensors: {sorted(expected - by_unique.keys())}")
-                        require(len(entities) == len(expected) + 2, f"Expected {len(expected)} API sensors + 2 forecast sensors, got {len(entities)}")
+                        require(len(entities) >= len(expected) + 2 if profile_id in ("transitions-topology", "transitions-pv-meter") else len(entities) == len(expected) + 2, f"Expected {len(expected)} API sensors + 2 forecast sensors, got {len(entities)}")
                         output = []
                         for entity in entities:
                             state = hass.states.get(entity.entity_id)
                             require(entity.device_id is not None, f"Unassociated entity: {entity.entity_id}")
                             require(state is not None, f"No actual HA state: {entity.entity_id}")
-                            if profile_id != "isitepower-mains-import":
+                            if profile_id not in ("isitepower-mains-import", "transitions-pv-meter", "transitions-topology"):
                                 require(state.state != "unavailable", f"Unavailable entity: {entity.entity_id}")
                             # This sparse mixed profile intentionally omits telemetry.
                             # Existing sensor availability represents None as unavailable.
@@ -171,7 +175,7 @@ async def run(report):
                         require(profile["station"]["dn"].startswith("MOCK_RUNTIME_"), "Nonfictional station")
                         expected_devices = {prefix}
                         topology = profile.get("topology", {})
-                        for kind, singular in (("inverters", "inverter"), ("batteries", "battery")):
+                        for kind, singular in (("inverters", "inverter"), ("batteries", "battery"), ("meters", "power_sensor")):
                             for node in topology.get(kind, []):
                                 identifier = f"{prefix}_{singular}_{node['dn']}"
                                 expected_devices.add(identifier)
@@ -213,7 +217,8 @@ async def run(report):
                                 ("battery_forced_charge_discharge_period", 1440, "min", "Battery Forced Charge Discharge Period", "mdi:battery"),
                                 ("battery_charged_energy", 1.75, "kWh", "Battery Forced Charge Energy", None),
                             ):
-                                matches = [obj for obj in output if obj["unique_id"].endswith(suffix)]
+                                matches = [obj for obj in output if obj["unique_id"].endswith(suffix)
+                                           and (profile_id != "transitions-topology" or obj["unique_id"] in expected)]
                                 require(matches, f"Missing corrected sensor {suffix}")
                                 for obj in matches:
                                     require(float(obj["state"]) == value, f"Wrong value: {obj}")
@@ -243,7 +248,11 @@ async def run(report):
                     await hass.async_block_till_done()
                     require(discoveries[id(coordinator.api)] > previous_calls, "Forced refresh did not execute get_devices")
                     require(snapshot()[1] == identities, "Refresh changed entity/unique/device IDs")
-                    if profile.get("frames"):
+                    if profile_id in ("transitions-pv-meter", "transitions-topology"):
+                        from check_topology_transitions import check_topology_transitions
+                        item["http_transitions"] = await check_topology_transitions(hass, entry, profile)
+                        identities = snapshot()[1]
+                    if profile.get("frames") and profile_id not in ("transitions-pv-meter", "transitions-topology"):
                         from homeassistant.exceptions import HomeAssistantError
                         import voluptuous as vol
 
@@ -369,7 +378,7 @@ async def run(report):
 async def main():
     report = {"status": "running", "coverage": "real HA config flow -> async_setup_entry -> coordinator -> production get_devices -> sensor platform -> device/entity registries and states", "entries": []}
     try:
-        await asyncio.wait_for(run(report), timeout=600)
+        await asyncio.wait_for(run(report), timeout=900)
     except Exception as err:
         report.update(status="failed", error=f"{type(err).__name__}: {err}")
         for item in report["entries"]:
