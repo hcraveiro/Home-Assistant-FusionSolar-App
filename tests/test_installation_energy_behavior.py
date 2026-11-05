@@ -244,11 +244,12 @@ def test_complete_device_orchestration_preserves_order(modules):
     api._ensure_inverter_metadata_loaded.assert_called_once_with("inverter-1")
 
 
-def test_week_energy_ignores_missing_markers(modules):
+def test_week_energy_requires_complete_measurements(modules):
     api = modules[1].FusionSolarEnergyBalanceMixin()
     source = {"data": {"productPower": ["2.5 kWh", "--", "null", "3 kWh"]}}
-    assert api.calculate_week_energy(source, [1, 2, 3, 4], "productPower") == 5.5
-    assert api.calculate_week_energy({"data": {"productPower": []}}, [1], "productPower") == 0
+    assert api.calculate_week_energy(source, [1, 2, 3, 4], "productPower") is None
+    assert api.calculate_week_energy(source, [1, 4], "productPower") == 5.5
+    assert api.calculate_week_energy({"data": {"productPower": []}}, [1], "productPower") is None
 
 
 def test_week_data_calls_daily_endpoint_without_waiting(modules, monkeypatch):
@@ -799,8 +800,13 @@ def test_isitepower_explicit_zero_energy_is_kept_as_zero(modules):
     }
 
 
-def test_isitepower_partial_energy_balance_keeps_unverified_periods_unknown(modules):
+def test_isitepower_partial_energy_balance_keeps_unverified_periods_unknown(modules, monkeypatch):
     """A missing energy schema must not suppress valid measurements or create zeros."""
+    class Thursday:
+        @classmethod
+        def now(cls):
+            return __import__("datetime").datetime(2026, 11, 5)
+    monkeypatch.setattr(modules[1], "datetime", Thursday)
     api = modules[1].FusionSolarEnergyBalanceMixin()
     api._is_isitepower_m = True
     api.refresh_csrf = Mock()
@@ -823,7 +829,8 @@ def test_isitepower_partial_energy_balance_keeps_unverified_periods_unknown(modu
     assert output["grid_consumption_year"] == 2.5
     assert output["grid_consumption_lifetime"] == 1376.860
     assert output["grid_consumption_today"] == 0.3
-    assert output["grid_consumption_week"] == 0.5
+    # Two daily readings do not establish the whole Monday–Thursday total.
+    assert output["grid_consumption_week"] is None
     assert output["panel_production_month"] == 0.5
     assert output["grid_injection_lifetime"] is None
     assert output["panel_production_year"] is None

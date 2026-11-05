@@ -235,6 +235,31 @@ async def run(report):
                     await hass.async_block_till_done()
                     require(discoveries[id(coordinator.api)] > previous_calls, "Forced refresh did not execute get_devices")
                     require(snapshot()[1] == identities, "Refresh changed entity/unique/device IDs")
+                    # Exercise actual HA entity writes with missing and recovered
+                    # API snapshots, retaining all registry identities.
+                    from dataclasses import replace
+                    energy_devices = [device for device in coordinator.data.devices
+                                      if device.device_id == "Panel Production Lifetime"]
+                    if energy_devices:
+                        target = energy_devices[0]
+                        registered = next(obj for obj in entities if obj["unique_id"] == f"{DOMAIN}-{target.device_unique_id}")
+                        original_devices = coordinator.data.devices
+                        for reading in (35, 34, None, "--", 0, 34):
+                            coordinator.data.devices = [replace(device, state=reading) if device.device_unique_id == target.device_unique_id else device
+                                                        for device in original_devices]
+                            coordinator.async_update_listeners()
+                            await hass.async_block_till_done()
+                            state = hass.states.get(registered["entity_id"])
+                            require(state is not None, "Energy entity disappeared")
+                            if reading in (None, "--"):
+                                require(state.state == "unavailable", f"Missing energy became {state.state}")
+                            else:
+                                require(float(state.state) == reading, f"Correction was altered: {state.state}")
+                            require(state.attributes.get("state_class") == "total_increasing", "Lifetime energy must retain baseline TOTAL_INCREASING")
+                        coordinator.data.devices = original_devices
+                        coordinator.async_update_listeners()
+                        await hass.async_block_till_done()
+                        criteria["energy_correction_missing_zero_recovery"] = True
                     require(await hass.config_entries.async_reload(entry.entry_id), "Reload failed")
                     await hass.async_block_till_done()
                     require(entry.state is ConfigEntryState.LOADED, f"Reload state: {entry.state}")

@@ -30,7 +30,9 @@ class ISitePowerEnergyRegressions(unittest.TestCase):
             decorator_list=[], returns=None, type_comment=None,
             type_params=[],
         )
-        module = ast.fix_missing_locations(ast.Module(body=[standalone], type_ignores=[]))
+        helpers = [node for node in cls.body if isinstance(node, ast.FunctionDef)
+                   and node.name in ("_energy_sum", "_period_energy_sum")]
+        module = ast.fix_missing_locations(ast.Module(body=[standalone, *helpers], type_ignores=[]))
         kinds = SimpleNamespace(MONTH="month", YEAR="year", LIFETIME="lifetime")
         namespace = {
             "datetime": datetime,
@@ -47,6 +49,9 @@ class ISitePowerEnergyRegressions(unittest.TestCase):
             return samples
         calls = []
         class Fake:
+            _energy_sum = namespace["_energy_sum"]
+            _period_energy_sum = namespace["_period_energy_sum"]
+
             def call_energy_balance(self, kind):
                 calls.append(kind)
                 if kind == "month":

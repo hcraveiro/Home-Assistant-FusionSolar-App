@@ -54,6 +54,16 @@ def test_dynamic_device(api,api_module,kind,value,expected):
 def test_dynamic_device_skips_missing(api,api_module,missing):
     assert api._create_dynamic_device("Power",api_module.DeviceType.SENSOR_KW,missing,"mdi:test") is None
 
+@pytest.mark.parametrize("raw", [None, "--", "null", "garbage", "NaN", float("inf"), True])
+def test_dynamic_energy_rejects_invalid(api, api_module, raw):
+    assert api._create_dynamic_device("Energy", api_module.DeviceType.SENSOR_KWH, raw, "mdi:test") is None
+
+
+@pytest.mark.parametrize("raw", [0, "0", "0 kWh", "0 Wh"])
+def test_dynamic_energy_retains_real_zero(api, api_module, raw):
+    assert api._create_dynamic_device("Energy", api_module.DeviceType.SENSOR_KWH, raw, "mdi:test").state == 0
+
+
 def test_station_scoped_unique_id(api,api_module):
     api.station="Plant/1: North"
     assert api.get_device_unique_id("Power Now",api_module.DeviceType.SENSOR_KW)=="fusion_solar_app_plant_1__north_power_now"

@@ -74,8 +74,8 @@ def test_full_energy_output_aggregation(module,monkeypatch):
     api.update_output_with_energy_balance(output)
     assert output["panel_production_month"]==120
     assert output["panel_production_lifetime"]==120
-    assert output["battery_injection_month"]==31
-    assert output["battery_consumption_month"]==62
+    assert output["battery_injection_month"]==module[0].datetime.now().day
+    assert output["battery_consumption_month"]==2 * module[0].datetime.now().day
     assert output["grid_consumption_today"]==20
     assert output["grid_injection_today"]==30
     assert output["panel_production_year"]==120

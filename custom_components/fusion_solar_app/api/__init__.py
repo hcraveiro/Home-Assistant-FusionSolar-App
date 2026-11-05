@@ -105,6 +105,10 @@ class FusionSolarAPI(
             if raw_value is None:
                 return None
             state = str(raw_value)
+        elif device_type == DeviceType.SENSOR_KWH:
+            state = self._optional_grid_energy({"value": raw_value}, "value")
+            if state is None:
+                return None
         elif device_type == DeviceType.SENSOR_PERCENTAGE:
             if raw_value in ("", "--", "null", None):
                 return None
