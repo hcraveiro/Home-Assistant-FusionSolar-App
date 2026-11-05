@@ -183,8 +183,11 @@ class FusionSolarEnergyBalanceMixin:
                     values = [self._optional_grid_energy(item, key) for item in daily_payloads]
                     if values[-1] is not None:
                         output[f"{category}_today"] = values[-1]
-                    if len(values) == datetime.now().weekday() + 1 and all(value is not None for value in values):
-                        output[f"{category}_week"] = sum(values)
+                    if len(values) == datetime.now().weekday() + 1:
+                        output[f"{category}_week"] = self._energy_sum([
+                            item.get(key) if isinstance(item, dict) else None
+                            for item in daily_payloads
+                        ])
         except (KeyError, IndexError, TypeError, ValueError, APIConnectionError, APIDataStructureError) as ex:
             _LOGGER.warning("iSitePower-M daily energy not available: %s", ex)
 
@@ -201,11 +204,18 @@ class FusionSolarEnergyBalanceMixin:
         return payload if isinstance(payload, dict) else {}
 
     def _energy_sum(self, readings):
-        """An incomplete vector is unknown, never a partial measured total."""
+        """Sum available Huawei segments, skipping only literal '--' markers.
+
+        This may represent partial history, not a complete measured total.
+        Missing, malformed and non-finite values still invalidate the vector.
+        """
         if not isinstance(readings, list) or not readings:
             return None
-        values = [self._optional_grid_energy({"v": item}, "v") for item in readings]
-        return sum(values) if all(value is not None for value in values) else None
+        values = [
+            self._optional_grid_energy({"v": item}, "v")
+            for item in readings if item != "--"
+        ]
+        return sum(values) if values and all(value is not None for value in values) else None
 
     def _period_energy_sum(self, readings, period):
         """Exclude known future calendar slots, never missing elapsed readings.
@@ -213,11 +223,9 @@ class FusionSolarEnergyBalanceMixin:
         Month vectors are day-indexed and year vectors month-indexed, as used
         for today's battery readings and the current month's house load. No
         lifetime start-year/index contract is known, so retain its whole vector.
-        Only literal Huawei '--' placeholders are discarded from lifetime battery
-        vectors; all other invalid readings still invalidate the total.
+        Only literal Huawei '--' placeholders are discarded from aggregation;
+        all other invalid readings still invalidate the total.
         """
-        if period == "lifetime" and isinstance(readings, list):
-            readings = [item for item in readings if item != "--"]
         count = {"month": datetime.now().day, "year": datetime.now().month}.get(period)
         if count is not None:
             if not isinstance(readings, list) or len(readings) < count:
@@ -280,11 +288,11 @@ class FusionSolarEnergyBalanceMixin:
                 if category.startswith("battery_"):
                     output[f"{category}_{period}"] = self._period_energy_sum(payload.get(key), period)
 
-        def sample(payload, field, index):
+        def sample(payload, field, index, *, raw=False):
             readings = payload.get(field)
             if not isinstance(readings, list) or index >= len(readings):
                 return None
-            return self._optional_grid_energy({"v": readings[index]}, "v")
+            return readings[index] if raw else self._optional_grid_energy({"v": readings[index]}, "v")
 
         for category, field in arrays.items():
             output[f"{category}_today"] = sample(payloads["month"], field, today.day - 1)
@@ -297,7 +305,7 @@ class FusionSolarEnergyBalanceMixin:
                 output[f"{category}_week"] = self._energy_sum([day.get(key) for day in daily])
         for category, field in arrays.items():
             readings = [
-                sample(payloads["month"] if (day.year, day.month) == (today.year, today.month) else previous, field, day.day - 1)
+                sample(payloads["month"] if (day.year, day.month) == (today.year, today.month) else previous, field, day.day - 1, raw=True)
                 for day in dates
             ]
             output[f"{category}_week"] = self._energy_sum(readings)

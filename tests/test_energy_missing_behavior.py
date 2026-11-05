@@ -25,7 +25,7 @@ def test_true_zero_and_partial_vectors(module, zero):
     assert api._optional_grid_energy({"v": zero}, "v") == 0
     assert api._energy_sum([zero, zero]) == 0
     assert api._energy_sum([zero, None]) is None
-    assert api._energy_sum([35, "--", 34]) is None
+    assert api._energy_sum([35, "--", 34]) == 69
     assert api._energy_sum([]) is None
 
 
@@ -66,8 +66,8 @@ def test_calendar_vectors_ignore_only_future_slots(module, monkeypatch, isitepow
         year["data"][field][9] = gap
     api.update_output_with_energy_balance(output)
     for category in ("battery_injection", "battery_consumption"):
-        assert output[f"{category}_month"] is None
-        assert output[f"{category}_year"] is None
+        assert output[f"{category}_month"] == (8 if gap == "--" else None)
+        assert output[f"{category}_year"] == (30 if gap == "--" else None)
     # Short arrays also omit elapsed observations, not just future slots.
     assert api._period_energy_sum([0] * 4, "month") is None
     assert api._period_energy_sum([0] * 10, "year") is None
@@ -117,6 +117,44 @@ def test_observed_lifetime_battery_response(module, isitepower):
 ])
 def test_lifetime_discards_only_literal_placeholder(module, readings, expected):
     assert make_api(module)._period_energy_sum(readings, "lifetime") == expected
+
+
+@pytest.mark.parametrize("isitepower", [False, True])
+@pytest.mark.parametrize("gap, expected", [("--", 6), (None, None), ("null", None), ("broken", None), ("NaN", None)])
+def test_weekly_available_segments(module, monkeypatch, isitepower, gap, expected):
+    from datetime import datetime
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 5, 12)
+
+    energy = module[0]
+    monkeypatch.setattr(energy, "datetime", FrozenDatetime)
+    api = make_api(module)
+    api._is_isitepower_m = isitepower
+    data = complete_data()
+    for field in ("productPower", "selfUsePower", "usePower", "chargePower", "dischargePower"):
+        data["data"][field] = [2, 2, gap, 2, 2] + ["--"] * 25
+    days = []
+    for value in (2, gap, 2, 2):
+        day = complete_data()
+        for key in ("totalBuyPower", "totalOnGridPower", "totalProductPower", "totalSelfUsePower", "totalUsePower"):
+            day["data"][key] = value
+        days.append(day)
+    api.call_energy_balance = Mock(return_value=data)
+    api.get_week_data = Mock(return_value=days)
+    output = {}
+    api.update_output_with_energy_balance(output)
+    categories = ["grid_consumption", "grid_injection", "panel_production", "panel_production_consumption", "house_load"]
+    if not isitepower:
+        categories += ["battery_injection", "battery_consumption"]
+    for category in categories:
+        assert output[f"{category}_week"] == expected
+    days[1] = None  # A failed HTTP date is not an explicit Huawei placeholder.
+    api.update_output_with_energy_balance(output)
+    assert output["grid_consumption_week"] is None
+    assert output["grid_injection_week"] is None
 
 
 def test_lifetime_battery_correction_is_not_smoothed(module):
