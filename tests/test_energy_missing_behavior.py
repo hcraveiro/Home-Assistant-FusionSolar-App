@@ -59,8 +59,8 @@ def test_calendar_vectors_ignore_only_future_slots(module, monkeypatch, isitepow
     for category in ("battery_injection", "battery_consumption"):
         assert output[f"{category}_month"] == 10
         assert output[f"{category}_year"] == 33
-        # No undocumented lifetime year indexing or removal of gaps.
-        assert output[f"{category}_lifetime"] is None
+        # Only literal lifetime '--' placeholders are discarded, at any index.
+        assert output[f"{category}_lifetime"] == (4 if gap == "--" else None)
     for field in ("chargePower", "dischargePower"):
         month["data"][field][3] = gap
         year["data"][field][9] = gap
@@ -86,3 +86,48 @@ def test_repeated_poll_correction_missing_and_recovery(module):
         api.update_output_with_energy_balance(output)
         assert output["panel_production_lifetime"] == expected
         assert output["panel_production_month"] == expected
+
+
+@pytest.mark.parametrize("isitepower", [False, True])
+def test_observed_lifetime_battery_response(module, isitepower):
+    """Sanitized successful Huawei shape; preserve even anomalous 2022 energy."""
+    observed = {
+        "success": True,
+        "data": {
+            "xAxis": ["2021", "2022", "2023", "2024", "2025", "2026"],
+            "chargePower": ["--", "2598.30", "1762.14", "1558.68", "2057.02", "2552.59"],
+            "dischargePower": ["--", "4294901.77", "1701.33", "1505.56", "2022.88", "2515.83"],
+        },
+    }
+    api = make_api(module)
+    api._is_isitepower_m = isitepower
+    api.call_energy_balance = Mock(return_value=observed)
+    api.get_week_data = Mock(return_value=[])
+    output = {}
+    api.update_output_with_energy_balance(output)
+    assert output["battery_injection_lifetime"] == pytest.approx(10528.73, rel=0, abs=1e-8)
+    assert output["battery_consumption_lifetime"] == pytest.approx(4302647.37, rel=0, abs=1e-8)
+
+
+@pytest.mark.parametrize("readings, expected", [
+    (["--", 35, 34], 69), ([35, "--", 34], 69), ([35, 34, "--"], 69),
+    (["--", 0, "--"], 0), (["--"], None), ([], None), (None, None),
+    *[(["--", 35, invalid], None) for invalid in
+      (None, "null", "", "broken", "NaN", float("nan"), float("inf"), True, " -- ")],
+])
+def test_lifetime_discards_only_literal_placeholder(module, readings, expected):
+    assert make_api(module)._period_energy_sum(readings, "lifetime") == expected
+
+
+def test_lifetime_battery_correction_is_not_smoothed(module):
+    api = make_api(module)
+    data = complete_data()
+    api.call_energy_balance = Mock(return_value=data)
+    api.get_week_data = Mock(return_value=[])
+    output = {}
+    for value in (35, 34):
+        for field in ("chargePower", "dischargePower"):
+            data["data"][field] = ["--", value]
+        api.update_output_with_energy_balance(output)
+        assert output["battery_injection_lifetime"] == value
+        assert output["battery_consumption_lifetime"] == value

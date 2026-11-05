@@ -213,7 +213,11 @@ class FusionSolarEnergyBalanceMixin:
         Month vectors are day-indexed and year vectors month-indexed, as used
         for today's battery readings and the current month's house load. No
         lifetime start-year/index contract is known, so retain its whole vector.
+        Only literal Huawei '--' placeholders are discarded from lifetime battery
+        vectors; all other invalid readings still invalidate the total.
         """
+        if period == "lifetime" and isinstance(readings, list):
+            readings = [item for item in readings if item != "--"]
         count = {"month": datetime.now().day, "year": datetime.now().month}.get(period)
         if count is not None:
             if not isinstance(readings, list) or len(readings) < count:
