@@ -149,7 +149,10 @@ async def run(report):
                             state = hass.states.get(entity.entity_id)
                             require(entity.device_id is not None, f"Unassociated entity: {entity.entity_id}")
                             require(state is not None, f"No actual HA state: {entity.entity_id}")
-                            require(state.state != "unavailable", f"Unavailable entity: {entity.entity_id}")
+                            if profile_id != "isitepower-mains-import":
+                                require(state.state != "unavailable", f"Unavailable entity: {entity.entity_id}")
+                            # This sparse mixed profile intentionally omits telemetry.
+                            # Existing sensor availability represents None as unavailable.
                             output.append({"entity_id": entity.entity_id, "unique_id": entity.unique_id,
                                            "device_id": entity.device_id, "name": entity.original_name,
                                            "state": state.state, "attributes": dict(state.attributes)})
@@ -214,6 +217,15 @@ async def run(report):
                             require(any(float(obj["state"]) == 15.1 and obj["attributes"].get("unit_of_measurement") == "°C" for obj in temperatures),
                                     "Missing actual registered optimizer 15.1°C state")
                             criteria["corrected_forced_charge_and_optimizer_values"] = True
+                        if profile_id == "isitepower-mains-import":
+                            for suffix, expected_state in (("grid_consumption_power", "0.64"),
+                                                           ("grid_injection_power", "unavailable")):
+                                matches = [obj for obj in output if obj["unique_id"].endswith(suffix)]
+                                require(len(matches) == 1, f"Missing/duplicate iSitePower grid sensor {suffix}")
+                                obj = matches[0]
+                                require(obj["state"] == expected_state, f"Unproven/wrong grid state: {obj}")
+                                require(obj["attributes"].get("unit_of_measurement") == "kW", f"Wrong grid unit: {obj}")
+                            criteria["isitepower_import_0_64_kw_export_unknown"] = True
                         identities = sorted((obj["entity_id"], obj["unique_id"], obj["device_id"]) for obj in output)
                         return coordinator, identities, output, devices, criteria
 

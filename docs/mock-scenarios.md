@@ -29,6 +29,7 @@ Initial runtime profiles:
 
 | Profile | Actual HA registration verified on 2026.10.4 |
 |---|---|
+| `isitepower-mains-import` | Mixed issue #101 written-report fields plus synthetic runtime completion. Actual HA 2026.10.4 registers **2 devices / 73 entities** and verifies **0.64 kW import**, no export inference, stable IDs on refresh/reload/unload/setup. Missing readings stay unavailable (API `None`), not zero. |
 | `single-battery-config-denied` | 1 installation, 1 inverter, 1 battery: **3 devices / 81 entities**. Optional configuration is HTTP 403; core telemetry remains available. |
 | `two-inverters-two-batteries` | 1 installation, 2 inverters, 2 separately owned batteries, 2 optimizers: **7 devices / 144 entities**. Includes forced-charge power, duration and energy and daytime optimizer temperature. |
 
@@ -156,7 +157,7 @@ covered there is not automatically covered by a persisted replay profile.
 | Stop mode and mode changes | Captured mode-specific payloads plus clearly synthetic transitions; current failure/recovery profiles are not evidence of real mode transitions. |
 | Optimizer conflicting or unknown inverter ownership | Captured ownership/topology if available, then adversarial synthetic mismatches. Current replay covers valid ownership; rejection cases remain in focused tests. |
 | Independent optional versus core endpoint failures | Expand beyond configuration 403 and missing optimizer sampling: malformed data, 418, timeout, required failure and genuine authentication expiry. |
-| v2/v3 iSitePower-M import/export | [Issue #101](https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101): collect endpoint-specific paired shapes. Do not assume v2/v3 interchangeability or infer export from import. |
+| iSitePower-M export / idle | [Issue #101 report](https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101#issuecomment-6650661460) confirms matching selected v2/v3 fields during **nonzero import only**. Runtime profile retains those reported fields with explicit synthetic completion, not a raw capture. Reverse, idle and conflicting directions remain unknown; actual export/idle captures are still needed. Endpoint remains v2. |
 | EU / other regions / authentication | Sanitized redirect/envelope shapes, expiry and recovery, with fictional tokens only; current profiles bypass login. |
 | Dynamic runtime / Recorder / UI | Static registration and refresh/reload/unload now pass in actual HA. Still add live topology changes, unavailable/recovery transitions, Recorder/statistics assertions and UI rendering checks. |
 

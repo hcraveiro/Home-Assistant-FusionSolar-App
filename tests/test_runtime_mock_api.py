@@ -103,7 +103,7 @@ def test_transport_fail_closed_and_instance_local(runtime, api_module):
 
 def test_profile_optin_and_path_containment(runtime, monkeypatch, tmp_path):
     loader, _ = runtime
-    assert len(loader.list_profiles()) == 2
+    assert len(loader.list_profiles()) == 3
     monkeypatch.delenv(loader.PROFILE_DIR_ENV)
     assert loader.list_profiles() == {}
     with pytest.raises(ValueError):
