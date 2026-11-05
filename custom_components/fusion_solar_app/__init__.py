@@ -28,6 +28,7 @@ class RuntimeData:
 
     coordinator: DataUpdateCoordinator
     cancel_update_listener: Callable
+    mock_transition: bool = False
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
@@ -37,6 +38,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     # Initialise the coordinator that manages data updates from your api.
     # This is defined in coordinator.py
+    mock_transition = False
     if CONF_MOCK_PROFILE in config_entry.data:
         # Explicit developer entry only. Missing opt-in/profile must never
         # fall back to constructing a real account API. Disk reads use executor.
@@ -48,6 +50,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             )
         except (ValueError, OSError) as err:
             raise ConfigEntryNotReady(f"Mock profile unavailable: {err}") from err
+        mock_transition = bool(profile.get("frames"))
         coordinator = FusionSolarCoordinator(
             hass, config_entry, mock_profile_data=profile
         )
@@ -76,9 +79,14 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
         cancel_update_listener = config_entry.add_update_listener(_async_update_listener)
         hass.data[DOMAIN][config_entry.entry_id] = RuntimeData(
-            coordinator, cancel_update_listener
+            coordinator, cancel_update_listener,
+            mock_transition=mock_transition,
         )
         await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+        if mock_transition:
+            from .mock_service import register_mock_service
+
+            register_mock_service(hass)
     except BaseException:
         if cancel_update_listener is not None:
             cancel_update_listener()
@@ -210,5 +218,9 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
             await _async_close_coordinator(hass, runtime.coordinator)
         finally:
             hass.data[DOMAIN].pop(config_entry.entry_id, None)
+            if runtime.mock_transition:
+                from .mock_service import remove_mock_service_if_unused
+
+                remove_mock_service_if_unused(hass)
 
     return unload_ok

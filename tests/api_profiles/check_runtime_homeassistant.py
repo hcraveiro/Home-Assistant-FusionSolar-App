@@ -97,6 +97,14 @@ async def run(report):
                 from custom_components.fusion_solar_app.sensor import SUPPORTED_SENSOR_DEVICE_TYPES
 
                 discoveries = Counter()
+                logins = Counter()
+                original_mock_login = MockFusionSolarAPI.login
+
+                def observed_mock_login(api):
+                    logins[id(api)] += 1
+                    return original_mock_login(api)
+
+                guards.enter_context(patch.object(MockFusionSolarAPI, "login", observed_mock_login))
                 original_get_devices = FusionSolarAPI.get_devices
 
                 def observed_get_devices(api, *args, **kwargs):
@@ -235,31 +243,95 @@ async def run(report):
                     await hass.async_block_till_done()
                     require(discoveries[id(coordinator.api)] > previous_calls, "Forced refresh did not execute get_devices")
                     require(snapshot()[1] == identities, "Refresh changed entity/unique/device IDs")
-                    # Exercise actual HA entity writes with missing and recovered
-                    # API snapshots, retaining all registry identities.
-                    from dataclasses import replace
-                    energy_devices = [device for device in coordinator.data.devices
-                                      if device.device_id == "Panel Production Lifetime"]
-                    if energy_devices:
-                        target = energy_devices[0]
-                        registered = next(obj for obj in entities if obj["unique_id"] == f"{DOMAIN}-{target.device_unique_id}")
-                        original_devices = coordinator.data.devices
-                        for reading in (35, 34, None, "--", 0, 34):
-                            coordinator.data.devices = [replace(device, state=reading) if device.device_unique_id == target.device_unique_id else device
-                                                        for device in original_devices]
-                            coordinator.async_update_listeners()
+                    if profile.get("frames"):
+                        from homeassistant.exceptions import HomeAssistantError
+                        import voluptuous as vol
+
+                        api = coordinator.api
+                        original_session = api.session
+                        initial_logins = logins[id(api)]
+                        frames_report = []
+                        item["http_transitions"] = frames_report
+                        energy = next(obj for obj in entities if obj["unique_id"].endswith("panel_production_lifetime"))
+                        config = next(obj for obj in entities if obj["unique_id"].endswith("battery_forced_charge_power"))
+                        live = next(obj for obj in entities if obj["unique_id"].endswith("panel_production_power"))
+                        async def control(operation, entry_id=entry.entry_id):
+                            await hass.services.async_call(DOMAIN, "mock_scenario", {
+                                "config_entry_id": entry_id, "operation": operation,
+                            }, blocking=True)
                             await hass.async_block_till_done()
-                            state = hass.states.get(registered["entity_id"])
-                            require(state is not None, "Energy entity disappeared")
-                            if reading in (None, "--"):
-                                require(state.state == "unavailable", f"Missing energy became {state.state}")
+
+                        for index, frame in enumerate(profile["frames"]):
+                            before = len(api.session.calls)
+                            if index:
+                                await control("advance")
                             else:
-                                require(float(state.state) == reading, f"Correction was altered: {state.state}")
-                            require(state.attributes.get("state_class") == "total_increasing", "Lifetime energy must retain baseline TOTAL_INCREASING")
-                        coordinator.data.devices = original_devices
-                        coordinator.async_update_listeners()
-                        await hass.async_block_till_done()
-                        criteria["energy_correction_missing_zero_recovery"] = True
+                                await control("reset")
+                            name = frame["id"]
+                            required_failure = name in ("required-timeout", "required-http-500", "required-http-418", "required-connection")
+                            require(api.frame_id == name, f"Frame not applied: {name}")
+                            require(len(api.session.calls) > before, "Control did not poll actual HTTP readers")
+                            require(coordinator.last_update_success != required_failure, f"Wrong coordinator success for {name}")
+                            require(api.session is original_session and api.connected, "Transient/optional failure unnecessarily replaced session")
+                            require(logins[id(api)] == initial_logins, "Transient/optional failure unnecessarily logged in again")
+                            if required_failure:
+                                require(len(api.session.calls) - before == 2, "Required failure retry was not bounded to two HTTP requests")
+                            require(not api.unexpected_requests, "Unexpected route swallowed")
+                            current = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+                            require(sorted((e.entity_id, e.unique_id, e.device_id) for e in current) == identities, "Transition changed registry IDs")
+                            states = {obj["entity_id"]: hass.states.get(obj["entity_id"]) for obj in entities}
+                            if required_failure:
+                                # Forecast entities are independent projections; all API sensors fail closed.
+                                for obj in entities:
+                                    if obj["unique_id"] in {f"{DOMAIN}-{d.device_unique_id}" for d in coordinator.data.devices}:
+                                        require(states[obj["entity_id"]].state == "unavailable", f"Required failure left stale API sensor: {obj['entity_id']}")
+                            elif profile_id == "transitions-energy":
+                                expected = ["35", "34", "unavailable", "unavailable", "unavailable", "0", "34"][index]
+                                state = states[energy["entity_id"]]
+                                require(state.state == expected or (expected != "unavailable" and float(state.state) == float(expected)), f"Wrong HTTP energy state: {name}: {state.state}")
+                                require(state.attributes.get("state_class") == "total_increasing", "Energy policy changed")
+                                require(state.attributes.get("unit_of_measurement") == "kWh", "Energy unit changed")
+                                require(states[live["entity_id"]].state != "unavailable", "Invalid lifetime reading affected valid power")
+                            else:
+                                expected = "unavailable" if name in ("optional-config-403", "optional-config-418") else "3.03"
+                                require(states[config["entity_id"]].state == expected, f"Optional config did not invalidate/recover: {name}")
+                                require(states[live["entity_id"]].state != "unavailable", "Optional failure affected valid power")
+                                expected_energy = "unavailable" if name == "historical-lifetime-418" else "100.0"
+                                require(states[energy["entity_id"]].state == expected_energy, f"Historical failure did not isolate/recover: {name}")
+                            frames_report.append({"frame": name, "coordinator_success": coordinator.last_update_success,
+                                                  "energy": states[energy["entity_id"]].state,
+                                                  "config": states[config["entity_id"]].state,
+                                                  "http_requests": len(api.session.calls) - before})
+                        try:
+                            await control("advance")
+                        except HomeAssistantError:
+                            pass
+                        else:
+                            raise AssertionError("Advance beyond last frame accepted")
+                        try:
+                            await control("reset", "not-a-mock-entry")
+                        except HomeAssistantError:
+                            pass
+                        else:
+                            raise AssertionError("Non-mock service target accepted")
+                        try:
+                            await control("arbitrary-code")
+                        except vol.Invalid:
+                            pass
+                        else:
+                            raise AssertionError("Unknown operation accepted")
+                        opt_in = os.environ.pop("FUSIONSOLAR_DEV_PROFILE_DIR")
+                        try:
+                            try:
+                                await control("reset")
+                            except HomeAssistantError:
+                                pass
+                            else:
+                                raise AssertionError("Control accepted missing environment opt-in")
+                        finally:
+                            os.environ["FUSIONSOLAR_DEV_PROFILE_DIR"] = opt_in
+                        await control("reset")
+                        require(snapshot()[1] == identities, "Reset changed identities")
                     require(await hass.config_entries.async_reload(entry.entry_id), "Reload failed")
                     await hass.async_block_till_done()
                     require(entry.state is ConfigEntryState.LOADED, f"Reload state: {entry.state}")
@@ -281,6 +353,7 @@ async def run(report):
                                                             "via_device_id": d.via_device_id, "name": d.name} for d in devices],
                                 expected_criteria=criteria, refresh_reload_unload_setup="passed")
                     require(await hass.config_entries.async_unload(entry.entry_id), "Final entry unload failed")
+                    require(not hass.services.has_service(DOMAIN, "mock_scenario"), "Mock control leaked after final transition unload")
                 require(not network_attempts, f"External network attempts (possibly swallowed): {network_attempts}")
                 report["network_attempts"] = network_attempts
         finally:
@@ -296,7 +369,7 @@ async def run(report):
 async def main():
     report = {"status": "running", "coverage": "real HA config flow -> async_setup_entry -> coordinator -> production get_devices -> sensor platform -> device/entity registries and states", "entries": []}
     try:
-        await asyncio.wait_for(run(report), timeout=180)
+        await asyncio.wait_for(run(report), timeout=600)
     except Exception as err:
         report.update(status="failed", error=f"{type(err).__name__}: {err}")
         for item in report["entries"]:

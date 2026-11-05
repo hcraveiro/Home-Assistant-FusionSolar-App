@@ -135,6 +135,36 @@ def validate_profile(profile: dict) -> dict:
             raise ValueError("Runtime profile bodies must be resolved")
         if not isinstance(route.get("status", 200), int) or not 100 <= route.get("status", 200) <= 599:
             raise ValueError("Invalid HTTP response status")
+    frames = profile.get("frames", [])
+    if not isinstance(frames, list):
+        raise ValueError("frames must be a list")
+    names = set()
+    for frame in frames:
+        if not isinstance(frame, dict) or set(frame) - {"id", "responses", "invalidate_battery_config"}:
+            raise ValueError("Invalid scenario frame fields")
+        name = frame.get("id", "")
+        if not isinstance(name, str) or not _ID.fullmatch(name) or name in names:
+            raise ValueError("Frame IDs must be unique safe names")
+        names.add(name)
+        if type(frame.get("invalidate_battery_config", False)) is not bool:
+            raise ValueError("Invalid cache invalidation flag")
+        responses = frame.get("responses", [])
+        if not isinstance(responses, list):
+            raise ValueError("responses must be a list")
+        seen = set()
+        for response in responses:
+            if not isinstance(response, dict) or set(response) - {"route", "body", "status", "exception"}:
+                raise ValueError("Invalid frame response fields")
+            index = response.get("route")
+            if type(index) is not int or not 0 <= index < len(routes) or index in seen:
+                raise ValueError("Invalid/duplicate frame route index")
+            seen.add(index)
+            if "exception" in response:
+                if response["exception"] not in ("timeout", "connection") or set(response) != {"route", "exception"}:
+                    raise ValueError("Only declared timeout/connection exceptions are supported")
+            else:
+                if "body" not in response or type(response.get("status", 200)) is not int or not 100 <= response.get("status", 200) <= 599:
+                    raise ValueError("Frame HTTP response requires body and valid status")
     return profile
 
 

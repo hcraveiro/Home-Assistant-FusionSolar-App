@@ -1,6 +1,7 @@
 """Instance-local, network-incapable runtime backend exercising the real readers."""
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 from urllib.parse import parse_qs, urlsplit
@@ -67,6 +68,10 @@ class OfflineSession(requests.Session):
             expected_body = route["data"] if "data" in route else route.get("json")
             if body != expected_body:
                 continue
+            if route.get("exception") == "timeout":
+                raise requests.Timeout("Declared synthetic offline timeout", request=request)
+            if route.get("exception") == "connection":
+                raise requests.ConnectionError("Declared synthetic offline connection failure", request=request)
             response = requests.Response()
             response.status_code = route.get("status", 200)
             response._content = json.dumps(route["body"]).encode("utf-8")
@@ -135,6 +140,8 @@ class MockFusionSolarAPI(FusionSolarAPI):
 
     def __init__(self, profile: dict):
         self.mock_profile = validate_profile(profile)
+        self.frame_index = 0
+        self._pending_frame = None
         self.unexpected_requests = []
         super().__init__(f"mock-{profile['id']}", "MOCK_RUNTIME_UNUSED", "example.invalid", None)
         self.session.close()
@@ -143,6 +150,38 @@ class MockFusionSolarAPI(FusionSolarAPI):
         self.data_host = "example.invalid"
         self.station = profile["station"]["dn"]
         self.station_name = profile["station"]["name"]
+        self._apply_frame()
+
+    @property
+    def frame_id(self):
+        frames = self.mock_profile.get("frames", [])
+        return frames[self.frame_index]["id"] if frames else None
+
+    def queue_frame(self, operation):
+        """Schedule only an allowlisted transition, consumed atomically by next poll."""
+        with self._session_lock:
+            self._ensure_session_open()
+            frames = self.mock_profile.get("frames", [])
+            if not frames or operation not in ("advance", "reset"):
+                raise ValueError("Not a transition profile or invalid operation")
+            if self._pending_frame is not None:
+                raise ValueError("A frame transition is already pending")
+            target = 0 if operation == "reset" else self.frame_index + 1
+            if target >= len(frames):
+                raise ValueError("Final frame reached; reset explicitly")
+            self._pending_frame = target
+
+    def _apply_frame(self):
+        resolved = deepcopy(self.mock_profile)
+        frames = resolved.get("frames", [])
+        if frames:
+            frame = frames[self.frame_index]
+            for response in frame.get("responses", []):
+                route = resolved["routes"][response["route"]]
+                route.update({key: value for key, value in response.items() if key != "route"})
+            if frame.get("invalidate_battery_config", False):
+                self._battery_config_cache = {}
+        self.session.profile = resolved
 
     def login(self):
         with self._session_lock:
@@ -162,7 +201,8 @@ class MockFusionSolarAPI(FusionSolarAPI):
         with self._session_lock:
             self._ensure_session_open()
             self.session.close()
-            self.session = OfflineSession(self.mock_profile, self.unexpected_requests)
+            current = self.session.profile
+            self.session = OfflineSession(current, self.unexpected_requests)
             self.connected = False
             self.dp_session = ""
             self.csrf = self.csrf_time = None
@@ -179,7 +219,12 @@ class MockFusionSolarAPI(FusionSolarAPI):
             raise UnexpectedMockRequest("; ".join(self.unexpected_requests))
 
     def get_devices(self):
-        try:
-            return super().get_devices()
-        finally:
-            self._assert_matched()
+        with self._session_lock:
+            if self._pending_frame is not None:
+                self.frame_index = self._pending_frame
+                self._pending_frame = None
+                self._apply_frame()
+            try:
+                return super().get_devices()
+            finally:
+                self._assert_matched()

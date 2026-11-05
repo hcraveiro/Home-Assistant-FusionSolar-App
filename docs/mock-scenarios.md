@@ -32,6 +32,8 @@ Initial runtime profiles:
 | `isitepower-mains-import` | Mixed issue #101 written-report fields plus synthetic runtime completion. Actual HA 2026.10.4 registers **2 devices / 73 entities** and verifies **0.64 kW import**, no export inference, stable IDs on refresh/reload/unload/setup. Missing readings stay unavailable (API `None`), not zero. |
 | `single-battery-config-denied` | 1 installation, 1 inverter, 1 battery: **3 devices / 81 entities**. Optional configuration is HTTP 403; core telemetry remains available. |
 | `two-inverters-two-batteries` | 1 installation, 2 inverters, 2 separately owned batteries, 2 optimizers: **7 devices / 144 entities**. Includes forced-charge power, duration and energy and daytime optimizer temperature. |
+| `transitions-energy` | 1 installation, 1 inverter, 1 battery: **3 devices / 92 entities**. Actual lifetime HTTP response values/invalidity/correction/zero/recovery, described below. |
+| `transitions-failures` | 1 installation, 1 inverter, 1 battery: **3 devices / 92 entities**. Optional configuration, historical-energy and required core failures/recovery, described below. |
 
 Counts include the two native forecast entities. On a development HA with Recorder
 but no useful mock production history, those two derived forecasts may be
@@ -39,7 +41,7 @@ but no useful mock production history, those two derived forecasts may be
 API sensors should still have the expected values. Static profiles intentionally
 do not invent a solar-production history to manufacture a forecast.
 
-These are static repeatable HTTP profiles, **not** coherent recorded installations
+The first three profiles above are static repeatable HTTP profiles, **not** coherent recorded installations
 or an interactive charge/discharge simulator. Rich-profile topology and sampling
 are synthetic; selected configuration/detail values come from sanitized captures.
 The `MOCK_RUNTIME_*` station/device identities and explicit MOCK device names
@@ -59,6 +61,76 @@ environment variable and restart the development HA. Removing the profiles or
 opt-in while entries remain configured deliberately leaves those entries unable
 to load; it must not turn them into real-account entries.
 
+### Deterministic runtime HTTP transitions (development only)
+
+Two additional profiles use independent `MOCK_RUNTIME_TRANS_ENERGY_*` and
+`MOCK_RUNTIME_TRANS_FAILURES_*` station **and device** namespaces, disjoint from
+all static entries. Their values/faults/authentication are explicitly fictional;
+response shapes do not constitute captured vendor behavior or CAPTCHA coverage.
+
+- `transitions-energy`: lifetime production **35 → 34 → `"--"` → JSON null →
+  missing total → actual zero → 34**. Invalid readings make only that energy
+  sensor unavailable; valid power telemetry remains available. Existing kWh,
+  IDs and `total_increasing` policy are deliberately unchanged. No Recorder
+  statistics/reset-policy correctness is claimed by this scenario.
+- `transitions-failures`: healthy → optional battery-config HTTP 403 → recovery →
+  optional config HTTP 418 → recovery → historical lifetime energy-balance HTTP
+  418 → recovery → required energy-flow HTTP 418 → recovery →
+  required timeout → recovery → required HTTP 500 → recovery → required connection
+  failure → recovery. Optional failures leave valid telemetry available;
+  historical energy failures affect only that total/dependent energy results,
+  leaving current power valid (historical authentication failures are not made
+  optional). Required energy-flow failures make all coordinator-backed API
+  sensors unavailable and recover on the next healthy frame. These are persistent per-frame faults, so the existing
+  bounded coordinator retry also sees the failure. There is no retry-until-success
+  generator or network fallback. Synthetic HTTP 418 is not a diagnosis of vendor
+  anti-bot policy or a real authentication challenge.
+
+After creating either profile via the mock config flow, an **administrator-only**
+`fusion_solar_app.mock_scenario` action appears under **Tools → Actions**. Obtain
+its config entry ID from the integration's entry URL or the config-entry API;
+this is not an entity/device ID. Call:
+
+```yaml
+action: fusion_solar_app.mock_scenario
+data:
+  config_entry_id: YOUR_MOCK_CONFIG_ENTRY_ID
+  operation: advance
+```
+
+Use `operation: reset` to return to the first frame. The last frame does not wrap;
+advancing past it is rejected. No JSON editing/reload per frame is necessary.
+Ordinary polls repeat the selected frame. A blocking action completes after a
+real coordinator refresh (including an intentionally failed refresh), not after
+writing a sensor state. The action uses `async_refresh` rather than debounced
+`async_request_refresh`, so rapid explicit steps cannot silently coalesce.
+Actions serialize per entry; an instance-local API lock applies a pending frame
+atomically immediately before the next production `get_devices()` reader.
+
+Only these two operations and an exact loaded transition-mock entry are accepted;
+unknown fields, real/static entries and missing environment opt-in are rejected.
+The service registers only while a successfully loaded transition entry exists
+and disappears after the last one unloads. Normal entries use unchanged APIs.
+Session reset preserves the current frame and pending operation; integration
+reload/new setup intentionally returns to frame zero (scenario state is volatile).
+Reset is the explicit inverse of advance. Optional-config frames explicitly clear
+**only the mock instance's** hourly battery-config cache on entry; ordinary polls
+still use normal caching. No hardware controls or real sessions can be targeted.
+
+Profile format remains `schema_version: 1`. Optional `frames` is a list of unique
+safe `id` names, `responses`, and optional boolean `invalidate_battery_config`.
+Each response references an existing zero-based `route` index and either an inline
+`body` with optional HTTP `status`, or exactly `exception: timeout` / `connection`.
+Exceptions instantiate only `requests.Timeout` / `requests.ConnectionError` after
+normal origin/method/path/query/body matching. Frames cannot add routes, change
+request matching, execute code, or use remote files. Overrides are always applied
+against the base routes, not accumulated from previous frames. Unexpected requests
+remain recorded and re-raised even if an optional production reader catches them.
+The no-`frames` format and static behavior remain backward compatible.
+
+Do not deploy/restart a shared development instance during an incident or another
+agent's work. Run the isolated checker below first; it never mounts live config.
+
 ### Actual HA lifecycle verification
 
 ```sh
@@ -74,7 +146,11 @@ setup → coordinator → complete production `get_devices()` → sensor platfor
 device/entity registries and HA state machine. It checks profile topology,
 corrected values/units/icons, refresh, reload, unload/setup and stable IDs, with
 zero external network attempts. It is distinct from the class-only smoke check
-below. UI rendering, Recorder statistics, vendor authentication, dynamic topology
+below. It also calls the registered runtime action through every HTTP transition,
+checks local-versus-global availability and recovery, unchanged IDs/classes/units,
+service rejection boundaries, and a reset before lifecycle regression checks.
+No test substitutes a `Device.state` snapshot for these transitions.
+UI rendering, Recorder statistics, vendor authentication, dynamic topology
 and real hardware behavior still require their own validation.
 
 ## Focused offline replay tests
@@ -137,7 +213,7 @@ slave battery returns identical fields.
 
 The five focused replay profiles exercise real flow fetching, DN/parent discovery,
 battery/optimizer assembly and sensor properties/update methods, with lightweight
-HA/coordinator pytest stubs. The two **runtime** profiles and lifecycle checker
+HA/coordinator pytest stubs. The five **runtime** profiles and lifecycle checker
 above additionally exercise complete `get_devices()`, real config entries,
 coordinator updates, platforms, registries and states. Neither layer claims
 vendor login, Recorder/statistics, UI rendering or real hardware validation.
@@ -156,10 +232,10 @@ covered there is not automatically covered by a persisted replay profile.
 | Late third battery / changed discovery order / ambiguous legacy primary | Ordered discovery frames asserting existing IDs stay assigned correctly and new entities do not duplicate old ones. Focused unit tests already cover these, but no complete replay profile yet. |
 | Stop mode and mode changes | Captured mode-specific payloads plus clearly synthetic transitions; current failure/recovery profiles are not evidence of real mode transitions. |
 | Optimizer conflicting or unknown inverter ownership | Captured ownership/topology if available, then adversarial synthetic mismatches. Current replay covers valid ownership; rejection cases remain in focused tests. |
-| Independent optional versus core endpoint failures | Expand beyond configuration 403 and missing optimizer sampling: malformed data, 418, timeout, required failure and genuine authentication expiry. |
+| Further optional/core failures | Runtime frames now cover optional config 403/418, required energy-flow 418/500/timeout/connection and recovery. Malformed payloads and genuine authentication expiry still need dedicated runtime profiles. |
 | iSitePower-M export / idle | [Issue #101 report](https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101#issuecomment-6650661460) confirms matching selected v2/v3 fields during **nonzero import only**. Runtime profile retains those reported fields with explicit synthetic completion, not a raw capture. Reverse, idle and conflicting directions remain unknown; actual export/idle captures are still needed. Endpoint remains v2. |
 | EU / other regions / authentication | Sanitized redirect/envelope shapes, expiry and recovery, with fictional tokens only; current profiles bypass login. |
-| Dynamic runtime / Recorder / UI | Static registration and refresh/reload/unload now pass in actual HA. Still add live topology changes, unavailable/recovery transitions, Recorder/statistics assertions and UI rendering checks. |
+| Dynamic topology / Recorder / UI | Registration, refresh/reload/unload and the fixed-topology HTTP unavailable/recovery transitions above pass in actual HA. Live topology changes, Recorder/statistics assertions and UI rendering checks still need dedicated validation. |
 
 ## Actual Home Assistant class smoke check
 
