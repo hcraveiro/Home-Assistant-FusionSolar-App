@@ -126,6 +126,40 @@ def test_invalid_non_html_json_is_connection_error(auth_module):
         api._request_json("GET", "https://example.invalid", context="test")
 
 
+@pytest.mark.parametrize("decoder_error", [json.JSONDecodeError, requests.exceptions.JSONDecodeError])
+@pytest.mark.parametrize("raw,expected_error,connected,optional", [
+    ("private-body-marker", "APIConnectionError", True, False),
+    ("private-body-marker", "APIConnectionError", True, True),
+    ("<html>private-body-marker</html>", "APIAuthError", False, False),
+    ("<html>private-body-marker</html>", "APIAuthError", False, True),
+])
+def test_json_decoder_errors_keep_classification_and_redaction(
+    auth_module, caplog, decoder_error, raw, expected_error, connected, optional
+):
+    response = make_response(text=raw)
+    error = decoder_error("private-decoder-marker", raw, 0)
+    response.json = Mock(side_effect=error)
+    api = make_api(auth_module, response)
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(getattr(auth_module, expected_error)) as caught:
+            api._request_json("GET", "https://example.invalid", context="test", optional=optional)
+
+    assert api.connected is connected
+    assert caught.value.__cause__ is error
+    assert "private-body-marker" not in caplog.text
+    assert "private-decoder-marker" not in caplog.text
+
+
+@pytest.mark.parametrize("error_type", [ValueError, TypeError, RuntimeError])
+def test_json_programming_errors_are_not_misclassified(auth_module, error_type):
+    response = make_response()
+    response.json = Mock(side_effect=error_type("programming error"))
+    api = make_api(auth_module, response)
+    with pytest.raises(error_type, match="programming error"):
+        api._request_json("GET", "https://example.invalid", context="test")
+
+
 def test_reset_session_clears_authentication_state(auth_module, monkeypatch):
     session = Mock()
     replacement = requests.Session()

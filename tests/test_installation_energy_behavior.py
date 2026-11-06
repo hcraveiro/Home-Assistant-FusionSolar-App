@@ -95,6 +95,25 @@ def test_invalid_flow_shapes_are_rejected(modules, payload):
         api._get_installation_flow_data()
 
 
+@pytest.mark.parametrize("payload", [
+    {"session": "private-response-marker"},
+    {"data": {"session": "private-response-marker"}},
+])
+def test_invalid_flow_structure_never_logs_session_or_response(modules, caplog, payload):
+    api = make_installation(modules)
+    api.session.cookies.get_dict.return_value = {"dp-session": "private-cookie-marker"}
+    api._request_json.return_value = (None, payload)
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(modules[2].APIDataStructureError):
+            api._get_installation_flow_data()
+
+    assert "unexpected structure" in caplog.text
+    assert "private-cookie-marker" not in caplog.text
+    assert "private-response-marker" not in caplog.text
+    api.session.cookies.get_dict.assert_not_called()
+
+
 def test_battery_discovery_uses_first_id_and_preserves_existing(modules):
     api = make_installation(modules)
     nodes = [{"name": "neteco.pvms.devTypeLangKey.energy_store", "devIds": ["battery-1"]}]

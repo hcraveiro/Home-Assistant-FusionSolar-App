@@ -52,6 +52,23 @@ def test_station_list_invalid_response(modules,payload):
     api=make_api(modules);api._request_json.return_value=(None,payload)
     with pytest.raises(modules[1].APIDataStructureError):api.get_station_list()
 
+@pytest.mark.parametrize("payload", [
+    {"success": False, "session": "private-response-marker"},
+    {"data": None, "session": "private-response-marker"},
+    {"data": {"list": "invalid", "session": "private-response-marker"}},
+])
+def test_station_list_failures_never_log_response_or_csrf(modules, caplog, payload):
+    api = make_api(modules)
+    api.csrf = "private-csrf-marker"
+    api._request_json.return_value = (None, payload)
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(modules[1].APIDataStructureError):
+            api.get_station_list()
+    assert caplog.records
+    assert "private-response-marker" not in caplog.text
+    assert "private-csrf-marker" not in caplog.text
+
+
 def test_station_list_success_and_post_payload(modules):
     api=make_api(modules);api._request_json.return_value=(None,{"success":True,"data":{"list":[{"dn":"a"}]}})
     assert api.get_station_id()=="a"

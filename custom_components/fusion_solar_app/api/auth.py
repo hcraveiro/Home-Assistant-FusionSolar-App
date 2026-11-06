@@ -723,7 +723,8 @@ class FusionSolarAuthMixin:
 
         try:
             payload = response.json()
-        except json.JSONDecodeError as err:
+        except (requests.exceptions.JSONDecodeError, json.JSONDecodeError) as err:
+            # Requests may use simplejson; the offline transport uses stdlib JSON.
             content_type = response.headers.get("Content-Type", "")
             body_preview = response.text[:300]
 

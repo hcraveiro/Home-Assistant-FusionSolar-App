@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Dict, Optional
 from urllib.parse import unquote, urlencode
 
+import requests
+
 from ..const import DATA_REFERER_URL, SOCIAL_CONTRIBUTION_URL
 from ..utils import extract_numeric
 from .exceptions import APIAuthError, APIConnectionError, APIDataStructureError
@@ -43,7 +45,11 @@ class FusionSolarSocialMixin:
         social_contribution_url = (
             f"https://{self.data_host}{SOCIAL_CONTRIBUTION_URL}?{urlencode(params)}"
         )
-        _LOGGER.debug("Getting Social Contribution at: %s", social_contribution_url)
+        _LOGGER.debug(
+            "Getting Social Contribution at: https://%s%s",
+            self.data_host,
+            SOCIAL_CONTRIBUTION_URL,
+        )
 
         response = self.session.get(
             social_contribution_url,
@@ -53,27 +59,25 @@ class FusionSolarSocialMixin:
 
         if response.status_code != 200:
             _LOGGER.error(
-                "Social contribution request failed. Status=%s Body=%s",
+                "Social contribution request failed. Status=%s",
                 response.status_code,
-                response.text[:300],
             )
             raise APIConnectionError("Social contribution request failed")
 
         try:
             social_contribution_data = response.json()
-        except json.JSONDecodeError as err:
+        except (requests.exceptions.JSONDecodeError, json.JSONDecodeError) as err:
+            # Requests may use simplejson; the offline transport uses stdlib JSON.
             _LOGGER.error(
-                "Social contribution did not return JSON. Status=%s Content-Type=%s Body=%s",
+                "Social contribution did not return JSON. Status=%s Content-Type=%s",
                 response.status_code,
                 response.headers.get("Content-Type"),
-                response.text[:300],
             )
             raise APIAuthError("Social contribution did not return JSON") from err
 
         if "data" not in social_contribution_data:
             _LOGGER.error(
-                "Social contribution response had an unexpected structure: %s",
-                str(social_contribution_data)[:500],
+                "Social contribution response had an unexpected structure."
             )
             raise APIDataStructureError(
                 "Social contribution response did not contain data"
