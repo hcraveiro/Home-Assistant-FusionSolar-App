@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import time
 from typing import Any
 
 from .models import Device, DeviceType
@@ -167,11 +168,15 @@ class FusionSolarOptimizerMixin:
         return result.get("data")
 
     def get_optimizer_devices(self) -> list[Device]:
-        """Discover topology once and poll all optimizer DNs in a single request."""
+        """Cache discovered topology, retry empty discovery after 15 minutes."""
         if not self.station:
             return []
         topology = getattr(self, "_optimizers", None)
-        if topology is None:
+        if topology is None or (
+            not topology and time.monotonic() >= getattr(self, "_optimizer_next_probe", 0)
+        ):
+            # An expired empty result must not hide malformed counts forever.
+            self._optimizers = None
             counts = self._optimizer_request(
                 "GET", _COUNTS, params={"stationDn": self.station}
             )
@@ -182,6 +187,7 @@ class FusionSolarOptimizerMixin:
                 return []
             if count == 0:
                 self._optimizers = {}
+                self._optimizer_next_probe = time.monotonic() + 900
                 return []
             try:
                 layout = self._optimizer_request(
@@ -209,8 +215,10 @@ class FusionSolarOptimizerMixin:
                 except Exception as ex:
                     _LOGGER.debug("Logical optimizer discovery unavailable: %s", type(ex).__name__)
                     topology = {}
-            # Retry a missing or malformed topology at the next refresh.
+            # Bound optional discovery traffic while allowing later recovery.
             if not topology:
+                self._optimizers = {}
+                self._optimizer_next_probe = time.monotonic() + 900
                 return []
             self._optimizers = topology
         if not topology:

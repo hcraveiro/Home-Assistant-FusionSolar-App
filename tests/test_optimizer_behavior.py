@@ -2,6 +2,7 @@
 
 import html
 import json
+import time
 from pathlib import Path
 import importlib.util
 import sys
@@ -235,13 +236,79 @@ def test_malformed_count_response_does_not_cache_empty_topology(optimizer_module
 
 
 @pytest.mark.parametrize("count", [0, "0", 0.0])
-def test_confirmed_zero_optimizer_count_is_cached(optimizer_module, count):
+def test_confirmed_zero_optimizer_count_retries_at_deadline(optimizer_module, count, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     api = FakeOptimizerAPI(optimizer_module, [], count=count)
     assert api.get_optimizer_devices() == []
     assert api._optimizers == {}
     api.count = 2
+    clock[0] = 899.999
     assert api.get_optimizer_devices() == []
     assert len(api._calls) == 1
+    clock[0] = 900.0
+    api.get_optimizer_devices()
+    assert len(api._optimizers) == 2
+    assert sum(c[1].endswith("station-simple-devicedata") for c in api._calls) == 2
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_empty_topology_retries_at_deadline(optimizer_module, logical_tree, monkeypatch, failed):
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    api = FakeOptimizerAPI(optimizer_module, [], count=12)
+    request = api._optimizer_request
+    available = [False]
+
+    def discovery(method, endpoint, **kwargs):
+        if endpoint.endswith("/layout") or endpoint.endswith("device-tree-page"):
+            api._calls.append((method, endpoint, kwargs))
+            if failed and not available[0]:
+                raise RuntimeError("optional layout unavailable")
+            return logical_tree if available[0] and endpoint.endswith("device-tree-page") else {}
+        return request(method, endpoint, **kwargs)
+
+    api._optimizer_request = discovery
+    assert api.get_optimizer_devices() == []
+    assert sum(c[1].endswith("device-tree-page") for c in api._calls) == 1
+    available[0] = True
+    clock[0] = 999.999
+    assert api.get_optimizer_devices() == []
+    assert sum(c[1].endswith("device-tree-page") for c in api._calls) == 1
+    clock[0] = 1000.0
+    api.get_optimizer_devices()
+    assert len(api._optimizers) == 12
+    assert sum(c[1].endswith("device-tree-page") for c in api._calls) == 2
+    clock[0] = 2000.0
+    api.get_optimizer_devices()
+    assert sum(c[1].endswith("device-tree-page") for c in api._calls) == 2
+
+
+def test_expired_zero_then_malformed_count_recovers_next_refresh(optimizer_module, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    api = FakeOptimizerAPI(optimizer_module, [], count=0)
+    api.get_optimizer_devices()
+    clock[0] = 900.0
+    api.count = "--"
+    assert api.get_optimizer_devices() == []
+    assert api._optimizers is None
+    api.count = 2
+    api.get_optimizer_devices()
+    assert len(api._optimizers) == 2
+    assert sum(c[1].endswith("station-simple-devicedata") for c in api._calls) == 3
+
+
+def test_physical_layout_never_calls_logical_fallback(api):
+    api.get_optimizer_devices()
+    assert not any(c[1].endswith("device-tree-page") for c in api._calls)
+
+
+def test_no_station_skips_optimizer_discovery(optimizer_module):
+    api = FakeOptimizerAPI(optimizer_module, [], count=2)
+    api.station = None
+    assert api.get_optimizer_devices() == []
+    assert api._calls == []
 
 
 def test_sampling_request_uses_json_array_and_csrf(optimizer_module):
