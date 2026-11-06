@@ -90,6 +90,17 @@ def test_ambiguous_multi_inverter_migration_is_skipped():
     assert changes == {}
 
 
+def test_conflicting_registered_inverter_dns_are_not_arbitrarily_resolved():
+    coordinator, config_entry = _make_context(["inverter-one", "inverter-two"])
+    device = _device("inverter-one")
+    device.identifiers.add(("fusion_solar_app", "fusion_plant-1_inverter_inverter-two"))
+    migrate, changes = _migration_function(
+        [_entity("sensor.original", "merged-device")], {"merged-device": device},
+    )
+    asyncio.run(migrate(object(), config_entry, coordinator))
+    assert changes == {}
+
+
 def test_single_inverter_migration_allows_unregistered_device():
     coordinator, config_entry = _make_context(["only-inverter"])
     migrate, changes = _migration_function(

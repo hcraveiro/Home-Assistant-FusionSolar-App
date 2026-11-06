@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from contextlib import nullcontext
 import logging
@@ -82,6 +83,9 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
         )
     
         self.lastAuthentication = None
+        # The session's thread lock protects individual executor calls, not the
+        # async gaps between fetch/retry/login. Drain a whole refresh on unload.
+        self._update_lock = asyncio.Lock()
     
         self.native_forecast_builder = NativeForecastBuilder(
             hass=hass,
@@ -99,7 +103,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name=f"{DOMAIN} ({config_entry.unique_id})",
-            update_method=self.async_update_data,
+            update_method=self._async_update_data_locked,
             update_interval=timedelta(seconds=self.poll_interval),
         )
     
@@ -175,6 +179,19 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             "Auto-selected FusionSolar station DN and stored it in the config entry"
         )
         
+    async def _async_update_data_locked(self) -> FusionSolarAPIData:
+        """Serialize complete refreshes, including executor retry/login gaps."""
+        async with self._update_lock:
+            if self._shutdown_requested:
+                raise UpdateFailed("FusionSolar coordinator is shutting down")
+            return await self.async_update_data()
+
+    async def async_shutdown(self) -> None:
+        """Stop new HA refreshes, then drain an active refresh before API close."""
+        await super().async_shutdown()
+        async with self._update_lock:
+            pass
+
     def _call_api_serialized(self, method):
         """Prevent session renewal from replacing HTTP state during a request."""
         lock = getattr(self.api, "_session_lock", None)
@@ -329,6 +346,13 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed(
                     "Login requires CAPTCHA. Please reconfigure the integration."
                 ) from captcha_err
+            except APIAuthError as auth_err:
+                # A stale session gets one automatic renewal. If login or the
+                # required fetch still rejects it, stop polling and let HA ask
+                # for credentials rather than repeating login on every poll.
+                raise ConfigEntryAuthFailed(
+                    "Authentication failed after session renewal. Please reauthenticate."
+                ) from auth_err
             except Exception as retry_err:
                 raise UpdateFailed(f"Re-login failed: {retry_err}") from retry_err
     

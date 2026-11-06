@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.service import async_register_admin_service
 
+from .api import APIConnectionError
 from .const import CONF_MOCK_PROFILE, DOMAIN
 from .mock_api import MockFusionSolarAPI
 from .mock_profile import PROFILE_DIR_ENV
@@ -37,10 +38,14 @@ def register_mock_service(hass):
                     or not runtime.coordinator.api.mock_profile.get("frames")):
                 raise HomeAssistantError("Only loaded, opted-in mock transition entries may be targeted")
             coordinator = runtime.coordinator
+            if getattr(coordinator, "_shutdown_requested", False):
+                raise HomeAssistantError("Mock entry is unloading")
             try:
                 await hass.async_add_executor_job(coordinator.api.queue_frame, call.data["operation"])
-            except ValueError as err:
+            except (ValueError, APIConnectionError) as err:
                 raise HomeAssistantError(str(err)) from err
+            if getattr(coordinator, "_shutdown_requested", False):
+                raise HomeAssistantError("Mock entry is unloading")
             # Bypass refresh debouncing: a blocking service call completes after
             # the real reader/coordinator poll (including declared failure).
             await coordinator.async_refresh()

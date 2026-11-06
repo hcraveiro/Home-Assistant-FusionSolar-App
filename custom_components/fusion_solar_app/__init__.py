@@ -132,20 +132,20 @@ async def _async_migrate_inverter_unique_ids(
 
         # Match the existing HA device to the inverter it represented before
         # multi-inverter discovery. The first flow node is not stable.
-        matched_dn = None
+        matched_dns = set()
         if entity_entry.device_id:
             device = devices.async_get(entity_entry.device_id)
             if device:
                 for identifier_domain, identifier in device.identifiers:
                     if identifier_domain != DOMAIN:
                         continue
-                    for safe_dn, original_dn in valid_dns.items():
+                    for original_dn in valid_dns.values():
                         if identifier.endswith(f"_inverter_{original_dn}"):
-                            matched_dn = original_dn
-                            break
-                    if matched_dn:
-                        break
+                            matched_dns.add(original_dn)
 
+        # Old/merged registry devices can carry more than one inverter DN.
+        # Set iteration order cannot establish which owned the legacy telemetry.
+        matched_dn = next(iter(matched_dns)) if len(matched_dns) == 1 else None
         if matched_dn is None and len(inverter_dns) == 1:
             matched_dn = inverter_dns[0]
 

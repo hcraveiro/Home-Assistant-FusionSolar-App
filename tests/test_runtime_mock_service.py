@@ -83,3 +83,22 @@ async def test_service_rejects_static_mock_and_end_of_sequence(service):
         await call()
     module.remove_mock_service_if_unused(hass)
     assert module.SERVICE not in handlers
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_shutdown_before_queueing(service):
+    _, _, coordinator, _, call, error = service
+    coordinator._shutdown_requested = True
+    with pytest.raises(error, match="unloading"):
+        await call()
+    assert coordinator.api._pending_frame is None
+    coordinator.async_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_service_translates_closed_api_error(service):
+    _, _, coordinator, _, call, error = service
+    coordinator.api.close()
+    with pytest.raises(error, match="closed"):
+        await call()
+    coordinator.async_refresh.assert_not_awaited()
