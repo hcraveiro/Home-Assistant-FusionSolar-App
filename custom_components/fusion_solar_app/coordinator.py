@@ -22,6 +22,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import (
     APIAuthCaptchaError,
     APIAuthError,
+    APIAuthRejectedError,
     APIConnectionError,
     APIDataStructureError,
     Device,
@@ -346,10 +347,10 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed(
                     "Login requires CAPTCHA. Please reconfigure the integration."
                 ) from captcha_err
-            except APIAuthError as auth_err:
-                # A stale session gets one automatic renewal. If login or the
-                # required fetch still rejects it, stop polling and let HA ask
-                # for credentials rather than repeating login on every poll.
+            except APIAuthRejectedError as auth_err:
+                # Only affirmative rejection is permanent after one renewal.
+                # APIAuthError also represents regional login outages/protocol
+                # failures; those must remain UpdateFailed and retry later.
                 raise ConfigEntryAuthFailed(
                     "Authentication failed after session renewal. Please reauthenticate."
                 ) from auth_err

@@ -405,7 +405,7 @@ def test_eu5_406_preserves_legacy_fallback_without_exposing_error_message(
     })
 
     with caplog.at_level("DEBUG"):
-        with pytest.raises(auth_module.APIAuthError):
+        with pytest.raises(auth_module.APIAuthRejectedError):
             api._login_eu5()
 
     assert api.session.post.call_count == 2

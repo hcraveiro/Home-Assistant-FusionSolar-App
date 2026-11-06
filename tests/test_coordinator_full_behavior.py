@@ -64,6 +64,8 @@ def coordinator_module():
         pass
     class APIAuthError(Exception):
         pass
+    class APIAuthRejectedError(APIAuthError):
+        pass
     class APIConnectionError(Exception):
         pass
     class APIDataStructureError(Exception):
@@ -78,6 +80,7 @@ def coordinator_module():
     module(f"{PREFIX}.api",
            APIAuthCaptchaError=APIAuthCaptchaError,
            APIAuthError=APIAuthError,
+           APIAuthRejectedError=APIAuthRejectedError,
            APIConnectionError=APIConnectionError,
            APIDataStructureError=APIDataStructureError,
            Device=FakeDevice, DeviceType=DeviceType, FusionSolarAPI=Mock)

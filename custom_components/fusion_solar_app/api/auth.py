@@ -21,7 +21,7 @@ from ..const import (
     PUBKEY_URL,
 )
 from ..utils import encrypt_password, generate_nonce
-from .exceptions import APIAuthCaptchaError, APIAuthError, APIConnectionError
+from .exceptions import APIAuthCaptchaError, APIAuthError, APIAuthRejectedError, APIConnectionError
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -337,7 +337,7 @@ class FusionSolarAuthMixin:
             # Only raise invalid credentials after both modes have been tried.
             if not use_service and last_error_code == "406":
                 self.connected = False
-                raise APIAuthError("Invalid username or password.")
+                raise APIAuthRejectedError("Invalid username or password.")
 
         self.connected = False
         raise APIAuthError(
@@ -708,7 +708,15 @@ class FusionSolarAuthMixin:
                 response.status_code,
             )
             self.connected = False
-            raise APIAuthError(f"{context} returned an expired or invalid session")
+            # Login/protocol errors and HTML heuristics use the broad base
+            # class. Only an explicit required-endpoint rejection establishes
+            # that a completed renewal still lacks authorization.
+            error = (
+                APIAuthRejectedError
+                if not optional and response.status_code in (401, 403)
+                else APIAuthError
+            )
+            raise error(f"{context} returned an expired or invalid session")
 
         if response.status_code != 200:
             log = _LOGGER.debug if optional else _LOGGER.error

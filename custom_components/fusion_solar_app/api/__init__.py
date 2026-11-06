@@ -15,6 +15,7 @@ from .energy_balance import FusionSolarEnergyBalanceMixin
 from .exceptions import (
     APIAuthCaptchaError,
     APIAuthError,
+    APIAuthRejectedError,
     APIConnectionError,
     APIDataStructureError,
 )

@@ -94,13 +94,27 @@ The local Solcast-shaped source is fictional; no Solcast integration is installe
 Native Recorder forecast accuracy/history is outside this checker.
 
 Required HTTP 401 responses are injected at the offline session boundary, so the
-production HTTP reader raises `APIAuthError`. One automatic session renewal is
-allowed. A second auth rejection (from login or the required fetch) must remain
-`ConfigEntryAuthFailed`, allowing HA's actual coordinator to start one non-CAPTCHA
-reauth flow and stop scheduled polling. A transient timeout still makes exactly
-two required fetch attempts, with no session reset/login or reauth, and recovers
-on a later successful refresh. Data-structure/other retry failures remain
-`UpdateFailed`; the existing CAPTCHA sequence is unchanged.
+production reader raises `APIAuthRejectedError`, a subtype of `APIAuthError`.
+One automatic session renewal is allowed. Only an affirmative rejection during
+that attempt becomes `ConfigEntryAuthFailed`: required-reader HTTP 401/403 or the
+existing EU5 invalid-credentials code 406 after both login modes. HA then starts
+one non-CAPTCHA reauth flow and stops scheduled polling. Optional 403 handling is
+unchanged and is never marked as affirmative required-endpoint rejection.
+
+**The broad `APIAuthError` is not proof of permanent failure.** JP5/LA5 login
+503/429, malformed login replies, missing redirects/cookies, EU5 malformed pubkey
+JSON and ambiguous HTML/auth-page heuristics remain retryable `UpdateFailed`
+after the bounded renewal attempt. No regional request ordering is changed.
+Unknown login/protocol failures are deliberately not promoted to permanent
+credential rejection. The existing CAPTCHA sequence remains unchanged.
+
+Twelve synthetic renewal cases invoke the real JP5/LA5/EU5 login methods with
+only HTTP replies substituted. They cover login 503/429/non-JSON/timeout,
+JP5 redirect 503/429, LA5 missing redirect and EU5 pubkey 503/429/non-JSON. The
+actual-HA checker verifies one reset/renewal, no reauth flow, scheduled polling
+retained, later recovery and stable IDs for each case. A transient required-fetch
+timeout separately makes two fetch attempts with zero re-logins. These are
+protocol-failure regressions, not actual account authentication verification.
 
 ### Concurrency, unload and authorization
 

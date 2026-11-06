@@ -329,7 +329,8 @@ async def check_options(report):
 async def check_authentication(report):
     from homeassistant.exceptions import ConfigEntryAuthFailed
     from homeassistant.helpers.update_coordinator import UpdateFailed
-    from custom_components.fusion_solar_app.api import APIAuthError
+    from custom_components.fusion_solar_app.api import APIAuthError, APIAuthRejectedError
+    from login_protocol_cases import LOGIN_PROTOCOL_CASES, LoginProtocolReplies
     from custom_components.fusion_solar_app.mock_profile import load_profile
     from custom_components.fusion_solar_app.mock_api import OfflineSession
 
@@ -399,8 +400,38 @@ async def check_authentication(report):
                 require(not hass.config_entries.flow.async_progress(), "Transient failure started reauth")
                 await coord.async_refresh()
                 require(coord.last_update_success, "Transient failure did not recover")
-                # Login itself rejecting credentials must also retain auth class.
-                with patch.object(api, "get_devices", side_effect=APIAuthError("MOCK_RUNTIME expired")), patch.object(api, "login", side_effect=APIAuthError("MOCK_RUNTIME rejected")):
+                # Invoke real regional login methods during actual DUC renewal.
+                # Only the offline HTTP reply boundary is substituted. Broad
+                # APIAuthError from these methods must not stop scheduled polls.
+                protocol_results = report["regional_login_protocol"] = []
+                saved_ids = identities(hass, entry)
+                for region, scenario in LOGIN_PROTOCOL_CASES:
+                    replies = LoginProtocolReplies(region, scenario)
+                    real_login = getattr(api, "_login_" + region)
+                    login_attempts = []
+                    def regional_login():
+                        login_attempts.append(region)
+                        return real_login()
+                    def protocol_reply(session, request, **kwargs):
+                        return replies.response(request.method, request.url)
+                    with patch.object(OfflineSession, "send", protocol_reply), patch.object(api, "login", regional_login), patch.object(api, "reset_session", wraps=api.reset_session) as resets:
+                        await coord.async_refresh()
+                        require(resets.call_count == 1, "Regional failure caused repeated session resets")
+                    require(isinstance(coord.last_exception, UpdateFailed), f"{region}/{scenario}: protocol failure required reauth")
+                    require(len(login_attempts) == 1, "Regional failure caused a login flood")
+                    replies.assert_bounded()
+                    require(not hass.config_entries.flow.async_progress(), "Regional failure started reauth")
+                    require(coord._unsub_refresh is not None, "Regional failure stopped scheduled polling")
+                    protocol_results.append({"region": region, "scenario": scenario,
+                                             "classification": type(coord.last_exception).__name__,
+                                             "cause": type(coord.last_exception.__cause__).__name__,
+                                             "renewal_attempts": len(login_attempts), "http_requests": len(replies.calls)})
+                    await coord.async_refresh()
+                    require(coord.last_update_success, "Regional outage failed to recover on later poll")
+                    require(identities(hass, entry) == saved_ids, "Regional outage changed entity identities")
+                # Only an affirmative credential rejection, not a generic login
+                # protocol error, is sufficient to require manual credentials.
+                with patch.object(api, "get_devices", side_effect=APIAuthError("MOCK_RUNTIME expired")), patch.object(api, "login", side_effect=APIAuthRejectedError("MOCK_RUNTIME rejected")):
                     try:
                         await coord.async_update_data()
                     except ConfigEntryAuthFailed:
