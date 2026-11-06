@@ -42,6 +42,7 @@ from .const import (
     FORECAST_PROVIDER_SOLCAST,
     FUSION_SOLAR_HOST,
 )
+from .identity import legacy_device_identifier, legacy_entity_unique_id
 from .forecast import (
     ForecastProvider,
     FusionSolarForecastData,
@@ -239,7 +240,8 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
         ):
             dns = {
                 identifier[len(prefix):]
-                for identifier_domain, identifier in device.identifiers
+                for identifier_domain, scoped_identifier in device.identifiers
+                for identifier in (legacy_device_identifier(self.config_entry, scoped_identifier),)
                 if identifier_domain == DOMAIN and identifier.startswith(prefix)
                 and identifier[len(prefix):] not in {"", "unknown_battery"}
             }
@@ -260,12 +262,13 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
         ):
             if entity.platform != DOMAIN:
                 continue
-            if entity.unique_id.startswith(legacy_prefixes):
+            unique_id = legacy_entity_unique_id(self.config_entry, entity.unique_id)
+            if unique_id.startswith(legacy_prefixes):
                 # These installation totals exist even on stations without a
                 # battery. Only per-device telemetry can identify a primary.
                 suffix = next(
-                    entity.unique_id[len(prefix):] for prefix in legacy_prefixes
-                    if entity.unique_id.startswith(prefix)
+                    unique_id[len(prefix):] for prefix in legacy_prefixes
+                    if unique_id.startswith(prefix)
                 )
                 if suffix in {"percentage", "capacity"} or suffix.startswith(
                     ("consumption_", "injection_")
@@ -273,7 +276,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                     continue
                 has_legacy_entities = True
                 legacy_dns.update(device_dns.get(entity.device_id, set()))
-            elif entity.unique_id.startswith(station_scope):
+            elif unique_id.startswith(station_scope):
                 secondary_dns.update(device_dns.get(entity.device_id, set()))
 
         candidates = set().union(*device_dns.values()) if device_dns else set()

@@ -89,7 +89,9 @@ def environment(integration):
     entry = Mock()
     entry.entry_id = "entry-1"
     entry.data = {"username": "fake"}
+    entry.options = {}
     entry.add_update_listener.return_value = Mock()
+    hass.config_entries.async_entries.return_value = [entry]
 
     coordinator = Mock()
     coordinator.api.connected = True
@@ -114,6 +116,19 @@ async def test_entry_setup_registers_runtime_and_platforms(integration, environm
     hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(
         entry, [module.PLATFORMS[0]]
     )
+
+
+@pytest.mark.asyncio
+async def test_identity_only_entry_update_does_not_recursively_reload(integration, environment):
+    module, _, _ = integration
+    hass, entry, _ = environment
+    assert await module.async_setup_entry(hass, entry)
+    entry.data = {**entry.data, "ha_identity": {"namespace": "", "entities": {}}}
+    await module._async_update_listener(hass, entry)
+    hass.config_entries.async_reload.assert_not_awaited()
+    entry.options = {"scan_interval": 180}
+    await module._async_update_listener(hass, entry)
+    hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
 
 
 @pytest.mark.asyncio

@@ -409,7 +409,8 @@ async def polling_policy(hass, clock):
 async def run(args):
     from homeassistant import loader
     from homeassistant.bootstrap import async_load_base_functionality
-    from homeassistant.config_entries import ConfigEntries
+    from homeassistant.config_entries import ConfigEntries, ConfigEntry, ConfigEntryDisabler
+    from types import MappingProxyType
     from homeassistant.const import __version__ as ha_version
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers import entity_registry as er
@@ -430,10 +431,20 @@ async def run(args):
         loader.async_setup(hass)
         hass.config_entries = ConfigEntries(hass, {})
         require(await async_load_base_functionality(hass), "HA base setup failed")
+        # The real native resolver now requires a config-entry owner. Model it
+        # through actual HA APIs, without loading an account or bypassing lookup.
+        owner = ConfigEntry(
+            version=1, minor_version=1, domain=DOMAIN, source="user",
+            entry_id="synthetic-performance", title="Synthetic forecast benchmark",
+            unique_id="synthetic-performance", data={}, options={},
+            disabled_by=ConfigEntryDisabler.USER,
+            discovery_keys=MappingProxyType({}), subentries_data=[],
+        )
+        await hass.config_entries.async_add(owner)
         registry = er.async_get(hass)
         source = registry.async_get_or_create(
             "sensor", DOMAIN, f"{DOMAIN}-synthetic-performance-source",
-            suggested_object_id="synthetic_panel_production_today")
+            config_entry=owner, suggested_object_id="synthetic_panel_production_today")
         require(source.entity_id == ENTITY, "unexpected synthetic registry ID")
         try:
             polling_clock = datetime.now()

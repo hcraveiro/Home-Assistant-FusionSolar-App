@@ -25,7 +25,10 @@ def _migration_function(entries, devices):
             if result is not None:
                 changes[entry.entity_id] = result["new_unique_id"]
 
+    from identity_test_support import identity_module
+
     namespace = {
+        **vars(identity_module()),
         "DOMAIN": "fusion_solar_app",
         "HomeAssistant": object,
         "ConfigEntry": object,
@@ -48,7 +51,7 @@ def _make_context(inverter_dns):
         controller_name="fusion",
         sanitize_id_segment=lambda value: str(value).lower(),
     )
-    return SimpleNamespace(api=api), SimpleNamespace(entry_id="entry-1")
+    return SimpleNamespace(api=api), SimpleNamespace(entry_id="entry-1", data={})
 
 
 def _entity(entity_id, device_id):
@@ -66,6 +69,23 @@ def _device(dn, entry_id="entry-1"):
         identifiers={("fusion_solar_app", f"fusion_plant-1_inverter_{dn}")},
         config_entry_id=entry_id,
     )
+
+
+def test_coexisting_legacy_inverter_is_aliased_without_registry_rename():
+    coordinator, config_entry = _make_context(["old-inverter"])
+    config_entry.data = {"ha_identity": {"namespace": "__entry_entry-1", "entities": {}}}
+    entity = _entity("sensor.original", "device-old")
+    old_id = entity.unique_id
+    migrate, changes = _migration_function([entity], {"device-old": _device("old-inverter")})
+    def update(entry, *, data):
+        entry.data = data
+    hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=update))
+    asyncio.run(migrate(hass, config_entry, coordinator))
+    assert changes == {}
+    assert entity.unique_id == old_id
+    assert config_entry.data["ha_identity"]["entities"] == {
+        "fusion_solar_app-fusion_plant-1_inv_old-inverter_inverter_internal_temperature": old_id,
+    }
 
 
 def test_migrate_legacy_entity_using_registered_device_not_flow_order():

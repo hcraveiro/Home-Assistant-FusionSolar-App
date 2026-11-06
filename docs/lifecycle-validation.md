@@ -24,10 +24,10 @@ install requirements. The validation environment can additionally mount its
 existing test dependencies read-only at `/deps` with `PYTHONPATH=/deps:/src` and
 `COVERAGE_CORE=pytrace` when running pytest. Select individual checks with repeated
 `--case registry`, `--case ambiguous`, `--case ambiguous-device`, `--case options`, `--case authentication`,
-`--case concurrency`, or `--case same-station` arguments. JSON is written to
-stdout; HA diagnostics and assertion tracebacks go to stderr. Any regression or
-attempted network access exits nonzero. `same-station` deliberately reports a
-known collision as `characterized_bug_decision_needed`, **not** as fixed.
+`--case concurrency`, `--case same-station`, or `--case mixed-owners` arguments.
+JSON is written to stdout; HA diagnostics and assertion tracebacks go to stderr.
+Any regression or attempted network access exits nonzero. Both same-station cases
+must pass the actual coexistence contract below; a known collision is not success.
 
 All test identities are fictional `MOCK_RUNTIME_` values. An `OfflineSession`
 without network adapters handles every data request; independent TCP, DNS and
@@ -133,13 +133,66 @@ before a scenario transition can be queued. No global/live service is called.
 This is bounded adversarial scheduling, not a proof for every thread interleaving
 or cancellation/failure at every await point.
 
-## Same station, two accounts: decision needed
+## Same station, two accounts: supported identity contract
 
-The ordinary account flow admits two different fictional usernames for the same
-fictional station. Although config-entry unique IDs include username, discovered
-sensor unique IDs contain station/device scope but not account scope. The checker
-records the overlap and actual registry ownership/entity counts after both setups.
-HA 2026.10.4 creates distinct devices per config entry; that alone does not make
+Two accounts may legitimately access the same plant. Both entries are admitted;
+users may disable unwanted devices through HA. API telemetry keys are unchanged.
+HA identities are resolved separately by `identity.py`:
+
+- The existing registry owner retains its legacy namespace. Secondary entries use
+  the immutable config-entry ID (`__entry_<entry_id>`), not username, host, account
+  DN, load order or an ephemeral `_2`. HA may still suffix displayed entity IDs.
+- A persistent `ha_identity` record is saved using `async_update_entry` for every
+  relevant station entry, including disabled/unloaded entries, before sensor
+  registration. Assignment has no await points. Existing registry ownership wins
+  over config-entry age; a disabled older entry cannot displace a registered owner.
+- Legacy ownership is per entity. A partially discovered historical 143/1 split
+  preserves all 144 old unique IDs, entity IDs, config-entry owners and device IDs;
+  only the missing counterparts receive scoped IDs. Exceptions are persistent and
+  never promoted to newly-free legacy IDs after the other account is removed.
+- Secondary device identifiers are updated **in place** through DeviceRegistry,
+  preserving registry IDs, entity associations, user metadata and parent IDs.
+  Plant, inverter/canonical DN, meter, battery/module, cluster and optimizer
+  identifiers and parent lookups share the same scope. HA 2026.10.4 already keeps
+  devices per config entry even when old identifiers overlap.
+- Ordinary sensors, both forecast entities and native Recorder source resolution
+  use one identity resolver. Recorder additionally verifies config-entry ownership;
+  a missing/wrong owner fails closed rather than reading another account's history.
+- Battery-primary restoration understands scoped registry IDs. Legacy inverter
+  telemetry in a coexisting entry is aliased to its existing registry unique ID,
+  not renamed; the single-entry inverter migration remains unchanged.
+- Metadata persistence and device migration are idempotent; a reload finishes a
+  partially updated device registry. Equivalent identity bookkeeping does not
+  reload another account; changed effective resolver settings do reload it, so a
+  formerly ignored counterpart can attach without a restart. Credentials/options
+  updates retain normal reload behavior.
+
+The standalone `same-station` case requires **144 entities and 7 devices per
+account**, disjoint entity unique IDs and device identifiers, correct owned
+physical parents and Recorder sources, preservation of the first entry, reverse
+reload, synthetic reauth with username change, options reload, fresh HA storage
+loads and removal of either account. The `mixed-owners` case first reproduces
+old 143/1 registration through ordinary HA platform APIs (temporarily disabling
+only the new assignment helper), then enables migration and requires 144/144,
+unchanged historical identities/user metadata/device IDs, migration with the other
+account still loaded, reverse reload, fresh HA and no legacy promotion on removal.
+A separate actual-HA case freezes a disabled/unloaded account before enabling it. No internal storage files are edited.
+
+These checks are offline, synthetic authentication/HTTP fixtures on actual HA
+2026.10.4, not live-account or cloud-authentication validation. Other topology
+families remain covered by the existing offline/unit fixtures; this is not a
+proof of every historical registry layout or crash interleaving. Different-station
+installations and seven-profile offline coexistence retain their existing IDs.
+No energy values/classes, parsers, cadence, auth protocol or forecast algorithm is
+changed by this identity layer.
+
+### Historical b18/b19 evidence, before the identity fix
+
+The original b18/b19 characterization admitted two different fictional usernames
+for the same fictional station. Although config-entry unique IDs included username,
+discovered sensor unique IDs contained station/device scope but not account scope.
+The checker then recorded overlap and actual registry ownership/entity counts.
+HA 2026.10.4 created distinct devices per config entry; that alone did not make
 sensor unique IDs account-isolated.
 
 In the disposable HA 2026.10.4 run, both entries reached loaded state. The first
@@ -150,8 +203,9 @@ second entry's installation device exists, but ignored sensors did not create
 its child devices). This is a demonstrated bug/unsupported configuration, not
 successful same-station coexistence.
 
-No IDs are silently rewritten and no new admission policy is introduced here.
-Maintainers must separately choose whether multiple accounts for the same station
-are supported, rejected, or share one canonical setup, and define any migration
-before changing released IDs. Distinct-station coexistence is a different case
-already exercised by `check_runtime_homeassistant.py --coexistence`.
+That historical checker reported `characterized_bug_decision_needed` and an overall
+`passed_with_known_collision`; those old results must not be reinterpreted as a
+successful coexistence test. The subsequently approved support/migration contract
+above replaces the pending policy decision, not the historical evidence.
+Distinct-station coexistence remains independently exercised by
+`check_runtime_homeassistant.py --coexistence`.

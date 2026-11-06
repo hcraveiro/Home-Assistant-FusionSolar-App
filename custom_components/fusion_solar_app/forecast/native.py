@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from ..api import Device, DeviceType
 from ..const import DOMAIN, FORECAST_PROVIDER_NATIVE
+from ..identity import entity_unique_id
 from .models import FusionSolarForecastData
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class NativeForecastBuilder:
     ) -> None:
         """Initialize the native forecast builder."""
         self.hass = hass
+        self.entry_id = entry_id
         self.step_minutes = step_minutes
         self.days = days
 
@@ -370,13 +372,16 @@ class NativeForecastBuilder:
     def _resolve_sensor_entity_id(self, device: Device) -> str | None:
         """Resolve the entity_id for a device sensor using the entity registry."""
         entity_registry = er.async_get(self.hass)
-        entity_unique_id = f"{DOMAIN}-{device.device_unique_id}"
-
-        return entity_registry.async_get_entity_id(
-            "sensor",
-            DOMAIN,
-            entity_unique_id,
-        )
+        entry = self.hass.config_entries.async_get_entry(self.entry_id)
+        if entry is None:
+            return None
+        unique_id = entity_unique_id(entry, f"{DOMAIN}-{device.device_unique_id}")
+        entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+        registered = entity_registry.async_get(entity_id) if entity_id else None
+        # Never read another account's Recorder history, even during migration.
+        if registered is None or registered.config_entry_id != self.entry_id:
+            return None
+        return entity_id
 
     async def _get_history_states(
         self,

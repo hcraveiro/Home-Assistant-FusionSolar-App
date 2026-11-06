@@ -555,35 +555,13 @@ async def check_concurrency(report):
 
 
 async def check_same_station(report):
-    from homeassistant.helpers import device_registry as dr, entity_registry as er
-    from custom_components.fusion_solar_app.mock_profile import load_profile
-    async with offline_account_boundary(load_profile(DUAL)):
-        with tempfile.TemporaryDirectory(prefix="fusionsolar-collision-", dir="/tmp") as directory:
-            async with home(directory) as hass:
-                first = await account_entry(hass, "MOCK_RUNTIME_ACCOUNT_A")
-                initial = identities(hass, first)
-                second = await account_entry(hass, "MOCK_RUNTIME_ACCOUNT_B")
-                first_after = identities(hass, first)
-                second_after = identities(hass, second)
-                api_a, api_b = coordinator(hass, first).api, coordinator(hass, second).api
-                discovered_a = {f"{DOMAIN}-{d.device_unique_id}" for d in coordinator(hass, first).data.devices}
-                discovered_b = {f"{DOMAIN}-{d.device_unique_id}" for d in coordinator(hass, second).data.devices}
-                overlap = discovered_a & discovered_b
-                require(overlap, "Same-station identity collision unexpectedly absent; revisit this characterization")
-                registry = er.async_get(hass)
-                owners = {uid: registry.async_get(registry.async_get_entity_id("sensor", DOMAIN, uid)).config_entry_id
-                          for uid in overlap if registry.async_get_entity_id("sensor", DOMAIN, uid)}
-                devices_a = dr.async_entries_for_config_entry(dr.async_get(hass), first.entry_id)
-                devices_b = dr.async_entries_for_config_entry(dr.async_get(hass), second.entry_id)
-                require(devices_a and devices_b and {d.id for d in devices_a}.isdisjoint(d.id for d in devices_b), "HA device-per-entry behavior changed")
-                report.update(status="characterized_bug_decision_needed", admitted_entries=2,
-                              first_entry=first.entry_id, second_entry=second.entry_id,
-                              overlapping_discovered_unique_ids=len(overlap), first_initial_entities=len(initial),
-                              first_entities_after=len(first_after), second_entities_after=len(second_after),
-                              registered_owner_counts={owner: list(owners.values()).count(owner) for owner in set(owners.values())},
-                              distinct_device_counts=[len(devices_a), len(devices_b)],
-                              decision="No ID rewrite/admission policy added. Decide same-station account policy and migration separately.")
-                require(not api_a.unexpected_requests and not api_b.unexpected_requests, "Collision characterization used undeclared HTTP")
+    from same_station_cases import check_same_station as run
+    await run(report)
+
+
+async def check_mixed_owners(report):
+    from same_station_cases import check_mixed_owners as run
+    await run(report)
 
 
 async def main():
@@ -593,7 +571,8 @@ async def main():
     checks = {"registry": check_registry, "ambiguous": lambda row: check_registry(row, True),
               "ambiguous-device": lambda row: check_registry(row, "conflicting-device"),
               "options": check_options, "authentication": check_authentication,
-              "concurrency": check_concurrency, "same-station": check_same_station}
+              "concurrency": check_concurrency, "same-station": check_same_station,
+              "mixed-owners": check_mixed_owners}
     parser.add_argument("--case", choices=checks, action="append")
     args = parser.parse_args()
     os.environ["FUSIONSOLAR_DEV_PROFILE_DIR"] = str(ROOT / "tests/fixtures/runtime_profiles")
@@ -625,7 +604,7 @@ async def main():
                     row.update(status="failed", error=f"{type(err).__name__}: {err}")
                     raise
             require(not report["network_attempts"], "Network attempt swallowed by an optional reader")
-        report["status"] = "passed_with_known_collision" if "same-station" in report["checks"] else "passed"
+        report["status"] = "passed"
     except Exception as err:
         report.update(status="failed", error=f"{type(err).__name__}: {err}")
         raise

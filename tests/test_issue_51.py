@@ -103,7 +103,10 @@ class DynamicSensorTests(unittest.TestCase):
             entry_id="entry",
             async_on_unload=self.unload_callbacks.append,
         )
+        from identity_test_support import identity_module
+
         namespace = {
+            **vars(identity_module()),
             "HomeAssistant": object,
             "ConfigEntry": object,
             "AddEntitiesCallback": object,

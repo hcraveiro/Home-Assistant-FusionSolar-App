@@ -74,6 +74,14 @@ You will need:
 
 The integration logs in using the same credentials you use in the FusionSolar App web frontend.
 
+Two different accounts may access the same station: each entry gets independent
+sensors and devices. Existing registered entities keep their IDs and historical
+associations; additional identities use a persistent config-entry namespace, not
+the username or reload order. You can disable unwanted devices in Home Assistant.
+Removing one account does not rename the other's entities. See the
+[identity and migration contract](docs/lifecycle-validation.md#same-station-two-accounts-supported-identity-contract)
+for compatibility details and offline validation boundaries.
+
 The default sensor update interval is **60 seconds**.  
 FusionSolar App data is usually refreshed only every few minutes (commonly around 5 minutes depending on region / account / backend behaviour), but the shorter Home Assistant polling interval ensures the sensors update as soon as new data becomes available.
 

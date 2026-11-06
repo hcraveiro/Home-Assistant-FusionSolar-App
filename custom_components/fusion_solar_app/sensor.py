@@ -35,6 +35,7 @@ from homeassistant.util import dt as dt_util
 from .api import Device, DeviceType
 from .const import DOMAIN
 from .coordinator import FusionSolarCoordinator
+from .identity import device_identifier, entity_unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -100,7 +101,24 @@ def _build_device_info(
     coordinator: FusionSolarCoordinator,
     device: Device | None = None,
 ) -> DeviceInfo:
-    """Build device info shared by Fusion Solar entities."""
+    """Apply the same persistent scope to every physical device and parent."""
+    info = _build_legacy_device_info(coordinator, device)
+    entry = getattr(coordinator, "config_entry", None)
+    info["identifiers"] = {
+        (domain, device_identifier(entry, identifier))
+        for domain, identifier in info["identifiers"]
+    }
+    if "via_device" in info:
+        domain, identifier = info["via_device"]
+        info["via_device"] = (domain, device_identifier(entry, identifier))
+    return info
+
+
+def _build_legacy_device_info(
+    coordinator: FusionSolarCoordinator,
+    device: Device | None = None,
+) -> DeviceInfo:
+    """Build device metadata independently of the HA identity scope."""
     station_dn = getattr(coordinator.api, "station", None) or "unknown_station"
     station_name = getattr(coordinator.api, "station_name", None) or "FusionSolar Plant"
     controller_name = getattr(
@@ -133,7 +151,10 @@ def _build_device_info(
                 inverter_info = getattr(coordinator.api, "inverters", {}).get(parent_dn)
                 identifier_dn = getattr(inverter_info, "canonical_dn", None) or parent_dn
                 inverter_device = dr.async_get(coordinator.hass).async_get_device_by_identifier(
-                    (DOMAIN, f"{controller_name}_{station_dn}_inverter_{identifier_dn}"),
+                    (DOMAIN, device_identifier(
+                        coordinator.config_entry,
+                        f"{controller_name}_{station_dn}_inverter_{identifier_dn}",
+                    )),
                     coordinator.config_entry.entry_id,
                 )
                 if inverter_device is not None:
@@ -245,7 +266,10 @@ def _build_device_info(
                 inverter_info = getattr(coordinator.api, "inverters", {}).get(parent_dn)
                 identifier_dn = getattr(inverter_info, "canonical_dn", None) or parent_dn
                 inverter_device = dr.async_get(coordinator.hass).async_get_device_by_identifier(
-                    (DOMAIN, f"{controller_name}_{station_dn}_inverter_{identifier_dn}"),
+                    (DOMAIN, device_identifier(
+                        coordinator.config_entry,
+                        f"{controller_name}_{station_dn}_inverter_{identifier_dn}",
+                    )),
                     coordinator.config_entry.entry_id,
                 )
                 if inverter_device is not None:
@@ -519,7 +543,7 @@ async def async_setup_entry(
     )
     plant = dr.async_get(hass).async_get_or_create(
         config_entry_id=config_entry.entry_id,
-        identifiers={(DOMAIN, f"{controller_name}_{station_dn}")},
+        identifiers={(DOMAIN, device_identifier(config_entry, f"{controller_name}_{station_dn}"))},
         name=f"Fusion Solar Installation ({station_dn})",
         manufacturer="Fusion Solar",
         model=str(station_name),
@@ -747,7 +771,10 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         """Return unique ID."""
-        return f"{DOMAIN}-{self._device_unique_id}"
+        return entity_unique_id(
+            getattr(self.coordinator, "config_entry", None),
+            f"{DOMAIN}-{self._device_unique_id}",
+        )
 
     @property
     def icon(self) -> str:
@@ -813,7 +840,10 @@ class FusionSolarForecastSensor(CoordinatorEntity, SensorEntity):
     def unique_id(self) -> str:
         """Return unique ID."""
         station_suffix = _get_station_suffix(self.coordinator)
-        return f"{DOMAIN}-{station_suffix}-{self._forecast_key}"
+        return entity_unique_id(
+            getattr(self.coordinator, "config_entry", None),
+            f"{DOMAIN}-{station_suffix}-{self._forecast_key}",
+        )
 
     @property
     def native_value(self) -> float | None:

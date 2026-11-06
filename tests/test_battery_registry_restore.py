@@ -53,7 +53,10 @@ def _identity_class():
     module = ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(
         name="Coordinator", bases=[], keywords=[], body=methods, decorator_list=[]
     )], type_ignores=[]))
+    from identity_test_support import identity_module
+
     namespace = {
+        **vars(identity_module()),
         "DOMAIN": DOMAIN,
         "_LOGGER": logging.getLogger(__name__),
         "dr": SimpleNamespace(
@@ -116,6 +119,19 @@ def _entity(dn="BAT_A", *, scoped=False, device_id=None, entry="entry-A", platfo
         device_id=device_id if device_id is not None else "device-" + dn,
         disabled_by="user" if disabled else None,
     )
+
+
+def test_restore_battery_from_namespaced_registry_without_persisted_primary():
+    device = _device("BAT_A")
+    device.identifiers = {(domain, identifier + "__entry_entry-A")
+                          for domain, identifier in device.identifiers}
+    entity = _entity("BAT_A")
+    entity.unique_id += "__entry_entry-A"
+    coordinator = _coordinator([device], [entity], data={
+        "ha_identity": {"namespace": "__entry_entry-A", "entities": {}},
+    })
+    coordinator._restore_known_battery_dn()
+    assert coordinator.api.battery_dn == "BAT_A"
 
 
 def test_restore_battery_from_same_entry_and_station():

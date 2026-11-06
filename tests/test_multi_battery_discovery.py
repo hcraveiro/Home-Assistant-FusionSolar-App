@@ -234,7 +234,7 @@ def test_primary_battery_registry_identity_remains_legacy():
     sensor_source = (source_path.parent.parent / "sensor.py").read_text(encoding="utf-8")
     sensor_ast = ast.parse(sensor_source)
     function = next(node for node in sensor_ast.body if isinstance(node, ast.FunctionDef)
-                    and node.name == "_build_device_info")
+                    and node.name == "_build_legacy_device_info")
     battery_section = ast.get_source_segment(sensor_source, function)
     assert 'device.dn is not None' in battery_section
     assert 'getattr(coordinator.api, "battery_dn", None)' in battery_section
@@ -246,7 +246,7 @@ def test_secondary_battery_uses_its_own_device_dn_not_primary_metadata():
     sensor_source = (source_path.parent.parent / "sensor.py").read_text(encoding="utf-8")
     sensor_ast = ast.parse(sensor_source)
     function = next(node for node in sensor_ast.body if isinstance(node, ast.FunctionDef)
-                    and node.name == "_build_device_info")
+                    and node.name == "_build_legacy_device_info")
     section = ast.get_source_segment(sensor_source, function)
     assert 'device.dn if is_secondary' in section
     assert '"FusionSolar Battery" if is_secondary' in section

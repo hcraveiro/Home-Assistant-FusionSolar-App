@@ -16,6 +16,10 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import CONF_MOCK_PROFILE, DOMAIN
 from .coordinator import FusionSolarCoordinator
+from .identity import (
+    IDENTITY_KEY, entity_unique_id, legacy_entity_unique_id,
+    identity_signature, legacy_device_identifier, prepare_identities, preserve_entity_id,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,12 +33,17 @@ class RuntimeData:
     coordinator: DataUpdateCoordinator
     cancel_update_listener: Callable
     mock_transition: bool = False
+    entry_data: dict | None = None
+    entry_options: dict | None = None
+    entry_identity: tuple[str, dict[str, str]] | None = None
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up Fusion Solar WebApp Integration from a config entry."""
 
     hass.data.setdefault(DOMAIN, {})
+
+    prepare_identities(hass, config_entry)
 
     # Initialise the coordinator that manages data updates from your api.
     # This is defined in coordinator.py
@@ -71,6 +80,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 data={k: v for k, v in config_entry.data.items() if k not in ("dp_session", "data_host")},
             )
 
+        prepare_identities(hass, config_entry)
         # Migrate before platform setup so existing entities keep their history.
         try:
             await _async_migrate_inverter_unique_ids(hass, config_entry, coordinator)
@@ -81,6 +91,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         hass.data[DOMAIN][config_entry.entry_id] = RuntimeData(
             coordinator, cancel_update_listener,
             mock_transition=mock_transition,
+            entry_data={k: v for k, v in config_entry.data.items() if k != IDENTITY_KEY},
+            entry_options=dict(config_entry.options),
+            entry_identity=identity_signature(config_entry),
         )
         await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
         if mock_transition:
@@ -127,7 +140,8 @@ async def _async_migrate_inverter_unique_ids(
 
     @callback
     def _migrate(entity_entry: er.RegistryEntry) -> dict[str, str] | None:
-        if not entity_entry.unique_id.startswith(old_prefix):
+        legacy_id = legacy_entity_unique_id(config_entry, entity_entry.unique_id)
+        if not legacy_id.startswith(old_prefix):
             return None
 
         # Match the existing HA device to the inverter it represented before
@@ -140,7 +154,7 @@ async def _async_migrate_inverter_unique_ids(
                     if identifier_domain != DOMAIN:
                         continue
                     for original_dn in valid_dns.values():
-                        if identifier.endswith(f"_inverter_{original_dn}"):
+                        if legacy_device_identifier(config_entry, identifier).endswith(f"_inverter_{original_dn}"):
                             matched_dns.add(original_dn)
 
         # Old/merged registry devices can carry more than one inverter DN.
@@ -161,7 +175,13 @@ async def _async_migrate_inverter_unique_ids(
             f"{DOMAIN}-{api.controller_name}{station_suffix}"
             f"_inv_{api.sanitize_id_segment(matched_dn)}_inverter_"
         )
-        new_unique_id = new_prefix + entity_entry.unique_id[len(old_prefix):]
+        new_legacy_id = new_prefix + legacy_id[len(old_prefix):]
+        if IDENTITY_KEY in config_entry.data:
+            # Coexisting historical entries can each own part of the legacy set.
+            # Bind the new telemetry key to that exact registry ID, not a rename.
+            preserve_entity_id(hass, config_entry, new_legacy_id, entity_entry.unique_id)
+            return None
+        new_unique_id = entity_unique_id(config_entry, new_legacy_id)
         if registry.async_get_entity_id(
             entity_entry.domain, entity_entry.platform, new_unique_id
         ):
@@ -179,7 +199,14 @@ async def _async_migrate_inverter_unique_ids(
 
 async def _async_update_listener(hass: HomeAssistant, config_entry):
     """Handle config options update."""
-    # Reload the integration when the options change.
+    # Identity assignment uses normal config-entry persistence for all station
+    # entries, but must not recursively reload unrelated/starting coordinators.
+    runtime = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
+    data = {k: v for k, v in config_entry.data.items() if k != IDENTITY_KEY}
+    if (runtime is not None and runtime.entry_data == data
+            and runtime.entry_options == dict(config_entry.options)
+            and runtime.entry_identity == identity_signature(config_entry)):
+        return
     await hass.config_entries.async_reload(config_entry.entry_id)
 
 
