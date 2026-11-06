@@ -9,6 +9,16 @@ python -m pytest tests -v --cov=custom_components/fusion_solar_app --cov-report=
 
 The CI runs all `tests/test_*.py` discovered by pytest, including `unittest` tests, and fails on any failure, collection error, zero collected tests, or overall coverage below **78%**. It runs separate jobs with the standard-library `json` decoder and the optional `simplejson` decoder used by Requests in Home Assistant, and verifies which decoder is active.
 
+## Numeric telemetry regressions
+
+See [the numeric telemetry contract](../docs/numeric-telemetry.md) for accepted
+units, unavailable-vs-zero policies and preserved discovery/rounding behavior.
+`test_numeric_telemetry.py` exercises the actual parser and assembled API readers.
+`test_periodic_energy_placeholders.py` covers the explicit b17 periodic energy
+literal `--` → zero exception, without changing the generic parser or lifetime policy.
+`api_profiles/check_numeric_homeassistant.py` adds a focused disposable actual-HA
+HTTP transition check without adding a persistent eighth runtime profile.
+
 ## JSON decoding and error-log regressions
 
 `requests.Response.json()` raises `requests.exceptions.JSONDecodeError`, whose base decoder depends on whether `simplejson` is installed. The offline replay transport uses standard-library JSON. Both error families must retain the intended auth/connection classification without swallowing unrelated programming errors.

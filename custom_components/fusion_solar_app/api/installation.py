@@ -1,6 +1,7 @@
 """Fusion Solar App installation helpers."""
 
 import logging
+import math
 import re
 import time
 from typing import Any
@@ -75,12 +76,12 @@ class FusionSolarInstallationMixin:
             "self_consumption_ratio_by_production_month": 0.0,
             "self_consumption_ratio_by_production_year": 0.0,
             "self_consumption_ratio_by_production_lifetime": 0.0,
-            "standard_coal_saved": 0.0,
-            "standard_coal_saved_this_year": 0.0,
-            "co2_avoided": 0.0,
-            "co2_avoided_this_year": 0.0,
-            "equivalent_trees_planted": 0,
-            "equivalent_trees_planted_this_year": 0,
+            "standard_coal_saved": None,
+            "standard_coal_saved_this_year": None,
+            "co2_avoided": None,
+            "co2_avoided_this_year": None,
+            "equivalent_trees_planted": None,
+            "equivalent_trees_planted_this_year": None,
             "exit_code": "SUCCESS",
         }
 
@@ -133,22 +134,8 @@ class FusionSolarInstallationMixin:
 
     @staticmethod
     def _valid_flow_power(raw: Any) -> float | None:
-        """Parse a real numeric flow reading, including attached kW/W/% units."""
-        if raw is None or isinstance(raw, bool):
-            return None
-        if isinstance(raw, str):
-            match = re.fullmatch(
-                r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:kW|W|%)?\s*",
-                raw,
-                flags=re.IGNORECASE,
-            )
-            if match is None:
-                return None
-            return float(match.group(1))
-        try:
-            return float(raw)
-        except (ValueError, TypeError, OverflowError):
-            return None
+        """Parse flow power in kW; bare readings are already kW, not W or SOC."""
+        return extract_numeric(raw, "kW")
 
     def _parse_installation_flow_nodes(
         self,
@@ -181,7 +168,7 @@ class FusionSolarInstallationMixin:
                 tips = node.get("deviceTips") or {}
                 soc_raw = tips.get("SOC")
                 if soc_raw not in (None, "", "--", "null"):
-                    output["battery_percentage"] = self._valid_flow_power(soc_raw)
+                    output["battery_percentage"] = extract_numeric(soc_raw, "%")
                 signed_power = self._valid_flow_power(tips.get("BATTERY_POWER"))
                 if value is None or signed_power is None:
                     continue
@@ -231,6 +218,8 @@ class FusionSolarInstallationMixin:
                 - output["battery_injection_power"]
                 - output["house_load_power"]
             )
+            if not math.isfinite(balance):
+                continue
             if balance > 0:
                 output["grid_injection_power"] = grid_power
                 output["grid_consumption_power"] = 0.0

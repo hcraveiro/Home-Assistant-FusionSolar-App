@@ -19,15 +19,15 @@ SPEC.loader.exec_module(utils)
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        (None, 0.0),
+        (None, None),
         (4, 4.0),
         (2.5, 2.5),
-        ("12.5 kWh", 12.5),
-        ("-3.75 W", -3.75),
-        ("--", 0.0),
-        ("not available", 0.0),
-        ("", 0.0),
-        ("0 %", 0.0),
+        ("12.5 kWh", None),  # No declared dimension: do not strip units.
+        ("-3.75 W", None),
+        ("--", None),
+        ("not available", None),
+        ("", None),
+        ("0", 0.0),
     ],
 )
 def test_extract_numeric(value, expected):

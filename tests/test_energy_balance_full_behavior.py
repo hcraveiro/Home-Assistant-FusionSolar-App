@@ -69,7 +69,8 @@ def test_full_energy_output_aggregation(module,monkeypatch):
     api=make_api(module)
     data=complete_data()
     api.call_energy_balance=Mock(return_value=data)
-    api.get_week_data=Mock(return_value=[data])
+    # One slot per elapsed day, as returned by production get_week_data.
+    api.get_week_data=Mock(return_value=[data] * (module[0].datetime.now().weekday() + 1))
     output={}
     api.update_output_with_energy_balance(output)
     assert output["panel_production_month"]==120

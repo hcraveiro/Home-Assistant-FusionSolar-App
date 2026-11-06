@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Any
 
-from .models import Device, DeviceType
+from .models import Device, DeviceType, is_periodic_energy_counter
 
 _LOGGER = logging.getLogger(__name__)
 _LAYOUT = "/rest/pvms/web/station/v1/layout"
@@ -308,7 +308,10 @@ class FusionSolarOptimizerMixin:
                 if dtype == DeviceType.SENSOR_TEXT:
                     value = str(raw) if raw not in (None, "", "--") else None
                 else:
-                    value = _safe_number(raw)
+                    value = (
+                        0.0 if raw == "--" and is_periodic_energy_counter(name, dtype)
+                        else _safe_number(raw)
+                    )
                     if value is not None and key == "outputPower":
                         value /= 1000
                 # Retain sensor identity while removing stale instantaneous readings.

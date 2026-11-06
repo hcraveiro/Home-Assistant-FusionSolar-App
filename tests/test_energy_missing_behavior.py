@@ -6,7 +6,7 @@ import pytest
 from test_energy_balance_full_behavior import module, make_api, complete_data
 
 
-@pytest.mark.parametrize("raw", [None, "--", "null", "", "broken", "12 garbage", float("nan"), float("inf"), True, {}, []])
+@pytest.mark.parametrize("raw", [None, " -- ", "null", "", "broken", "12 garbage", float("nan"), float("inf"), True, {}, []])
 def test_missing_energy_is_not_zero(module, raw):
     api = make_api(module)
     data = complete_data()
@@ -85,7 +85,7 @@ def test_repeated_poll_correction_missing_and_recovery(module):
         data["data"]["totalProductPower"] = raw
         api.update_output_with_energy_balance(output)
         assert output["panel_production_lifetime"] == expected
-        assert output["panel_production_month"] == expected
+        assert output["panel_production_month"] == (0 if raw == "--" else expected)
 
 
 @pytest.mark.parametrize("isitepower", [False, True])

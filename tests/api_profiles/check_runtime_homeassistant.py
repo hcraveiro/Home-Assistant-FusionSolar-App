@@ -241,12 +241,27 @@ async def run(report):
                         require(expected, "Production discovery returned no supported sensors")
                         require(not (expected - by_unique.keys()), f"Missing sensors: {sorted(expected - by_unique.keys())}")
                         require(len(entities) >= len(expected) + 2 if profile_id in ("transitions-topology", "transitions-pv-meter") else len(entities) == len(expected) + 2, f"Expected {len(expected)} API sensors + 2 forecast sensors, got {len(entities)}")
+                        # Sparse social sources now correctly stay unavailable.
+                        social_keys = {
+                            "standard_coal_saved": "standardCoalSavings",
+                            "standard_coal_saved_this_year": "standardCoalSavingsByYear",
+                            "co2_avoided": "co2Reduction",
+                            "co2_avoided_this_year": "co2ReductionByYear",
+                            "equivalent_trees_planted": "equivalentTreePlanting",
+                            "equivalent_trees_planted_this_year": "equivalentTreePlantingByYear",
+                        }
+                        social_data = next(route["body"]["data"] for route in api.session.profile["routes"]
+                                           if route["path"].endswith("social-contribution"))
                         output = []
                         for entity in entities:
                             state = hass.states.get(entity.entity_id)
                             require(entity.device_id is not None, f"Unassociated entity: {entity.entity_id}")
                             require(state is not None, f"No actual HA state: {entity.entity_id}")
-                            if profile_id not in ("isitepower-mains-import", "transitions-pv-meter", "transitions-topology"):
+                            absent_social = any(entity.unique_id.endswith(suffix) and key not in social_data
+                                                for suffix, key in social_keys.items())
+                            if absent_social:
+                                require(state.state == "unavailable", f"Missing social metric fabricated a value: {entity.entity_id}")
+                            elif profile_id not in ("isitepower-mains-import", "transitions-pv-meter", "transitions-topology"):
                                 require(state.state != "unavailable", f"Unavailable entity: {entity.entity_id}")
                             # This sparse mixed profile intentionally omits telemetry.
                             # Existing sensor availability represents None as unavailable.

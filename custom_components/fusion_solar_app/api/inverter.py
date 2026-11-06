@@ -1,6 +1,7 @@
 """Fusion Solar App inverter helpers."""
 
 import logging
+import math
 import time
 from typing import Any
 
@@ -385,24 +386,30 @@ class FusionSolarInverterMixin:
             result[sid] = meta["value"]
 
         mppt_total_input_power = 0.0
-        has_visible_pv_power = False
+        # Previously confirmed strings with missing telemetry also prevent a
+        # misleading partial total. Independent measured power remains intact.
+        expected_pv_indexes = visible_pv_indexes | getattr(self, "_known_visible_pv_indexes", set())
+        complete_pv_power = bool(expected_pv_indexes)
 
-        for pv_index in visible_pv_indexes:
+        for pv_index in expected_pv_indexes:
             voltage_id = 11001 + ((pv_index - 1) * 3)
             current_id = voltage_id + 1
             power_id = voltage_id + 2
 
-            if voltage_id not in result or current_id not in result:
+            voltage_value = extract_numeric(result.get(voltage_id), "V")
+            current_value = extract_numeric(result.get(current_id), "A")
+            if voltage_value is None or current_value is None:
+                complete_pv_power = False
                 continue
-
-            voltage_value = extract_numeric(result[voltage_id])
-            current_value = extract_numeric(result[current_id])
-            pv_power = round(voltage_value * current_value / 1000, 4)
+            pv_power = voltage_value * current_value / 1000
+            if not math.isfinite(pv_power):
+                complete_pv_power = False
+                continue
+            pv_power = round(pv_power, 4)
             result[power_id] = pv_power
             mppt_total_input_power += pv_power
-            has_visible_pv_power = True
 
-        if has_visible_pv_power:
+        if complete_pv_power and math.isfinite(mppt_total_input_power):
             result[30017] = round(mppt_total_input_power, 4)
 
         _LOGGER.debug(
@@ -436,14 +443,14 @@ class FusionSolarInverterMixin:
                 continue
 
             voltage_value = (
-                extract_numeric(voltage_meta.get("value"))
+                extract_numeric(voltage_meta.get("value"), "V")
                 if voltage_meta is not None
-                else 0.0
+                else None
             )
             current_value = (
-                extract_numeric(current_meta.get("value"))
+                extract_numeric(current_meta.get("value"), "A")
                 if current_meta is not None
-                else 0.0
+                else None
             )
             voltage_time = voltage_meta.get("latestTime") if voltage_meta else None
             current_time = current_meta.get("latestTime") if current_meta else None

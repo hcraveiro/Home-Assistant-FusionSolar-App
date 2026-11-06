@@ -30,7 +30,10 @@ def _configuration_reader():
         SENSOR_KW="kw", SENSOR_KWH="kwh", SENSOR_PERCENTAGE="percentage",
         SENSOR_TEXT="text", SENSOR_MINUTES="minutes",
     )
+    from test_utils_behavior import utils
     namespace = {
+        "extract_numeric": utils.extract_numeric,
+        "NUMERIC_DEVICE_UNITS": {"kw": "kW", "kwh": "kWh", "percentage": "%", "minutes": "min"},
         "Device": object,
         "DeviceType": device_types,
         "DATA_REFERER_URL": "/referer",

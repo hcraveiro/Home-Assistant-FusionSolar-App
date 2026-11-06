@@ -42,7 +42,7 @@ def test_initialization(api):
 @pytest.mark.parametrize(("kind","value","expected"),[
     ("SENSOR_TEXT","running","running"),
     ("SENSOR_PERCENTAGE","76.8 %",77),
-    ("SENSOR_KW","2.123456 W",2.1235),
+    ("SENSOR_KW","2.123456 W",0.0021),  # Explicit W converts to kW.
     ("SENSOR_KWH","12.34 kWh",12.34),
 ])
 def test_dynamic_device(api,api_module,kind,value,expected):

@@ -20,7 +20,10 @@ from .exceptions import (
 )
 from .installation import FusionSolarInstallationMixin
 from .inverter import FusionSolarInverterMixin
-from .models import Device, DeviceType, ENERGY_BALANCE_CALL_TYPE, InverterInfo
+from .models import (
+    Device, DeviceType, ENERGY_BALANCE_CALL_TYPE, InverterInfo, NUMERIC_DEVICE_UNITS,
+    is_periodic_energy_counter,
+)
 from .optimizer import FusionSolarOptimizerMixin
 from .social import FusionSolarSocialMixin
 from .station import FusionSolarStationMixin
@@ -106,17 +109,20 @@ class FusionSolarAPI(
                 return None
             state = str(raw_value)
         elif device_type == DeviceType.SENSOR_KWH:
-            state = self._optional_grid_energy({"value": raw_value}, "value")
+            state = (
+                0.0 if raw_value == "--" and is_periodic_energy_counter(device_id, device_type)
+                else self._optional_grid_energy({"value": raw_value}, "value")
+            )
             if state is None:
                 return None
-        elif device_type == DeviceType.SENSOR_PERCENTAGE:
-            if raw_value in ("", "--", "null", None):
-                return None
-            state = int(round(extract_numeric(raw_value)))
         else:
-            if raw_value in ("", "--", "null", None):
+            value = extract_numeric(raw_value, NUMERIC_DEVICE_UNITS.get(device_type, ""))
+            if value is None:
                 return None
-            state = round(float(extract_numeric(raw_value)), 4)
+            state = (
+                int(round(value)) if device_type == DeviceType.SENSOR_PERCENTAGE
+                else round(value, 4)
+            )
 
         return Device(
             device_id=device_id,
@@ -194,27 +200,20 @@ class FusionSolarAPI(
         if device_type == DeviceType.SENSOR_TEXT:
             return str(value)
 
-        if device_type == DeviceType.SENSOR_PERCENTAGE:
-            return int(float(value))
-
-        if device_type == DeviceType.SENSOR_COUNT:
-            return int(round(float(value)))
-
-        if device_type in (
-            DeviceType.SENSOR_KW,
-            DeviceType.SENSOR_KWH,
-            DeviceType.SENSOR_RATIO,
-            DeviceType.SENSOR_VOLTAGE,
-            DeviceType.SENSOR_CURRENT,
-            DeviceType.SENSOR_FREQUENCY,
-            DeviceType.SENSOR_TEMPERATURE,
-            DeviceType.SENSOR_RESISTANCE,
-            DeviceType.SENSOR_POWER_FACTOR,
-            DeviceType.SENSOR_KG,
-        ):
+        if device_type in NUMERIC_DEVICE_UNITS:
+            if value == "--" and is_periodic_energy_counter(device_id, device_type):
+                return 0.0
+            value = extract_numeric(value, NUMERIC_DEVICE_UNITS[device_type])
+            if value is None:
+                return None
+            if device_type == DeviceType.SENSOR_PERCENTAGE:
+                # Installation percentages historically truncate; dynamic ones round.
+                return int(value)
+            if device_type == DeviceType.SENSOR_COUNT:
+                return int(round(value))
             decimals = 2 if device_type == DeviceType.SENSOR_RATIO else 4
             _LOGGER.debug("%s: Value being returned is float: %s", device_id, value)
-            return round(float(value), decimals)
+            return round(value, decimals)
 
         return value
 

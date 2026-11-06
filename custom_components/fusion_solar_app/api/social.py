@@ -96,21 +96,16 @@ class FusionSolarSocialMixin:
         social_contribution_data = self.call_social_contribution()
         data = social_contribution_data.get("data", {})
 
-        output["standard_coal_saved"] = extract_numeric(
-            data.get("standardCoalSavings", 0)
-        )
-        output["standard_coal_saved_this_year"] = extract_numeric(
-            data.get("standardCoalSavingsByYear", 0)
-        )
-        output["co2_avoided"] = extract_numeric(
-            data.get("co2Reduction", 0)
-        )
-        output["co2_avoided_this_year"] = extract_numeric(
-            data.get("co2ReductionByYear", 0)
-        )
-        output["equivalent_trees_planted"] = int(
-            round(extract_numeric(data.get("equivalentTreePlanting", 0)))
-        )
-        output["equivalent_trees_planted_this_year"] = int(
-            round(extract_numeric(data.get("equivalentTreePlantingByYear", 0)))
-        )
+        for output_key, source_key in (
+            ("standard_coal_saved", "standardCoalSavings"),
+            ("standard_coal_saved_this_year", "standardCoalSavingsByYear"),
+            ("co2_avoided", "co2Reduction"),
+            ("co2_avoided_this_year", "co2ReductionByYear"),
+        ):
+            output[output_key] = extract_numeric(data.get(source_key), "kg")
+        for output_key, source_key in (
+            ("equivalent_trees_planted", "equivalentTreePlanting"),
+            ("equivalent_trees_planted_this_year", "equivalentTreePlantingByYear"),
+        ):
+            value = extract_numeric(data.get(source_key))
+            output[output_key] = int(round(value)) if value is not None else None

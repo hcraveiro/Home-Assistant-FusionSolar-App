@@ -1,6 +1,5 @@
 import re
 import logging
-import math
 import time
 from typing import Any
 
@@ -13,7 +12,7 @@ from ..const import (
 )
 from ..utils import extract_numeric
 from .exceptions import APIDataStructureError
-from .models import Device, DeviceType
+from .models import Device, DeviceType, NUMERIC_DEVICE_UNITS
 from .signal_maps import BATTERY_MODULE_1_SIGNAL_IDS
 
 
@@ -104,8 +103,11 @@ class FusionSolarBatteryMixin:
             if raw in (None, "", "--", "null"):
                 continue
             try:
-                value = float(raw) * scale
-                if not math.isfinite(value) or value < 0:
+                value = extract_numeric(
+                    raw, NUMERIC_DEVICE_UNITS[kind],
+                    default_unit="W" if scale == 0.001 else None,
+                )
+                if value is None or value < 0:
                     continue
                 if kind == DeviceType.SENSOR_PERCENTAGE and value > 100:
                     continue
@@ -409,12 +411,9 @@ class FusionSolarBatteryMixin:
 
         battery_soh_raw = realtime_data.get(10007)
         if battery_soh_raw not in (None, "", "--", "null"):
-            try:
-                battery_soh_value = extract_numeric(battery_soh_raw)
-            except (TypeError, ValueError):
-                battery_soh_value = 0.0
-
-            if battery_soh_value > 0:
+            battery_soh_value = extract_numeric(battery_soh_raw, "%")
+            # Retain the existing discovery policy: SOH <= 0 is suppressed.
+            if battery_soh_value is not None and battery_soh_value > 0:
                 battery_realtime_definitions.append(
                     (
                         "Battery SOH",
@@ -581,12 +580,10 @@ class FusionSolarBatteryMixin:
         }
     
         pack_quantity_raw = module_name_map.get(f"[Module {module_id}] Battery pack quantity")
-        pack_quantity = 0
-        if pack_quantity_raw not in (None, "", "--", "null"):
-            try:
-                pack_quantity = int(round(extract_numeric(pack_quantity_raw)))
-            except (TypeError, ValueError):
-                pack_quantity = 0
+        quantity = extract_numeric(pack_quantity_raw)
+        # This zero is a topology fallback, never a published sensor reading.
+        # Explicit pack keys still discover packs when quantity is unavailable.
+        pack_quantity = int(round(quantity)) if quantity is not None else 0
     
         detected_pack_indexes: set[int] = set()
         pack_regex = re.compile(

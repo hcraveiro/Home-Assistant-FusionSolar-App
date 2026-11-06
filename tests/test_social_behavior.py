@@ -144,9 +144,9 @@ def test_social_metric_mapping_and_rounding(modules):
     }
 
 
-def test_social_missing_metrics_default_to_zero(modules):
+def test_social_missing_metrics_are_unavailable(modules):
     api = make_api(modules)
     output = {}
     api.update_output_with_social_contribution(output)
     assert len(output) == 6
-    assert all(value == 0 for value in output.values())
+    assert all(value is None for value in output.values())

@@ -8,7 +8,7 @@ from dateutil.relativedelta import relativedelta
 
 from ..const import DATA_REFERER_URL, ENERGY_BALANCE_URL
 from .exceptions import APIConnectionError, APIDataStructureError
-from .models import ENERGY_BALANCE_CALL_TYPE
+from .models import ENERGY_BALANCE_CALL_TYPE, PERIODIC_ENERGY_PERIODS
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,8 +53,8 @@ class FusionSolarEnergyBalanceMixin:
         if isinstance(raw, str) and raw.strip().lower() in ("", "--", "null", "none"):
             return None
         if isinstance(raw, str):
-            # extract_numeric() returns 0 for unparsable text. Validate the
-            # upstream number first so a protocol error never becomes 0 kWh.
+            # Retain this counter parser's established accepted formats and
+            # Wh conversion; aggregation/placeholder policies depend on it.
             import re
             match = re.fullmatch(
                 r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:kWh|Wh)?\s*",
@@ -77,10 +77,20 @@ class FusionSolarEnergyBalanceMixin:
         # Explicit Wh readings must be converted to the kWh exposed by HA.
         return value / 1000 if in_wh else value
 
+    def _period_grid_energy(self, payload, key, period):
+        """Only explicit periodic energy '--' is zero; all other invalid data is unknown."""
+        if (
+            period in PERIODIC_ENERGY_PERIODS
+            and isinstance(payload, dict)
+            and payload.get(key) == "--"
+        ):
+            return 0.0
+        return self._optional_grid_energy(payload, key)
+
     def _set_grid_energy(self, output, period, direction, payload):
         """Do not convert missing iSitePower-M counters into false zero kWh."""
         key = "totalBuyPower" if direction == "consumption" else "totalOnGridPower"
-        output[f"grid_{direction}_{period}"] = self._optional_grid_energy(payload, key)
+        output[f"grid_{direction}_{period}"] = self._period_grid_energy(payload, key, period)
 
     def update_output_with_battery_capacity(self, output: Dict[str, Optional[float | str]]):
         """Populate battery capacity in the output dictionary."""
@@ -142,7 +152,7 @@ class FusionSolarEnergyBalanceMixin:
                     else None
                 )
                 for category, key in fields.items():
-                    output[f"{category}_{period}"] = self._optional_grid_energy(payload, key)
+                    output[f"{category}_{period}"] = self._period_grid_energy(payload, key, period)
                 if period == "month" and isinstance(payload, dict):
                     # iSitePower-M can omit aggregate totals while still
                     # providing verified daily readings in monthly arrays.
@@ -154,8 +164,8 @@ class FusionSolarEnergyBalanceMixin:
                     ):
                         samples = payload.get(array_key)
                         if isinstance(samples, list) and day_index < len(samples):
-                            reading = self._optional_grid_energy(
-                                {"value": samples[day_index]}, "value"
+                            reading = self._period_grid_energy(
+                                {"value": samples[day_index]}, "value", "today"
                             )
                             if reading is not None:
                                 output[f"{category}_today"] = reading
@@ -180,14 +190,20 @@ class FusionSolarEnergyBalanceMixin:
                     for item in days
                 ]
                 for category, key in fields.items():
-                    values = [self._optional_grid_energy(item, key) for item in daily_payloads]
-                    if values[-1] is not None:
-                        output[f"{category}_today"] = values[-1]
-                    if len(values) == datetime.now().weekday() + 1:
+                    complete_week = len(daily_payloads) == datetime.now().weekday() + 1
+                    # Retain independently measured daily values from sparse
+                    # responses, but never infer placeholder zero from a short week.
+                    today_value = (
+                        self._period_grid_energy(daily_payloads[-1], key, "today") if complete_week
+                        else self._optional_grid_energy(daily_payloads[-1], key)
+                    )
+                    if today_value is not None:
+                        output[f"{category}_today"] = today_value
+                    if complete_week:
                         output[f"{category}_week"] = self._energy_sum([
                             item.get(key) if isinstance(item, dict) else None
                             for item in daily_payloads
-                        ])
+                        ], period="week")
         except (KeyError, IndexError, TypeError, ValueError, APIConnectionError, APIDataStructureError) as ex:
             _LOGGER.warning("iSitePower-M daily energy not available: %s", ex)
 
@@ -203,11 +219,11 @@ class FusionSolarEnergyBalanceMixin:
         payload = response.get("data")
         return payload if isinstance(payload, dict) else {}
 
-    def _energy_sum(self, readings):
-        """Sum available Huawei segments, skipping only literal '--' markers.
+    def _energy_sum(self, readings, *, period=None):
+        """Sum valid segments; only explicit periodic '--' segments represent zero.
 
-        This may represent partial history, not a complete measured total.
-        Missing, malformed and non-finite values still invalidate the vector.
+        Default/lifetime keeps b14's skip-only policy (all '--' unavailable).
+        Empty vectors and any other invalid value remain unavailable in every period.
         """
         if not isinstance(readings, list) or not readings:
             return None
@@ -215,7 +231,9 @@ class FusionSolarEnergyBalanceMixin:
             self._optional_grid_energy({"v": item}, "v")
             for item in readings if item != "--"
         ]
-        return sum(values) if values and all(value is not None for value in values) else None
+        if not values:
+            return 0.0 if period in PERIODIC_ENERGY_PERIODS else None
+        return sum(values) if all(value is not None for value in values) else None
 
     def _period_energy_sum(self, readings, period):
         """Exclude known future calendar slots, never missing elapsed readings.
@@ -223,15 +241,15 @@ class FusionSolarEnergyBalanceMixin:
         Month vectors are day-indexed and year vectors month-indexed, as used
         for today's battery readings and the current month's house load. No
         lifetime start-year/index contract is known, so retain its whole vector.
-        Only literal Huawei '--' placeholders are discarded from aggregation;
-        all other invalid readings still invalidate the total.
+        Periodic literal '--' slots count as zero, even if all elapsed slots are
+        '--'. Lifetime retains skip-only semantics; other invalid values reject all.
         """
         count = {"month": datetime.now().day, "year": datetime.now().month}.get(period)
         if count is not None:
             if not isinstance(readings, list) or len(readings) < count:
                 return None
             readings = readings[:count]
-        return self._energy_sum(readings)
+        return self._energy_sum(readings, period=period)
 
     def _history_energy_payload(self, call_type):
         """Isolate transport failures; auth and unexpected schemas still propagate.
@@ -283,32 +301,36 @@ class FusionSolarEnergyBalanceMixin:
         payloads["lifetime"] = self._history_energy_payload(ENERGY_BALANCE_CALL_TYPE.LIFETIME)
         for period, payload in payloads.items():
             for category, key in categories.items():
-                output[f"{category}_{period}"] = self._optional_grid_energy(payload, key)
+                output[f"{category}_{period}"] = self._period_grid_energy(payload, key, period)
             for category, key in arrays.items():
                 if category.startswith("battery_"):
                     output[f"{category}_{period}"] = self._period_energy_sum(payload.get(key), period)
 
-        def sample(payload, field, index, *, raw=False):
+        def sample(payload, field, index, *, raw=False, period="today"):
             readings = payload.get(field)
             if not isinstance(readings, list) or index >= len(readings):
                 return None
-            return readings[index] if raw else self._optional_grid_energy({"v": readings[index]}, "v")
+            return readings[index] if raw else self._period_grid_energy({"v": readings[index]}, "v", period)
 
         for category, field in arrays.items():
             output[f"{category}_today"] = sample(payloads["month"], field, today.day - 1)
-        output["house_load_month"] = sample(payloads["year"], "usePower", today.month - 1)
+        output["house_load_month"] = sample(payloads["year"], "usePower", today.month - 1, period="month")
         daily = [self._energy_payload(day) for day in days] if isinstance(days, list) else []
         for category, key in (("grid_consumption", "totalBuyPower"), ("grid_injection", "totalOnGridPower")):
+            complete_week = len(daily) == today.weekday() + 1
             if daily:
-                output[f"{category}_today"] = self._optional_grid_energy(daily[-1], key)
-            if len(daily) == today.weekday() + 1:
-                output[f"{category}_week"] = self._energy_sum([day.get(key) for day in daily])
+                output[f"{category}_today"] = (
+                    self._period_grid_energy(daily[-1], key, "today") if complete_week
+                    else self._optional_grid_energy(daily[-1], key)
+                )
+            if complete_week:
+                output[f"{category}_week"] = self._energy_sum([day.get(key) for day in daily], period="week")
         for category, field in arrays.items():
             readings = [
                 sample(payloads["month"] if (day.year, day.month) == (today.year, today.month) else previous, field, day.day - 1, raw=True)
                 for day in dates
             ]
-            output[f"{category}_week"] = self._energy_sum(readings)
+            output[f"{category}_week"] = self._energy_sum(readings, period="week")
         self._update_output_with_self_consumption_ratios(output)
 
     def call_energy_balance(
@@ -434,4 +456,4 @@ class FusionSolarEnergyBalanceMixin:
         readings = payload.get(field)
         if not isinstance(readings, list) or any(day < 1 or day > len(readings) for day in days):
             return None
-        return self._energy_sum([readings[day - 1] for day in days])
+        return self._energy_sum([readings[day - 1] for day in days], period="week")

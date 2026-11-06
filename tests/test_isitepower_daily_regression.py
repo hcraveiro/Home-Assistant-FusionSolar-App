@@ -31,12 +31,13 @@ class ISitePowerEnergyRegressions(unittest.TestCase):
             type_params=[],
         )
         helpers = [node for node in cls.body if isinstance(node, ast.FunctionDef)
-                   and node.name in ("_energy_sum", "_period_energy_sum")]
+                   and node.name in ("_energy_sum", "_period_energy_sum", "_period_grid_energy")]
         module = ast.fix_missing_locations(ast.Module(body=[standalone, *helpers], type_ignores=[]))
         kinds = SimpleNamespace(MONTH="month", YEAR="year", LIFETIME="lifetime")
         namespace = {
             "datetime": datetime,
             "ENERGY_BALANCE_CALL_TYPE": kinds,
+            "PERIODIC_ENERGY_PERIODS": frozenset({"today", "week", "month", "year"}),
             "_LOGGER": SimpleNamespace(warning=lambda *args: None),
             "APIConnectionError": RuntimeError,
             "APIDataStructureError": ValueError,
@@ -51,6 +52,7 @@ class ISitePowerEnergyRegressions(unittest.TestCase):
         class Fake:
             _energy_sum = namespace["_energy_sum"]
             _period_energy_sum = namespace["_period_energy_sum"]
+            _period_grid_energy = namespace["_period_grid_energy"]
 
             def call_energy_balance(self, kind):
                 calls.append(kind)
@@ -78,7 +80,7 @@ class ISitePowerEnergyRegressions(unittest.TestCase):
         namespace["_update_isitepower_energy_balance"](Fake(), out)
         self.assertEqual(out["panel_production_today"], 23.37)
         self.assertEqual(out["house_load_today"], 15.5)
-        self.assertIsNone(out.get("panel_production_consumption_today"))
+        self.assertEqual(out["panel_production_consumption_today"], 0)  # Explicit periodic '--'.
         self.assertIsNone(out["grid_consumption_month"])
         self.assertIsNone(out["grid_injection_month"])
         self.assertEqual(calls, ["month", "year", "lifetime"])

@@ -46,11 +46,8 @@ def make_pv_signals(active_inputs: int, total_inputs: int = 20, timestamp: int =
 class PVDetectionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        def extract_numeric(value):
-            try:
-                return float(str(value).split()[0])
-            except (ValueError, TypeError, IndexError, AttributeError):
-                return 0.0
+        from test_utils_behavior import utils
+        extract_numeric = utils.extract_numeric
 
         cls.detect = staticmethod(load_function(
             COMPONENT / "api" / "inverter.py",
