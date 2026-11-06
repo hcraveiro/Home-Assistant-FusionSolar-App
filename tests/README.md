@@ -4,10 +4,10 @@ Run all tests locally with:
 
 ```bash
 python -m pip install -r requirements-test.txt
-python -m pytest tests -v --cov=custom_components/fusion_solar_app --cov-report=term-missing
+python -m pytest tests -v --cov=custom_components/fusion_solar_app --cov-branch --cov-report=term-missing
 ```
 
-The CI runs all `tests/test_*.py` discovered by pytest, including `unittest` tests, and fails on any failure, collection error, zero collected tests, or overall coverage below **78%**. It runs separate jobs with the standard-library `json` decoder and the optional `simplejson` decoder used by Requests in Home Assistant, and verifies which decoder is active.
+The CI runs all `tests/test_*.py` discovered by pytest, including `unittest` tests, and fails on any failure, collection error, zero collected tests, or combined line/branch coverage below **78%**. Reports retain separate line and branch counts in `coverage.json`. It runs separate jobs with the standard-library `json` decoder and the optional `simplejson` decoder used by Requests in Home Assistant, and verifies which decoder is active.
 
 ## Numeric telemetry regressions
 
@@ -26,6 +26,17 @@ HTTP transition check without adding a persistent eighth runtime profile.
 The auth and social behavior tests exercise both exception families and real Requests responses. Installation, station and social error-path tests use synthetic session/body markers and assert that raw cookies, headers and response bodies do not enter the tested diagnostic messages. These targeted assertions do not imply that all integration DEBUG logs or upstream exception traces are anonymized; review and sanitize any support logs before sharing them.
 
 To reproduce both environments, use a disposable test virtualenv (never modify a running Home Assistant's dependencies): run the suite once without `simplejson`, then install `simplejson>=3,<5`, verify `requests.compat.json.__name__`, and rerun it. Release validation additionally uses the actual Home Assistant container dependencies with test-only tooling mounted separately, a read-only source tree and networking disabled.
+
+## Actual Home Assistant and Recorder checks
+
+The **Isolated Home Assistant runtime checks** workflow runs on relevant beta-branch pushes and supports manual dispatch. It pulls the specified HA image once, then executes the standalone checkers in disposable containers with networking disabled and read-only source. Reports and stderr are uploaded even on failure; no live HA configuration, credentials or databases are mounted. The job requires no pytest installation into HA.
+
+- Seven-profile lifecycle/coexistence and the disposable numeric/periodic-energy checker exercise actual HA entries, registries and states.
+- [Recorder validation](../docs/recorder-validation.md) compiles real short-term and hourly statistics using a temporary SQLite database. A passing characterization **does not mean the statistical policy is safe**: the accepted periodic `--` → zero rule can cause double counting on recovery. Sensor classes and existing history are not altered.
+- [Lifecycle validation](../docs/lifecycle-validation.md) exercises persisted registries across fresh HA instances, options/provider reloads, reauth, concurrent shutdown and real service authorization. It deliberately reports `passed_with_known_collision`: two accounts admitted for the same station still collide in station-scoped unique IDs. This is characterized, not a new admission or identity policy.
+- [Forecast performance validation](../docs/performance-validation.md) compares the complete b17 and candidate builder outputs, persistence, query bounds/work and cancellation under actual HA with deterministic Recorder/Store seams. It is not a real-database throughput benchmark. The comparison baseline is read from the published b17 source in git history.
+
+GitHub branch protection is configured separately and is not changed by these workflows.
 
 ## Historical coverage milestones
 

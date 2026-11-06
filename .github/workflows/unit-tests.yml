@@ -48,8 +48,10 @@ jobs:
         run: >-
           python -m pytest tests -v
           --cov=custom_components/fusion_solar_app
+          --cov-branch
           --cov-fail-under=78
           --cov-report=term-missing
+          --cov-report=json:coverage.json
           --cov-report=xml:coverage.xml
           --junitxml=test-results.xml
 
@@ -60,5 +62,6 @@ jobs:
           name: test-and-coverage-results-${{ matrix.json-backend }}
           path: |
             coverage.xml
+            coverage.json
             test-results.xml
           if-no-files-found: ignore

@@ -14,7 +14,7 @@ ports are exposed, and no credentials or Huawei servers are used:
 ```sh
 docker run --rm --pull never --network none --read-only --tmpfs /tmp \
   -v /path/to/checkout:/src:ro -w /src \
-  -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python \
+  -e PYTHONPATH=/src -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python \
   ghcr.io/home-assistant/home-assistant:2026.10.4 \
   tests/api_profiles/check_lifecycle_homeassistant.py
 ```

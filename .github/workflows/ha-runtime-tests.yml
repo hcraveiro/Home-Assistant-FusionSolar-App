@@ -1,0 +1,88 @@
+name: Isolated Home Assistant runtime checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'beta/**'
+    paths:
+      - 'custom_components/fusion_solar_app/**'
+      - 'tests/api_profiles/**'
+      - 'tests/fixtures/runtime_profiles/**'
+      - '.github/workflows/ha-runtime-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  home-assistant-runtime:
+    name: Actual HA offline runtime checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      HA_IMAGE: ghcr.io/home-assistant/home-assistant:2026.10.4
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Fetch the pinned Home Assistant version
+        run: docker pull "$HA_IMAGE"
+
+      - name: Run standalone checkers without network or writable source
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/ha-runtime-results"
+          checks=(
+            "tests/api_profiles/check_homeassistant.py"
+            "tests/api_profiles/check_runtime_homeassistant.py"
+            "tests/api_profiles/check_numeric_homeassistant.py"
+            "tests/api_profiles/check_recorder_homeassistant.py"
+            "tests/api_profiles/check_lifecycle_homeassistant.py"
+          )
+          failed=0
+          for checker in "${checks[@]}"; do
+            name=$(basename "$checker" .py)
+            if ! docker run --rm --pull never --network none --read-only --tmpfs /tmp \
+              -e PYTHONPATH=/src -e PYTHONDONTWRITEBYTECODE=1 \
+              -v "$GITHUB_WORKSPACE:/src:ro" -w /src --entrypoint python \
+              "$HA_IMAGE" "$checker" \
+              > "$RUNNER_TEMP/ha-runtime-results/$name.json" \
+              2> "$RUNNER_TEMP/ha-runtime-results/$name.log"; then
+              failed=1
+              cat "$RUNNER_TEMP/ha-runtime-results/$name.log"
+            fi
+          done
+          if ! docker run --rm --pull never --network none --read-only --tmpfs /tmp \
+            -e PYTHONPATH=/src -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$GITHUB_WORKSPACE:/src:ro" -w /src --entrypoint python \
+            "$HA_IMAGE" tests/api_profiles/check_runtime_homeassistant.py --coexistence \
+            > "$RUNNER_TEMP/ha-runtime-results/coexistence.json" \
+            2> "$RUNNER_TEMP/ha-runtime-results/coexistence.log"; then
+            failed=1
+            cat "$RUNNER_TEMP/ha-runtime-results/coexistence.log"
+          fi
+          git show V1.6.8b17:custom_components/fusion_solar_app/forecast/native.py \
+            > "$RUNNER_TEMP/ha-runtime-results/baseline-native.py"
+          if ! docker run --rm --pull never --network none --read-only --tmpfs /tmp \
+            -e PYTHONPATH=/src -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -v "$RUNNER_TEMP/ha-runtime-results:/evidence:ro" \
+            -w /src --entrypoint python "$HA_IMAGE" \
+            tests/api_profiles/check_forecast_performance.py --baseline /evidence/baseline-native.py \
+            > "$RUNNER_TEMP/ha-runtime-results/forecast-performance.json" \
+            2> "$RUNNER_TEMP/ha-runtime-results/forecast-performance.log"; then
+            failed=1
+            cat "$RUNNER_TEMP/ha-runtime-results/forecast-performance.log"
+          fi
+          exit "$failed"
+
+      - name: Upload runtime evidence, including failed runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: home-assistant-runtime-results
+          path: ${{ runner.temp }}/ha-runtime-results/
+          if-no-files-found: warn
