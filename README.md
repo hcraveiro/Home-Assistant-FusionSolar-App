@@ -48,6 +48,14 @@ This integration was built for FusionSolar users who only have access to the reg
 
 This integration can be added as a custom repository in HACS and installed from there.
 
+**Home Assistant compatibility:** the current cumulative candidate has been validated
+with Home Assistant Core **2026.10.4**. This is the tested reference version, not an
+enforced minimum: installation on older versions is not blocked, but compatibility
+with untested versions (older or newer) is not guaranteed.
+
+Real-account data is polled from the Huawei FusionSolar cloud and requires an
+internet connection; this integration does not poll the inverter locally.
+
 After installing it in HACS, add it in Home Assistant:
 
 **Settings → Devices & Services → Add Integration → Search for “FusionSolar App Integration”**
