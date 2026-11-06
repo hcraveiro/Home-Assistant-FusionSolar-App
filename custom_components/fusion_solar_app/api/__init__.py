@@ -23,7 +23,6 @@ from .installation import FusionSolarInstallationMixin
 from .inverter import FusionSolarInverterMixin
 from .models import (
     Device, DeviceType, ENERGY_BALANCE_CALL_TYPE, InverterInfo, NUMERIC_DEVICE_UNITS,
-    is_periodic_energy_counter,
 )
 from .optimizer import FusionSolarOptimizerMixin
 from .social import FusionSolarSocialMixin
@@ -110,10 +109,7 @@ class FusionSolarAPI(
                 return None
             state = str(raw_value)
         elif device_type == DeviceType.SENSOR_KWH:
-            state = (
-                0.0 if raw_value == "--" and is_periodic_energy_counter(device_id, device_type)
-                else self._optional_grid_energy({"value": raw_value}, "value")
-            )
+            state = self._optional_grid_energy({"value": raw_value}, "value")
             if state is None:
                 return None
         else:
@@ -202,8 +198,6 @@ class FusionSolarAPI(
             return str(value)
 
         if device_type in NUMERIC_DEVICE_UNITS:
-            if value == "--" and is_periodic_energy_counter(device_id, device_type):
-                return 0.0
             value = extract_numeric(value, NUMERIC_DEVICE_UNITS[device_type])
             if value is None:
                 return None

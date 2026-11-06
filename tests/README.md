@@ -14,8 +14,10 @@ The CI runs all `tests/test_*.py` discovered by pytest, including `unittest` tes
 See [the numeric telemetry contract](../docs/numeric-telemetry.md) for accepted
 units, unavailable-vs-zero policies and preserved discovery/rounding behavior.
 `test_numeric_telemetry.py` exercises the actual parser and assembled API readers.
-`test_periodic_energy_placeholders.py` covers the explicit b17 periodic energy
-literal `--` → zero exception, without changing the generic parser or lifetime policy.
+`test_periodic_energy_placeholders.py` covers the corrected b19 contract:
+individual `--` is unavailable, and every calculated energy sum skips literal
+markers but requires at least one valid segment. No period-specific zero exception
+remains; actual zero, lifetime anomalies and existing state classes are preserved.
 `api_profiles/check_numeric_homeassistant.py` adds a focused disposable actual-HA
 HTTP transition check without adding a persistent eighth runtime profile.
 
@@ -32,7 +34,7 @@ To reproduce both environments, use a disposable test virtualenv (never modify a
 The **Isolated Home Assistant runtime checks** workflow runs on relevant beta-branch pushes and supports manual dispatch. It pulls the specified HA image once, then executes the standalone checkers in disposable containers with networking disabled and read-only source. Reports and stderr are uploaded even on failure; no live HA configuration, credentials or databases are mounted. The job requires no pytest installation into HA.
 
 - Seven-profile lifecycle/coexistence and the disposable numeric/periodic-energy checker exercise actual HA entries, registries and states.
-- [Recorder validation](../docs/recorder-validation.md) compiles real short-term and hourly statistics using a temporary SQLite database. A passing characterization **does not mean the statistical policy is safe**: the accepted periodic `--` → zero rule can cause double counting on recovery. Sensor classes and existing history are not altered.
+- [Recorder validation](../docs/recorder-validation.md) compiles real short-term and hourly statistics using a temporary SQLite database. It verifies that b19's individual `--` → unavailable avoids the artificial zero/recovery overcount demonstrated under the mistaken b17/b18 policy. A passing characterization **does not mean all statistical risks are fixed**: partial aggregates and large downward corrections can still cross HA's reset threshold. Sensor classes and existing history are not altered.
 - [Lifecycle validation](../docs/lifecycle-validation.md) exercises persisted registries across fresh HA instances, options/provider reloads, reauth, concurrent shutdown and real service authorization. It deliberately reports `passed_with_known_collision`: two accounts admitted for the same station still collide in station-scoped unique IDs. This is characterized, not a new admission or identity policy.
 - [Forecast performance validation](../docs/performance-validation.md) compares the complete b17 and candidate builder outputs, persistence, query bounds/work and cancellation under actual HA with deterministic Recorder/Store seams. It is not a real-database throughput benchmark. The comparison baseline is read from the published b17 source in git history.
 

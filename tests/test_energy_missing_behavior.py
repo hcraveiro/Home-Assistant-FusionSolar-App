@@ -85,7 +85,7 @@ def test_repeated_poll_correction_missing_and_recovery(module):
         data["data"]["totalProductPower"] = raw
         api.update_output_with_energy_balance(output)
         assert output["panel_production_lifetime"] == expected
-        assert output["panel_production_month"] == (0 if raw == "--" else expected)
+        assert output["panel_production_month"] == expected
 
 
 @pytest.mark.parametrize("isitepower", [False, True])

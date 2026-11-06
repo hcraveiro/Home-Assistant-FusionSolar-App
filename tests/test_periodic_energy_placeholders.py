@@ -1,4 +1,4 @@
-"""Explicit b17 periodic '--' policy, through real parsers/readers/assembled API."""
+"""Corrected b19 universal aggregate '--' policy, through real parsers/readers/assembled API."""
 from copy import deepcopy
 from datetime import datetime
 import importlib
@@ -36,11 +36,11 @@ def frozen(api, api_module, monkeypatch):
 
 
 @pytest.mark.parametrize("counter", COUNTERS)
-def test_only_classified_energy_counters_get_literal_zero(api, api_module, counter):
+def test_individual_energy_counters_never_get_literal_zero(api, api_module, counter):
     kind = api_module.DeviceType.SENSOR_KWH
-    assert api._create_dynamic_device(counter, kind, "--", "mdi:test").state == 0
+    assert api._create_dynamic_device(counter, kind, "--", "mdi:test") is None
     key = counter.lower().replace(" ", "_")
-    assert api.get_device_value(counter, kind, {key: "--"}) == 0
+    assert api.get_device_value(counter, kind, {key: "--"}) is None
     assert api._optional_grid_energy({"v": "--"}, "v") is None
 
 
@@ -69,7 +69,7 @@ def test_no_broad_suffix_or_nonenergy_placeholder_exception(api, api_module, cou
 
 @pytest.mark.parametrize("period", PERIODS)
 @pytest.mark.parametrize("readings,expected", [
-    (["--"], 0), (["--", "--"], 0), (["--", 2, "--", -1], 1),
+    (["--"], None), (["--", "--"], None), (["--", 2, "--", -1], 1),
     ([], None), (None, None), (["--", None], None), (["--", "broken"], None),
     (["--", " -- "], None), (["--", True], None), (["--", float("inf")], None),
 ])
@@ -93,17 +93,17 @@ def test_all_literal_placeholders_in_supported_periodic_readers(frozen, isitepow
     api.update_output_with_energy_balance(output)
     for category in CATEGORIES:
         for period in PERIODS:
-            assert output[f"{category}_{period}"] == 0, (category, period)
+            assert output[f"{category}_{period}"] is None, (category, period)
         assert output[f"{category}_lifetime"] is None
     for category in BATTERY:
         for period in ("month", "year") + (() if isitepower else ("today", "week")):
-            assert output[f"{category}_{period}"] == 0, (category, period)
+            assert output[f"{category}_{period}"] is None, (category, period)
         assert output[f"{category}_lifetime"] is None
     assert all(value is None for key, value in output.items() if "ratio" in key)
     assert api._optional_grid_energy({"batteryCapacity": "--"}, "batteryCapacity") is None
     assert api._period_energy_sum(["--"] * 4, "month") is None
     assert api._period_energy_sum(["--"] * 10, "year") is None
-    assert api.calculate_week_energy(data, [2, 3, 4, 5], "productPower") == 0
+    assert api.calculate_week_energy(data, [2, 3, 4, 5], "productPower") is None
 
 
 @pytest.mark.parametrize("isitepower", [False, True])
@@ -156,7 +156,7 @@ def test_http_failure_or_short_elapsed_data_cannot_turn_into_zero(frozen, api_mo
     assert output["grid_consumption_today"] is None  # Short daily list cannot alias yesterday as today.
 
 
-@pytest.mark.parametrize("raw,expected", [("--", 0), (" -- ", None), (None, None), (True, None), ("broken", None), (0, 0), (-1, -1)])
+@pytest.mark.parametrize("raw,expected", [("--", None), (" -- ", None), (None, None), (True, None), ("broken", None), (0, 0), (-1, -1)])
 def test_battery_today_real_assembly(api, raw, expected):
     api.battery_dn = "battery"
     api.get_battery_type = Mock(return_value={"module1DevType": "LUNA"})
@@ -169,7 +169,7 @@ def test_battery_today_real_assembly(api, raw, expected):
         assert ([d.state for d in found] == [expected]) if expected is not None else not found
 
 
-@pytest.mark.parametrize("raw,expected", [("--", 0), (" -- ", None), (None, None), (True, None), ("broken", None), (0, 0), (-1, -1)])
+@pytest.mark.parametrize("raw,expected", [("--", None), (" -- ", None), (None, None), (True, None), ("broken", None), (0, 0), (-1, -1)])
 def test_optimizer_today_real_reader(api, raw, expected):
     api.station = "synthetic-station"
     api._optimizers = {"opt": {"parent_dn": "inv"}}
@@ -180,3 +180,34 @@ def test_optimizer_today_real_reader(api, raw, expected):
     found = [d for d in devices if d.device_id == "Optimizer Energy Today"]
     assert ([d.state for d in found] == [expected]) if expected is not None else not found
     assert any(d.device_id == "Optimizer Input Voltage" and d.state == 40 for d in devices)
+
+
+@pytest.mark.parametrize("segments,expected", [([2, 3, "--", 4], 9), ([0, "--", 0, 0], 0), (["--"] * 4, None)])
+def test_real_readers_use_one_aggregate_contract(frozen, segments, expected):
+    api = frozen
+    data = complete_data()
+    # Nov 5: current week is days 2..5. Required elapsed slots remain present.
+    for key, value in data["data"].items():
+        if isinstance(value, list):
+            data["data"][key] = ["--"] + segments + ["--"] * 26
+    api.call_energy_balance = Mock(return_value=data)
+    api.get_week_data = Mock(return_value=[{"data": {"totalBuyPower": v, "totalOnGridPower": v}} for v in segments])
+    output = {}
+    api.update_output_with_energy_balance(output)
+    for period in ("week", "month", "year", "lifetime"):
+        assert output[f"battery_injection_{period}"] == expected
+        assert output[f"battery_consumption_{period}"] == expected
+    assert output["panel_production_week"] == expected
+    assert output["grid_consumption_week"] == expected
+    assert output["panel_production_month"] is not None  # Other scalar metrics survive.
+
+
+def test_current_day_marker_does_not_invalidate_other_metrics(frozen):
+    data = complete_data()
+    data["data"]["productPower"][4] = "--"
+    frozen.call_energy_balance = Mock(return_value=data)
+    frozen.get_week_data = Mock(return_value=[deepcopy(data) for _ in range(4)])
+    output = {}
+    frozen.update_output_with_energy_balance(output)
+    assert output["panel_production_today"] is None
+    assert output["panel_production_month"] is not None

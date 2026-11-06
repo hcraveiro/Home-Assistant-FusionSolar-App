@@ -8,7 +8,7 @@ from dateutil.relativedelta import relativedelta
 
 from ..const import DATA_REFERER_URL, ENERGY_BALANCE_URL
 from .exceptions import APIConnectionError, APIDataStructureError
-from .models import ENERGY_BALANCE_CALL_TYPE, PERIODIC_ENERGY_PERIODS
+from .models import ENERGY_BALANCE_CALL_TYPE
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,13 +78,7 @@ class FusionSolarEnergyBalanceMixin:
         return value / 1000 if in_wh else value
 
     def _period_grid_energy(self, payload, key, period):
-        """Only explicit periodic energy '--' is zero; all other invalid data is unknown."""
-        if (
-            period in PERIODIC_ENERGY_PERIODS
-            and isinstance(payload, dict)
-            and payload.get(key) == "--"
-        ):
-            return 0.0
+        """Parse an individual energy reading without inventing marker zeros."""
         return self._optional_grid_energy(payload, key)
 
     def _set_grid_energy(self, output, period, direction, payload):
@@ -220,11 +214,7 @@ class FusionSolarEnergyBalanceMixin:
         return payload if isinstance(payload, dict) else {}
 
     def _energy_sum(self, readings, *, period=None):
-        """Sum valid segments; only explicit periodic '--' segments represent zero.
-
-        Default/lifetime keeps b14's skip-only policy (all '--' unavailable).
-        Empty vectors and any other invalid value remain unavailable in every period.
-        """
+        """Skip only literal markers; require at least one valid segment."""
         if not isinstance(readings, list) or not readings:
             return None
         values = [
@@ -232,7 +222,7 @@ class FusionSolarEnergyBalanceMixin:
             for item in readings if item != "--"
         ]
         if not values:
-            return 0.0 if period in PERIODIC_ENERGY_PERIODS else None
+            return None
         return sum(values) if all(value is not None for value in values) else None
 
     def _period_energy_sum(self, readings, period):
@@ -241,8 +231,8 @@ class FusionSolarEnergyBalanceMixin:
         Month vectors are day-indexed and year vectors month-indexed, as used
         for today's battery readings and the current month's house load. No
         lifetime start-year/index contract is known, so retain its whole vector.
-        Periodic literal '--' slots count as zero, even if all elapsed slots are
-        '--'. Lifetime retains skip-only semantics; other invalid values reject all.
+        Literal '--' slots are skipped in every period; all-marker is unknown.
+        Every other invalid elapsed reading rejects the aggregate.
         """
         count = {"month": datetime.now().day, "year": datetime.now().month}.get(period)
         if count is not None:

@@ -1,9 +1,8 @@
-# Numeric telemetry contract (proposed 1.6.8b17)
+# Numeric telemetry contract (proposed 1.6.8b19)
 
-Malformed telemetry is **unavailable**, not measured zero. The only explicit
-placeholder exception is the exact literal `--` on classified Today/Week/Month/Year
-**energy counters**, documented below. This does not repair Recorder history or
-change sensor IDs, units, device classes or state classes.
+Malformed telemetry and every individual literal `--` are **unavailable**, not
+measured zero. Calculated energy sums alone skip exact literal markers, requiring
+at least one valid reading. No IDs, units or state classes change.
 
 ## Shared parser
 
@@ -67,20 +66,13 @@ actual-HA numeric checker asserts that it agrees with `FusionSolarSensor.UNIT_MA
   Installation counts still round. Existing numeric precision/rounding is retained.
 - Social metrics are independent: missing/invalid values (including an unavailable
   entire optional response) stay unavailable, while other valid metrics survive.
-- The generic energy parser keeps its strict grammar, explicit Wh conversion and
-  unavailable `--`. **New user-required b17 exception:** energy-reader boundaries
-  interpret exact literal `--` as zero for Today/Week/Month/Year only. Nonempty
-  all-`--` elapsed vectors also become zero when complete; missing/short/failed
-  data and any other invalid value remain unavailable. Whitespace variants do not
-  qualify. Lifetime keeps b14/b16's skip-only vector policy: mixed `--`+valid sums
-  survive, all-`--`/empty vectors and direct `--` stay unavailable. Huawei lifetime
-  anomalies and corrections remain untouched.
-- Per-device periodic kWh counters use an explicit known-counter allowlist in
-  `api.models`, shared by the factory/getter and optimizer reader. It includes
-  Battery Energy Charged/Discharged Today and Optimizer Energy Today, but not
-  arbitrary names, total/lifetime counters, capacity, forced-operation setpoints,
-  statuses, power, ratios or social metrics. Zero ratio denominators stay unknown.
-  See [energy statistics policy](energy-statistics.md) for the precise b17 override.
+- The strict energy parser retains explicit Wh conversion. Every scalar/sample
+  `--`, including optimizer/battery daily readings, is unavailable. All calculated
+  accumulations skip only exact markers: `[2,3,"--",4] -> 9`, all-marker/empty ->
+  unavailable, real zero -> zero. Other invalid values still invalidate sums.
+  Elapsed-vector completeness and calendar slicing are unchanged. There is no
+  periodic allowlist or individual marker-zero exception in b19.
+  See [energy statistics policy](energy-statistics.md) for limits and risks.
 
 ## Regression checks
 
@@ -91,16 +83,15 @@ placeholder, unchanged lifetime and incomplete-calculation cases. The older issu
 visibility tests now use the real parser rather than a false-zero fake.
 
 `tests/api_profiles/check_numeric_homeassistant.py` is a **standalone actual-HA**
-checker, not a pytest/AST substitute. It derives a temporary four-frame synthetic
+checker, not a pytest/AST substitute. It derives a temporary five-frame synthetic
 profile from existing PV/meter HTTP routes and registers real HA entities:
 
-**valid → malformed/unavailable → legitimate zero/idle → recovery**.
+**valid → malformed/unavailable → literal-marker/unavailable → real zero/idle → recovery**.
 
 It checks source HTTP polling, isolation of unrelated valid values, stable
 registered entity/unique/device IDs, units/classes, and no network attempts.
-Energy transitions also prove registered periodic `--` → **0 kWh**, malformed →
-**unavailable**, lifetime `--` → **unavailable**, mixed lifetime vectors retaining
-valid segments, and corrected lifetime recovery without clamping. It
+Energy transitions prove scalar and all-marker aggregate unavailability separately
+from real numeric zero, mixed lifetime sums and unchanged correction handling. It
 uses `OfflineSession` with no network adapters plus DNS/TCP/Requests guards.
 Only temporary container files are written; no eighth persistent profile is
 added. Run using the same read-only, network-disabled image invocation described

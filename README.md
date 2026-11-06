@@ -1310,3 +1310,15 @@ Additional thanks to the community members who shared browser traces, HAR files 
 - battery module and pack coverage
 - power sensor / power meter coverage
 - device and frontend-derived sensor coverage
+
+## Energy marker handling (1.6.8b19)
+
+Individual Huawei `--` energy totals/samples are unavailable, never fabricated
+zero. All calculated energy sums skip only the exact marker: `[2,3,'--',4] = 9`;
+empty/all-marker sums remain unavailable, genuine zero remains zero, and other
+invalid readings invalidate sums. Required elapsed slots/calendar slicing stay
+unchanged. Existing IDs, units and `total_increasing` classes are unchanged.
+No history repair or suppression of Huawei corrections/anomalies is performed.
+Partial sums and large downward corrections can still trigger Recorder reset
+semantics; this is not a claim that all statistics risks are fixed.
+See [energy policy](docs/energy-statistics.md) and [Recorder evidence](docs/recorder-validation.md).

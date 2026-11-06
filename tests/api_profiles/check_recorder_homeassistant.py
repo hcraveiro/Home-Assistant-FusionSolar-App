@@ -41,12 +41,12 @@ FRAMES = (
     ("invalid-garbage", "garbage", "garbage", 5, 5),
     ("invalid-spaced-marker", " -- ", " -- ", 5, 5),
     ("literal-marker", "--", "--", 5, 5),
-    ("marker-recovery", 35, 35, 40, 5),
-    ("measured-zero", 0, 0, 40, 5),
-    ("zero-recovery", 2, 2, 42, 7),
-    ("second-monotonic", 35, 35, 75, 40),
-    ("relative-drop-over-10pct", 30, 30, 105, 70),
-    ("relative-drop-recovery", 35, 35, 110, 75),
+    ("marker-recovery", 35, 35, 5, 5),
+    ("measured-zero", 0, 0, 5, 5),
+    ("zero-recovery", 2, 2, 7, 7),
+    ("second-monotonic", 35, 35, 40, 40),
+    ("relative-drop-over-10pct", 30, 30, 70, 70),
+    ("relative-drop-recovery", 35, 35, 75, 75),
 )
 
 
@@ -261,9 +261,7 @@ async def run(report):
                             require(tuple(state.attributes.get(k) for k in ("unit_of_measurement", "device_class", "state_class")) ==
                                     ("kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING), "Energy classification changed")
                             raw = lifetime if period == "lifetime" else periodic
-                            if raw == "--" and period != "lifetime":
-                                expected = 0
-                            elif raw is None or isinstance(raw, str):
+                            if raw is None or isinstance(raw, str):
                                 expected = None
                             else:
                                 expected = raw * (4 if period == "week" else 1)
@@ -300,7 +298,7 @@ async def run(report):
                     observed = rows.get(entity_id, [])
                     # After the first unavailable transition interval, a wholly
                     # unavailable interval has no float states, hence no row.
-                    missing = {6, 7, 8} if period == "lifetime" else {6, 7}
+                    missing = {6, 7, 8}
                     by_interval = {round((row["start"] - start.timestamp()) / 300): row for row in observed}
                     require(set(by_interval) == set(range(36)) - missing,
                             f"Unexpected short-term intervals: {period}: {sorted(by_interval)}")
@@ -313,15 +311,13 @@ async def run(report):
                         raw = frame[2 if period == "lifetime" else 1]
                         if isinstance(raw, (int, float)):
                             expected_state = raw * factor
-                        elif raw == "--" and period != "lifetime":
-                            expected_state = 0
                         if index >= 24:
                             if period == "week":
-                                expected_state, expected_sum = (140, 440) if index == 24 else (142, 442)
+                                expected_state, expected_sum = (140, 300) if index == 24 else (142, 302)
                             elif period == "lifetime":
                                 expected_state, expected_sum = (35, 75) if index == 24 else (37, 77)
                             else:
-                                expected_state, expected_sum = (0, 110) if index == 24 else (2, 112)
+                                expected_state, expected_sum = (0, 75) if index == 24 else (2, 77)
                         close(row["state"], expected_state, f"Compiled state {period}/{index}")
                         close(row["sum"], expected_sum, f"Compiled sum {period}/{index}")
                         close(row["start"], (start + timedelta(minutes=5 * index)).timestamp(), "Statistics interval timestamp")
@@ -330,7 +326,7 @@ async def run(report):
                         require(row["last_reset"] is None, "TOTAL_INCREASING should not publish last_reset")
                     lts = hourly.get(entity_id, [])
                     require(len(lts) == 3, f"Missing hourly long-term rows: {period}: {len(lts)}")
-                    expected_hourly = (7, 75, 77) if period == "lifetime" else (168, 440, 442) if period == "week" else (42, 110, 112)
+                    expected_hourly = (7, 75, 77) if period == "lifetime" else (28, 300, 302) if period == "week" else (7, 75, 77)
                     for index, expected_sum in enumerate(expected_hourly):
                         close(lts[index]["sum"], expected_sum, f"Hourly sum {period}/{index}")
                         close(lts[index]["state"], by_interval[(index + 1) * 12 - 1]["state"], f"Hourly state {period}/{index}")

@@ -30,10 +30,11 @@ def numeric_profile(load_profile):
     profile["title"] = "MOCK disposable numeric transitions"
     profile["origin"] = "synthetic"
     profile["frames"] = []
-    # Four full HTTP snapshots, not Device objects or direct HA state writes.
+    # Five full HTTP snapshots, not Device objects or direct HA state writes.
     for name, flow, meter, voltage, current, coal, trees in (
         ("valid", "600W", "0.6 kW", "400 V", "5 A", "3kg", "4.6"),
         ("malformed", "garbage", True, "NaN", "5 A", " -- ", "1e999"),
+        ("literal-marker", "--", "--", "--", "--", "--", "--"),
         ("zero", "0W", 0, "0 V", "0 A", "0 kg", "0"),
         ("recovery", "-600 W", "-0.6kW", "400 V", "5 A", "2.5kg", "3.6"),
     ):
@@ -61,7 +62,7 @@ def numeric_profile(load_profile):
                 body["data"]["standardCoalSavings"] = coal
                 body["data"]["equivalentTreePlanting"] = trees
             elif path.endswith("energy-balance"):
-                raw = {"valid": "5 kWh", "malformed": "garbage", "zero": "--", "recovery": "4 kWh"}[name]
+                raw = {"valid": "5 kWh", "malformed": "garbage", "literal-marker": "--", "zero": 0, "recovery": "4 kWh"}[name]
                 lifetime = route["params"]["timeDim"] == "6"
                 # Explicit synthetic station counters, not inferred from topology.
                 body["data"]["chargePower"] = []
@@ -70,11 +71,11 @@ def numeric_profile(load_profile):
                     if isinstance(value, list):
                         body["data"][key] = (
                             ["--", 10 if name == "valid" else 9] if lifetime and name in ("valid", "recovery")
-                            else ["--"] if lifetime else [raw] * 31
+                            else [0] if lifetime and name == "zero" else ["--"] if lifetime else [raw] * 31
                         )
                     else:
                         body["data"][key] = (
-                            {"valid": 35, "malformed": "--", "zero": "--", "recovery": 34}[name]
+                            {"valid": 35, "malformed": "--", "literal-marker": "--", "zero": 0, "recovery": 34}[name]
                             if lifetime else raw
                         )
             else:
@@ -169,6 +170,11 @@ async def run(report):
                     "panel_production_lifetime": [35, None, None, 34],
                     "battery_injection_lifetime": [10, None, None, 9],
                 }
+                for suffix, values in targets.items():
+                    if suffix.endswith("lifetime"):
+                        values[2] = 0
+                    values.insert(2, 0.6 if suffix == "house_load_power" else None)
+                    require(len(values) == len(profile["frames"]), f"Expectation/frame count mismatch: {suffix}")
                 for index, frame in enumerate(profile["frames"]):
                     before = len(api.session.calls)
                     if index:

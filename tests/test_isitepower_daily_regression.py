@@ -80,7 +80,7 @@ class ISitePowerEnergyRegressions(unittest.TestCase):
         namespace["_update_isitepower_energy_balance"](Fake(), out)
         self.assertEqual(out["panel_production_today"], 23.37)
         self.assertEqual(out["house_load_today"], 15.5)
-        self.assertEqual(out["panel_production_consumption_today"], 0)  # Explicit periodic '--'.
+        self.assertIsNone(out.get("panel_production_consumption_today"))
         self.assertIsNone(out["grid_consumption_month"])
         self.assertIsNone(out["grid_injection_month"])
         self.assertEqual(calls, ["month", "year", "lifetime"])

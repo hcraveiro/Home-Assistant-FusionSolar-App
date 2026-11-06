@@ -61,7 +61,33 @@ queued. HA clock timers are not dispatched: input polls and compilation
 intervals are explicitly driven, without waiting real five-minute/hour periods.
 The JSON preserves state/history timestamps and actual compiled rows.
 
-## Interpretation
+## Corrected b19 contract: actual isolated Recorder result
+
+The updated checker passes with the same real SQLite/Recorder pipeline and all
+classes unchanged. Scalar `35 -> "--"/unavailable -> 35` retains sum **5 -> 5**;
+there is no fabricated zero and no +35 overcount at recovery. All five targets
+have 33 short-term rows and three hourly rows. Current hourly sums are:
+
+| Hour UTC | Today / Month / Year | Week | Lifetime |
+|---|---:|---:|---:|
+| Dec 31 22:00 | 7 | 28 | 7 |
+| Dec 31 23:00 | 75 | 300 | 75 |
+| Jan 1 00:00 | 77 | 302 | 77 |
+
+Measured zero, real calendar reset, 1/0.01 kWh corrections and the >10% drop
+remain exercised, not hidden. Real zero starts a new cycle. A sufficiently large
+downward correction still triggers TOTAL_INCREASING reset detection. Ignoring
+markers in a mixed aggregate can lower a partial sum and trigger the same risk;
+no claim that all statistical risks are fixed is justified. Production-reader
+unit regressions additionally prove mixed `[2,3,"--",4] -> 9` across week/month/
+year/lifetime, all-marker unavailable and genuine zero valid. No SQL sum injection,
+history repair or live data is used.
+
+Current artifacts: `/tmp/opencode/b19-validation/ha-runtime-results/`.
+The following measurements are retained **honestly as historical evidence** of
+the old policy, not assertions of current b19 behavior.
+
+## Historical interpretation (old policy)
 
 A numeric entity state and its cumulative Recorder `sum` are different things.
 The initial counter value establishes Recorder's zero point; it is not itself
@@ -82,7 +108,7 @@ The check deliberately distinguishes:
 The exact literal-marker rule is not extended to other invalid inputs, nor is
 Lifetime changed. Neither corrections nor resets are clamped/suppressed.
 
-## Observed results
+## Historical b18 validation / OLD b17–b18 policy (not current b19 behavior)
 
 The standalone run **passed** against published V1.6.8b17 (`0540c9c`), with
 17 HTTP snapshots, 17 production discovery calls, 290 offline HTTP requests,
@@ -155,7 +181,7 @@ Huawei drop.
 
 ### Exact placeholder zero can create double counting
 
-The b17 periodic policy is preserved exactly. Before the placeholder, the
+In the historical b18 run, the b17 periodic policy was preserved exactly. Before the placeholder, the
 counter is 35 and the actual sum is 5 (initial baseline 30). The periodic
 `"--"` is parsed to a numeric zero. Recorder infers a reset but leaves sum at 5.
 When **the same** 35 returns, Recorder treats it as new-cycle energy and the
