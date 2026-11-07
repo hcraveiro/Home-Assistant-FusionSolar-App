@@ -19,6 +19,7 @@ READ_ONLY_POST_PATHS = frozenset({
     "/rest/neteco/web/config/device/v2/device-status-query",
     "/rest/pvms/web/station/v1/layout/device-tree-page",
     "/rest/pvms/web/station/v1/layout/device-sampling-data",
+    "/rest/neteco/monitor/v1/signal/common/sampling-signal",
 })
 READ_ONLY_GET_PATHS = frozenset({
     "/rest/dpcloud/auth/v1/keep-alive",
@@ -42,7 +43,7 @@ _DYNAMIC = {"$timestamp_ms", "$date_midnight", "$date_epoch_ms", "$timezone_hour
 _IDENTITY_KEYS = {
     "dn", "stationDn", "deviceDn", "inverterDn", "parentDn", "bindInverterDn",
     "devDn", "devId", "devIds", "parentDevId", "dnId", "sn", "serial", "bindNode",
-    "conditionParams.parentDn", "invertDnlist",
+    "conditionParams.parentDn", "invertDnlist", "samplingSigQueryCon.dn",
 }
 
 

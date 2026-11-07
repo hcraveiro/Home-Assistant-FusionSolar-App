@@ -39,6 +39,7 @@ jobs:
             "tests/api_profiles/check_homeassistant.py"
             "tests/api_profiles/check_runtime_homeassistant.py"
             "tests/api_profiles/check_numeric_homeassistant.py"
+            "tests/api_profiles/check_mains_homeassistant.py"
             "tests/api_profiles/check_recorder_homeassistant.py"
             "tests/api_profiles/check_lifecycle_homeassistant.py"
           )

@@ -25,6 +25,14 @@
   "routes": [
     {
       "method": "GET",
+      "path": "/rest/pvms/web/station/v3/overview/energy-flow",
+      "params": {"stationDn": "MOCK_RUNTIME_ISITEPOWER_STATION", "featureId": "aifc"},
+      "json": null,
+      "status": 200,
+      "body": {"success": true, "failCode": 0, "data": {"flow": {"nodes": []}}}
+    },
+    {
+      "method": "GET",
       "path": "/rest/pvms/web/station/v2/overview/energy-flow",
       "params": {
         "stationDn": "MOCK_RUNTIME_ISITEPOWER_STATION"

@@ -601,6 +601,8 @@ class FusionSolarInstallationMixin:
         self._parse_installation_flow_nodes(flow_data_nodes, output)
         from .isitepower import discover_cluster_dns
         self._isitepower_cluster_dns = discover_cluster_dns(flow_data_nodes)
+        from .mains import refresh_mains
+        refresh_mains(self, flow_data_nodes)
         if getattr(self, "_is_isitepower_m", False):
             # Every energy total needs a validated source. The conventional
             # station endpoint may omit all categories on iSitePower-M.

@@ -7,6 +7,32 @@ Integrate FusionSolar App into Home Assistant without requiring Kiosk mode or th
 
 This integration was built for FusionSolar users who only have access to the regular FusionSolar App account. If you already have access to the official Northbound API / OpenAPI, please consider using [Tijs Verkoyen's Integration](https://github.com/tijsverkoyen/HomeAssistant-FusionSolar).
 
+## iSitePower-M mains connectivity (source candidate, not released)
+
+A read-only `Mains State` binary sensor uses Home Assistant's connectivity class:
+**On** means the verified Mains State signal is `1`; **Off** requires an explicit
+`0`. Missing, malformed, ambiguous, wrong-device/type or failed sampling is
+**unavailable**, never inferred Off from zero power. Only iSitePower-M stations
+are eligible. No physical control is performed.
+
+Identity uses the actual mains node `devIds` DN, never the graph-local `id`.
+An explicit single v2 DN can be reused. When absent, an optional v3 identity-only
+request (`stationDn`, `featureId=aifc`) is bounded to once per hour until found;
+ordinary stations get no new requests. A successfully discovered v3 DN is cached
+until integration reload; this candidate does not periodically rediscover a
+replacement DN. Discovery does not replace v2 power,
+links or energy data and is independent of power magnitude. Multiple mains
+nodes/DNs are unsupported and rejected. Sampling reuses the normal coordinator
+poll with isolated failures; the entity/device uses the existing entry identity
+resolver and unloads with the integration.
+
+Evidence: [issue #101 historical sanitized association](https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101#issuecomment-6705774990),
+captured 27 October 2026, selected 7 November. **Only Mains On was physically
+observed**, including at 0.00 kW. Off and failure/recovery transitions in tests
+are synthetic; v2 presence of `devIds` remains unknown. No outage was induced.
+See `tests/fixtures/mains-state-provenance.json` and the offline actual-HA checker
+`tests/api_profiles/check_mains_homeassistant.py`.
+
 ## Contents
 
 - [Installation](#installation)

@@ -39,6 +39,7 @@ def integration():
 
     class Platform(StrEnum):
         SENSOR = "sensor"
+        BINARY_SENSOR = "binary_sensor"
 
     register("homeassistant.const", Platform=Platform)
     register("homeassistant.core", HomeAssistant=object, callback=lambda function: function)
@@ -114,7 +115,7 @@ async def test_entry_setup_registers_runtime_and_platforms(integration, environm
     assert hass.data[module.DOMAIN][entry.entry_id].coordinator is coordinator
     entry.add_update_listener.assert_called_once()
     hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(
-        entry, [module.PLATFORMS[0]]
+        entry, [module.Platform.SENSOR, module.Platform.BINARY_SENSOR]
     )
 
 
