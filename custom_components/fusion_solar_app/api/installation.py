@@ -1,11 +1,13 @@
 """Fusion Solar App installation helpers."""
 
 import logging
+import math
 import re
+import time
 from typing import Any
 from urllib.parse import unquote
 
-from ..const import DATA_URL
+from ..const import DATA_REFERER_URL, DATA_URL
 from ..utils import extract_numeric
 from .exceptions import APIConnectionError, APIDataStructureError
 from .models import Device, DeviceType
@@ -74,12 +76,12 @@ class FusionSolarInstallationMixin:
             "self_consumption_ratio_by_production_month": 0.0,
             "self_consumption_ratio_by_production_year": 0.0,
             "self_consumption_ratio_by_production_lifetime": 0.0,
-            "standard_coal_saved": 0.0,
-            "standard_coal_saved_this_year": 0.0,
-            "co2_avoided": 0.0,
-            "co2_avoided_this_year": 0.0,
-            "equivalent_trees_planted": 0,
-            "equivalent_trees_planted_this_year": 0,
+            "standard_coal_saved": None,
+            "standard_coal_saved_this_year": None,
+            "co2_avoided": None,
+            "co2_avoided_this_year": None,
+            "equivalent_trees_planted": None,
+            "equivalent_trees_planted_this_year": None,
             "exit_code": "SUCCESS",
         }
 
@@ -116,11 +118,7 @@ class FusionSolarInstallationMixin:
 
         if "data" not in data or "flow" not in data["data"]:
             _LOGGER.error(
-                "FusionSolar realtime data response had an unexpected structure. "
-                "Cookies=%s Headers=%s Body=%s",
-                self.session.cookies.get_dict(),
-                headers,
-                str(data)[:500],
+                "FusionSolar realtime data response had an unexpected structure."
             )
             raise APIDataStructureError("FusionSolar realtime data structure is invalid")
 
@@ -136,22 +134,8 @@ class FusionSolarInstallationMixin:
 
     @staticmethod
     def _valid_flow_power(raw: Any) -> float | None:
-        """Parse a real numeric flow reading, including attached kW/W/% units."""
-        if raw is None or isinstance(raw, bool):
-            return None
-        if isinstance(raw, str):
-            match = re.fullmatch(
-                r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:kW|W|%)?\s*",
-                raw,
-                flags=re.IGNORECASE,
-            )
-            if match is None:
-                return None
-            return float(match.group(1))
-        try:
-            return float(raw)
-        except (ValueError, TypeError, OverflowError):
-            return None
+        """Parse flow power in kW; bare readings are already kW, not W or SOC."""
+        return extract_numeric(raw, "kW")
 
     def _parse_installation_flow_nodes(
         self,
@@ -184,7 +168,7 @@ class FusionSolarInstallationMixin:
                 tips = node.get("deviceTips") or {}
                 soc_raw = tips.get("SOC")
                 if soc_raw not in (None, "", "--", "null"):
-                    output["battery_percentage"] = self._valid_flow_power(soc_raw)
+                    output["battery_percentage"] = extract_numeric(soc_raw, "%")
                 signed_power = self._valid_flow_power(tips.get("BATTERY_POWER"))
                 if value is None or signed_power is None:
                     continue
@@ -234,6 +218,8 @@ class FusionSolarInstallationMixin:
                 - output["battery_injection_power"]
                 - output["house_load_power"]
             )
+            if not math.isfinite(balance):
+                continue
             if balance > 0:
                 output["grid_injection_power"] = grid_power
                 output["grid_consumption_power"] = 0.0
@@ -241,21 +227,224 @@ class FusionSolarInstallationMixin:
                 output["grid_consumption_power"] = grid_power
                 output["grid_injection_power"] = 0.0
 
-    def _discover_battery_dn_from_flow_nodes(self, flow_data_nodes: list[dict[str, Any]]) -> None:
-        """Discover the battery DN from installation flow nodes."""
-        if self.battery_dn is not None:
+    def _parse_isitepower_grid_import(
+        self,
+        nodes: list[dict[str, Any]],
+        links: list[dict[str, Any]],
+        output: dict[str, float | int | str],
+    ) -> None:
+        """Recognize only the verified iSitePower-M Mains-to-cube import topology."""
+        if not getattr(self, "_is_isitepower_m", False):
             return
 
+        mains = [
+            node for node in nodes
+            if isinstance(node, dict)
+            and node.get("mocId") == 60001
+            and node.get("name") == "neteco.pvms.pcs.station.energyflow.mains"
+        ]
+        cubes = [
+            node for node in nodes
+            if isinstance(node, dict)
+            and node.get("mocId") == 60014
+            and node.get("name") == "neteco.pvms.devTypeLangKey.power_cube"
+        ]
+        if len(mains) != 1 or len(cubes) != 1:
+            return
+
+        mains_node, cube_node = mains[0], cubes[0]
+        if (
+            mains_node.get("display") != "CONNECTED"
+            or cube_node.get("display") != "CONNECTED"
+        ):
+            return
+        mains_id, cube_id = mains_node.get("id"), cube_node.get("id")
+        if mains_id is None or cube_id is None or str(mains_id) == str(cube_id):
+            return
+
+        # Endpoint references must identify exactly one node, not just one
+        # semantic Mains/cube candidate; duplicate graph IDs are ambiguous.
+        for endpoint in (mains_id, cube_id):
+            if sum(isinstance(node, dict) and node.get("id") is not None
+                   and str(node["id"]) == str(endpoint) for node in nodes) != 1:
+                return
+
+        description = mains_node.get("description")
+        if not isinstance(description, dict):
+            return
+        reading = description.get("value")
+        if not isinstance(reading, str):
+            return
+        # Only a confirmed kW reading is valid for this graph layout.
+        match = re.fullmatch(r"[ ]*([0-9]+(?:[.][0-9]*)?|[.][0-9]+)[ ]*kW[ ]*", reading, flags=re.IGNORECASE)
+        if match is None:
+            return
+        grid_power = float(match.group(1))
+        if not 0 < grid_power < float("inf"):
+            return
+
+        connected_links = [
+            link for link in links
+            if isinstance(link, dict)
+            and {
+                str(link.get("fromNode")),
+                str(link.get("toNode")),
+            } == {str(mains_id), str(cube_id)}
+        ]
+        # A single visible Mains -> cube FORWARD flow is the only validated case.
+        if len(connected_links) != 1:
+            return
+        link = connected_links[0]
+        if (
+            link.get("visible") is not True
+            or str(link.get("fromNode")) != str(mains_id)
+            or str(link.get("toNode")) != str(cube_id)
+            or link.get("flowing") != "FORWARD"
+            or link.get("direction") is not None
+        ):
+            return
+
+        output["grid_consumption_power"] = grid_power
+        # Export is not proven to be zero from this graph alone.
+        output["grid_injection_power"] = None
+
+    def _discover_battery_dn_from_flow_nodes(self, flow_data_nodes: list[dict[str, Any]]) -> None:
+        """Discover every battery DN while preserving the legacy primary battery."""
+        if not hasattr(self, "battery_dns"):
+            self.battery_dns = []
+        if self.battery_dn and self.battery_dn not in self.battery_dns:
+            self.battery_dns.insert(0, self.battery_dn)
+
         for node in flow_data_nodes:
-            if node.get("name") != "neteco.pvms.devTypeLangKey.energy_store":
+            if "energy_store" not in str(node.get("name", "")):
                 continue
 
-            dev_ids = node.get("devIds") or []
-            dn = dev_ids[0] if dev_ids else node.get("devDn")
-            if dn:
-                self.battery_dn = dn
-                _LOGGER.info("Discovered battery DN: %s", self.battery_dn)
+            dev_ids = node.get("devIds")
+            candidates = dev_ids if isinstance(dev_ids, list) and dev_ids else [node.get("devDn")]
+            for candidate in candidates:
+                if isinstance(candidate, bool) or not isinstance(candidate, (str, int)):
+                    continue
+                dn = str(candidate).strip()
+                if not dn:
+                    continue
+                if dn not in self.battery_dns:
+                    self.battery_dns.append(dn)
+
+        if self.battery_dns:
+            if self.battery_dn is None and not getattr(self, "_battery_primary_ambiguous", False):
+                self.battery_dn = self.battery_dns[0]
+            _LOGGER.info("Discovered battery DNs: %s", self.battery_dns)
+
+    def _discover_additional_batteries_from_v3(self) -> None:
+        """Probe v3 for secondary batteries only on multi-inverter stations.
+
+        The existing v2 flow remains authoritative for all live power and
+        installation measurements. This optional v3 request only supplements
+        battery discovery when it confirms the primary battery DN.
+        """
+        if (
+            getattr(self, "_is_isitepower_m", False)
+            or len(getattr(self, "inverters", {})) < 2
+            or not self.battery_dn
+        ):
+            return
+
+        now = time.monotonic()
+        if now < getattr(self, "_battery_v3_next_probe", 0):
+            return
+        # Never add an additional API request on every 60-second refresh.
+        self._battery_v3_next_probe = now + 3600
+        try:
+            _, response = self._request_json(
+                "GET",
+                f"https://{self.data_host}/rest/pvms/web/station/v3/overview/energy-flow",
+                context="FusionSolar secondary battery discovery",
+                optional=True,
+                headers={"Accept": "application/json"},
+                params={"stationDn": unquote(self.station), "featureId": "aifc"},
+            )
+            if not isinstance(response, dict) or response.get("success") is not True:
                 return
+            flow = response.get("data", {}).get("flow", {})
+            nodes = flow.get("nodes") if isinstance(flow, dict) else None
+            if not isinstance(nodes, list):
+                return
+            candidates = []
+            for node in nodes:
+                if not isinstance(node, dict) or node.get("name") != "neteco.pvms.devTypeLangKey.energy_store":
+                    continue
+                ids = node.get("devIds")
+                if not isinstance(ids, list):
+                    continue
+                candidates.extend(
+                    str(dn).strip() for dn in ids
+                    if isinstance(dn, (str, int)) and not isinstance(dn, bool) and str(dn).strip()
+                )
+            # A different v3 primary ID could represent a different device
+            # namespace. Never introduce duplicate or unrelated battery devices.
+            if self.battery_dn not in candidates or len(set(candidates)) < 2:
+                return
+            self._discover_battery_dn_from_flow_nodes(nodes)
+        except Exception as ex:
+            _LOGGER.debug("Secondary battery v3 discovery unavailable: %s", type(ex).__name__)
+
+    def _discover_battery_parents(self) -> None:
+        """Map known battery DNs to their inverter from the device tree.
+
+        Energy-flow reports a station-wide storage node and therefore cannot
+        establish a per-battery parent.  The portal's read-only children-list
+        response does: each battery record carries both its own DN and the
+        parent inverter DN.  Only accept batteries already discovered from
+        energy-flow, so this enrichment can never create unrelated devices.
+        """
+        battery_dns = set(getattr(self, "battery_dns", []) or [])
+        if not battery_dns or not getattr(self, "inverters", None):
+            return
+
+        parents = getattr(self, "_battery_parent_dns", {})
+        headers = {
+            "Accept": "application/json",
+            "Referer": f"https://{self.data_host}{DATA_REFERER_URL}",
+        }
+        if getattr(self, "csrf", None):
+            headers["Roarand"] = self.csrf
+
+        for inverter_dn in self.inverters:
+            try:
+                _, response = self._request_json(
+                    "GET",
+                    f"https://{self.data_host}/rest/neteco/web/config/device/v1/children-list",
+                    context="FusionSolar battery parent discovery",
+                    optional=True,
+                    headers=headers,
+                    params={
+                        "conditionParams.parentDn": inverter_dn,
+                        "conditionParams.curPage": 0,
+                        "conditionParams.recordperpage": 100,
+                        "conditionParams.mocTypes": 20815,
+                        "_": int(time.time() * 1000),
+                    },
+                )
+            except Exception as ex:
+                _LOGGER.debug("Battery parent discovery failed for inverter %s: %s", inverter_dn, type(ex).__name__)
+                continue
+
+            records = response.get("data", []) if isinstance(response, dict) else []
+            if not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                battery_dn = record.get("dn")
+                parent_dn = record.get("parentDn")
+                if (
+                    isinstance(battery_dn, str)
+                    and battery_dn in battery_dns
+                    and isinstance(parent_dn, str)
+                    and parent_dn == inverter_dn
+                ):
+                    parents[battery_dn] = parent_dn
+        self._battery_parent_dns = parents
 
     def _enrich_installation_output(
         self,
@@ -347,12 +536,47 @@ class FusionSolarInstallationMixin:
         return devices
 
     def _build_battery_devices(self) -> list[Device]:
-        """Build battery device entities."""
-        try:
-            return self.get_battery_devices()
-        except Exception as ex:
-            _LOGGER.warning("Failed to fetch battery devices: %s", ex)
+        """Build each battery independently, retaining primary legacy entity IDs."""
+        battery_dns = list(dict.fromkeys(getattr(self, "battery_dns", []) or []))
+        if self.battery_dn and self.battery_dn not in battery_dns:
+            battery_dns.insert(0, self.battery_dn)
+        if not battery_dns:
             return []
+
+        primary_dn = self.battery_dn
+        if primary_dn is None and not getattr(self, "_battery_primary_ambiguous", False):
+            primary_dn = battery_dns[0]
+        devices: list[Device] = []
+        original_dn = self.battery_dn
+        metadata_fields = (
+            "battery_model",
+            "battery_serial_number",
+            "battery_software_version",
+        )
+        primary_metadata = {field: getattr(self, field, None) for field in metadata_fields}
+        try:
+            for dn in battery_dns:
+                self.battery_dn = dn
+                # Only secondary batteries receive a DN scope, preserving legacy IDs.
+                self._battery_entity_dn = dn if dn != primary_dn else None
+                if dn != primary_dn:
+                    for field in metadata_fields:
+                        setattr(self, field, None)
+                try:
+                    devices.extend(self.get_battery_devices())
+                except Exception as ex:
+                    _LOGGER.warning("Failed to fetch battery devices for %s: %s", dn, ex)
+                finally:
+                    if dn == primary_dn:
+                        primary_metadata = {
+                            field: getattr(self, field, None) for field in metadata_fields
+                        }
+        finally:
+            self.battery_dn = original_dn
+            self._battery_entity_dn = None
+            for field, value in primary_metadata.items():
+                setattr(self, field, value)
+        return devices
 
     def _build_power_sensor_devices(
         self,
@@ -377,6 +601,8 @@ class FusionSolarInstallationMixin:
         self._parse_installation_flow_nodes(flow_data_nodes, output)
         from .isitepower import discover_cluster_dns
         self._isitepower_cluster_dns = discover_cluster_dns(flow_data_nodes)
+        from .mains import refresh_mains
+        refresh_mains(self, flow_data_nodes)
         if getattr(self, "_is_isitepower_m", False):
             # Every energy total needs a validated source. The conventional
             # station endpoint may omit all categories on iSitePower-M.
@@ -388,10 +614,17 @@ class FusionSolarInstallationMixin:
                 ):
                     output[f"{category}_{period}"] = None
             output["battery_capacity"] = None
-        self._parse_installation_flow_links(flow_data_links, output)
+        if self._is_isitepower_m:
+            output["grid_consumption_power"] = None
+            output["grid_injection_power"] = None
+            self._parse_isitepower_grid_import(flow_data_nodes, flow_data_links, output)
+        else:
+            self._parse_installation_flow_links(flow_data_links, output)
     
         self._discover_battery_dn_from_flow_nodes(flow_data_nodes)
         self._discover_inverter_dns_from_flow_nodes(flow_data_nodes)
+        self._discover_additional_batteries_from_v3()
+        self._discover_battery_parents()
         for inverter_dn in self.inverters:
             self._ensure_inverter_metadata_loaded(inverter_dn)
     

@@ -15,12 +15,15 @@ from .energy_balance import FusionSolarEnergyBalanceMixin
 from .exceptions import (
     APIAuthCaptchaError,
     APIAuthError,
+    APIAuthRejectedError,
     APIConnectionError,
     APIDataStructureError,
 )
 from .installation import FusionSolarInstallationMixin
 from .inverter import FusionSolarInverterMixin
-from .models import Device, DeviceType, ENERGY_BALANCE_CALL_TYPE, InverterInfo
+from .models import (
+    Device, DeviceType, ENERGY_BALANCE_CALL_TYPE, InverterInfo, NUMERIC_DEVICE_UNITS,
+)
 from .optimizer import FusionSolarOptimizerMixin
 from .social import FusionSolarSocialMixin
 from .station import FusionSolarStationMixin
@@ -56,6 +59,11 @@ class FusionSolarAPI(
         self.inverters: Dict[str, InverterInfo] = {}
 
         self.battery_dn = None
+        self.battery_dns: list[str] = []
+        # Parent inverter DNs are discovered separately from the station-wide
+        # energy-flow graph, whose storage node intentionally aggregates batteries.
+        self._battery_parent_dns: dict[str, str] = {}
+        self._battery_entity_dn: str | None = None
         self.battery_model = None
         self.battery_serial_number = None
         self.battery_software_version = None
@@ -73,8 +81,8 @@ class FusionSolarAPI(
         self.dp_session = ""
         self.connected: bool = False
         self.last_session_time: datetime | None = None
-        self._session_thread: threading.Thread | None = None
-        self._stop_event = threading.Event()
+        # Session renewal is owned by the coordinator, never a background thread.
+        self._closed = False
         self.csrf = None
         self.csrf_time = None
         self.request_timeout = 20
@@ -100,14 +108,18 @@ class FusionSolarAPI(
             if raw_value is None:
                 return None
             state = str(raw_value)
-        elif device_type == DeviceType.SENSOR_PERCENTAGE:
-            if raw_value in ("", "--", "null", None):
+        elif device_type == DeviceType.SENSOR_KWH:
+            state = self._optional_grid_energy({"value": raw_value}, "value")
+            if state is None:
                 return None
-            state = int(round(extract_numeric(raw_value)))
         else:
-            if raw_value in ("", "--", "null", None):
+            value = extract_numeric(raw_value, NUMERIC_DEVICE_UNITS.get(device_type, ""))
+            if value is None:
                 return None
-            state = round(float(extract_numeric(raw_value)), 4)
+            state = (
+                int(round(value)) if device_type == DeviceType.SENSOR_PERCENTAGE
+                else round(value, 4)
+            )
 
         return Device(
             device_id=device_id,
@@ -185,77 +197,38 @@ class FusionSolarAPI(
         if device_type == DeviceType.SENSOR_TEXT:
             return str(value)
 
-        if device_type == DeviceType.SENSOR_PERCENTAGE:
-            return int(float(value))
-
-        if device_type == DeviceType.SENSOR_COUNT:
-            return int(round(float(value)))
-
-        if device_type in (
-            DeviceType.SENSOR_KW,
-            DeviceType.SENSOR_KWH,
-            DeviceType.SENSOR_RATIO,
-            DeviceType.SENSOR_VOLTAGE,
-            DeviceType.SENSOR_CURRENT,
-            DeviceType.SENSOR_FREQUENCY,
-            DeviceType.SENSOR_TEMPERATURE,
-            DeviceType.SENSOR_RESISTANCE,
-            DeviceType.SENSOR_POWER_FACTOR,
-            DeviceType.SENSOR_KG,
-        ):
+        if device_type in NUMERIC_DEVICE_UNITS:
+            value = extract_numeric(value, NUMERIC_DEVICE_UNITS[device_type])
+            if value is None:
+                return None
+            if device_type == DeviceType.SENSOR_PERCENTAGE:
+                # Installation percentages historically truncate; dynamic ones round.
+                return int(value)
+            if device_type == DeviceType.SENSOR_COUNT:
+                return int(round(value))
             decimals = 2 if device_type == DeviceType.SENSOR_RATIO else 4
             _LOGGER.debug("%s: Value being returned is float: %s", device_id, value)
-            return round(float(value), decimals)
+            return round(value, decimals)
 
         return value
 
+    def close(self) -> None:
+        """Release local HTTP resources; run in the executor, not the event loop.
+
+        No server-side logout is sent: a config flow may have handed its token
+        to a coordinator using a separate HTTP session.
+        """
+        with self._session_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self.connected = False
+            self.dp_session = ""
+            self.csrf = None
+            self.csrf_time = None
+            self.session.close()
+
     def logout(self) -> bool:
-        """Disconnect from api."""
-        self.connected = False
-        self._stop_session_monitor()
+        """Disconnect and release the HTTP session, idempotently."""
+        self.close()
         return True
-
-    def _renew_session(self) -> None:
-        """Simulate session renewal."""
-        _LOGGER.info("Renewing session.")
-        self.reset_session()
-        try:
-            self.login()
-        except APIAuthCaptchaError:
-            _LOGGER.error(
-                "Session renewal requires CAPTCHA. "
-                "Automated renewal is not possible. "
-                "Please reconfigure the integration."
-            )
-            self.connected = False
-        except Exception as ex:
-            _LOGGER.error("Session renewal failed: %s", ex)
-            self.connected = False
-
-    def _session_monitor(self) -> None:
-        """Monitor session and renew if needed."""
-        while not self._stop_event.is_set():
-            if not self.connected:
-                self._renew_session()
-                if not self.connected:
-                    _LOGGER.warning("Session monitor stopping: renewal failed")
-                    self._stop_event.set()
-                    break
-            self._stop_event.wait(60)
-
-    def _start_session_monitor(self) -> None:
-        """Start the session monitor thread."""
-        if self._session_thread is None or not self._session_thread.is_alive():
-            self._stop_event.clear()
-            self._session_thread = threading.Thread(target=self._session_monitor, daemon=True)
-            self._session_thread.start()
-
-    def _stop_session_monitor(self) -> None:
-        """Stop the session monitor thread."""
-        self._stop_event.set()
-        if (
-            self._session_thread is not None
-            and self._session_thread.is_alive()
-            and self._session_thread is not threading.current_thread()
-        ):
-            self._session_thread.join()

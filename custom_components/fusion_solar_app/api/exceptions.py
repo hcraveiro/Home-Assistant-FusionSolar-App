@@ -1,5 +1,9 @@
 class APIAuthError(Exception):
-    """Exception class for auth error."""
+    """Authentication/session or login-protocol failure; not necessarily permanent."""
+
+
+class APIAuthRejectedError(APIAuthError):
+    """Affirmative credential or required-endpoint authorization rejection."""
 
 
 class APIAuthCaptchaError(Exception):

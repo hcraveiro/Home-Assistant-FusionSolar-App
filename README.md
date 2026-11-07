@@ -7,6 +7,32 @@ Integrate FusionSolar App into Home Assistant without requiring Kiosk mode or th
 
 This integration was built for FusionSolar users who only have access to the regular FusionSolar App account. If you already have access to the official Northbound API / OpenAPI, please consider using [Tijs Verkoyen's Integration](https://github.com/tijsverkoyen/HomeAssistant-FusionSolar).
 
+## iSitePower-M mains connectivity (source candidate, not released)
+
+A read-only `Mains State` binary sensor uses Home Assistant's connectivity class:
+**On** means the verified Mains State signal is `1`; **Off** requires an explicit
+`0`. Missing, malformed, ambiguous, wrong-device/type or failed sampling is
+**unavailable**, never inferred Off from zero power. Only iSitePower-M stations
+are eligible. No physical control is performed.
+
+Identity uses the actual mains node `devIds` DN, never the graph-local `id`.
+An explicit single v2 DN can be reused. When absent, an optional v3 identity-only
+request (`stationDn`, `featureId=aifc`) is bounded to once per hour until found;
+ordinary stations get no new requests. A successfully discovered v3 DN is cached
+until integration reload; this candidate does not periodically rediscover a
+replacement DN. Discovery does not replace v2 power,
+links or energy data and is independent of power magnitude. Multiple mains
+nodes/DNs are unsupported and rejected. Sampling reuses the normal coordinator
+poll with isolated failures; the entity/device uses the existing entry identity
+resolver and unloads with the integration.
+
+Evidence: [issue #101 historical sanitized association](https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101#issuecomment-6705774990),
+captured 27 October 2026, selected 7 November. **Only Mains On was physically
+observed**, including at 0.00 kW. Off and failure/recovery transitions in tests
+are synthetic; v2 presence of `devIds` remains unknown. No outage was induced.
+See `tests/fixtures/mains-state-provenance.json` and the offline actual-HA checker
+`tests/api_profiles/check_mains_homeassistant.py`.
+
 ## Contents
 
 - [Installation](#installation)
@@ -41,11 +67,20 @@ This integration was built for FusionSolar users who only have access to the reg
   - [Notes and limitations](#notes-and-limitations)
 - [Dashboard example](#dashboard-example)
 - [FAQ](#faq)
+- [Offline API replay tests (contributors)](#offline-api-replay-tests-contributors)
 - [Credits](#credits)
 
 ## Installation
 
 This integration can be added as a custom repository in HACS and installed from there.
+
+**Home Assistant compatibility:** the current cumulative candidate has been validated
+with Home Assistant Core **2026.10.4**. This is the tested reference version, not an
+enforced minimum: installation on older versions is not blocked, but compatibility
+with untested versions (older or newer) is not guaranteed.
+
+Real-account data is polled from the Huawei FusionSolar cloud and requires an
+internet connection; this integration does not poll the inverter locally.
 
 After installing it in HACS, add it in Home Assistant:
 
@@ -64,6 +99,14 @@ You will need:
 - **FusionSolar host / region**
 
 The integration logs in using the same credentials you use in the FusionSolar App web frontend.
+
+Two different accounts may access the same station: each entry gets independent
+sensors and devices. Existing registered entities keep their IDs and historical
+associations; additional identities use a persistent config-entry namespace, not
+the username or reload order. You can disable unwanted devices in Home Assistant.
+Removing one account does not rename the other's entities. See the
+[identity and migration contract](docs/lifecycle-validation.md#same-station-two-accounts-supported-identity-contract)
+for compatibility details and offline validation boundaries.
 
 The default sensor update interval is **60 seconds**.  
 FusionSolar App data is usually refreshed only every few minutes (commonly around 5 minutes depending on region / account / backend behaviour), but the shorter Home Assistant polling interval ensures the sensors update as soon as new data becomes available.
@@ -1285,6 +1328,14 @@ The Solcast provider only generates forecast points from the current moment forw
 
 Past chart data should continue to come from the real FusionSolar sensors. The forecast curve starts at `now` and then follows the Solcast-based projection for the rest of the day.
 
+## Offline API replay tests (contributors)
+
+Five offline API response profiles cover a single battery with configuration denied, two inverters with separate batteries, optimizer day/offline/recovery, daytime optimizer details, and forced-charge configuration. They exercise real API readers and sensor classes without credentials or live network access. Captured excerpts and synthetic scenarios are explicitly distinguished.
+
+There is also an **opt-in developer mock mode inside the integration**: set `FUSIONSOLAR_DEV_PROFILE_DIR` to a directory containing the runtime profiles, then add a separate **MOCK** entry and select its profile in HA. It runs the real discovery/coordinator/platform and creates actual devices/entities, with an instance-local network-incapable backend. Normal account entries are not switched to mock mode.
+
+Run `python -m pytest -q tests/test_api_profiles.py tests/test_api_profile_privacy.py tests/test_runtime_mock_api.py tests/test_runtime_mock_flow.py`. See the [activation instructions, scenario catalog and contribution guide](docs/mock-scenarios.md) for runtime profiles, remaining capture gaps, safety rules, and the isolated actual-HA lifecycle checker. Never collect samples by changing battery operation or commit raw HAR/authentication data.
+
 ## Credits
 
 A big thank you to Mark Parker ([msp1974](https://github.com/msp1974)) for providing the Community with a set of [Home Assistant Integration Templates](https://github.com/msp1974/HAIntegrationExamples) from which I started to create this integration.
@@ -1301,3 +1352,15 @@ Additional thanks to the community members who shared browser traces, HAR files 
 - battery module and pack coverage
 - power sensor / power meter coverage
 - device and frontend-derived sensor coverage
+
+## Energy marker handling (1.6.8b19)
+
+Individual Huawei `--` energy totals/samples are unavailable, never fabricated
+zero. All calculated energy sums skip only the exact marker: `[2,3,'--',4] = 9`;
+empty/all-marker sums remain unavailable, genuine zero remains zero, and other
+invalid readings invalidate sums. Required elapsed slots/calendar slicing stay
+unchanged. Existing IDs, units and `total_increasing` classes are unchanged.
+No history repair or suppression of Huawei corrections/anomalies is performed.
+Partial sums and large downward corrections can still trigger Recorder reset
+semantics; this is not a claim that all statistics risks are fixed.
+See [energy policy](docs/energy-statistics.md) and [Recorder evidence](docs/recorder-validation.md).

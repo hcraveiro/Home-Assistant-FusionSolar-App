@@ -95,6 +95,25 @@ def test_invalid_flow_shapes_are_rejected(modules, payload):
         api._get_installation_flow_data()
 
 
+@pytest.mark.parametrize("payload", [
+    {"session": "private-response-marker"},
+    {"data": {"session": "private-response-marker"}},
+])
+def test_invalid_flow_structure_never_logs_session_or_response(modules, caplog, payload):
+    api = make_installation(modules)
+    api.session.cookies.get_dict.return_value = {"dp-session": "private-cookie-marker"}
+    api._request_json.return_value = (None, payload)
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(modules[2].APIDataStructureError):
+            api._get_installation_flow_data()
+
+    assert "unexpected structure" in caplog.text
+    assert "private-cookie-marker" not in caplog.text
+    assert "private-response-marker" not in caplog.text
+    api.session.cookies.get_dict.assert_not_called()
+
+
 def test_battery_discovery_uses_first_id_and_preserves_existing(modules):
     api = make_installation(modules)
     nodes = [{"name": "neteco.pvms.devTypeLangKey.energy_store", "devIds": ["battery-1"]}]
@@ -244,11 +263,12 @@ def test_complete_device_orchestration_preserves_order(modules):
     api._ensure_inverter_metadata_loaded.assert_called_once_with("inverter-1")
 
 
-def test_week_energy_ignores_missing_markers(modules):
+def test_week_energy_requires_complete_measurements(modules):
     api = modules[1].FusionSolarEnergyBalanceMixin()
     source = {"data": {"productPower": ["2.5 kWh", "--", "null", "3 kWh"]}}
-    assert api.calculate_week_energy(source, [1, 2, 3, 4], "productPower") == 5.5
-    assert api.calculate_week_energy({"data": {"productPower": []}}, [1], "productPower") == 0
+    assert api.calculate_week_energy(source, [1, 2, 3, 4], "productPower") is None
+    assert api.calculate_week_energy(source, [1, 4], "productPower") == 5.5
+    assert api.calculate_week_energy({"data": {"productPower": []}}, [1], "productPower") is None
 
 
 def test_week_data_calls_daily_endpoint_without_waiting(modules, monkeypatch):
@@ -799,8 +819,13 @@ def test_isitepower_explicit_zero_energy_is_kept_as_zero(modules):
     }
 
 
-def test_isitepower_partial_energy_balance_keeps_unverified_periods_unknown(modules):
+def test_isitepower_partial_energy_balance_keeps_unverified_periods_unknown(modules, monkeypatch):
     """A missing energy schema must not suppress valid measurements or create zeros."""
+    class Thursday:
+        @classmethod
+        def now(cls):
+            return __import__("datetime").datetime(2026, 11, 5)
+    monkeypatch.setattr(modules[1], "datetime", Thursday)
     api = modules[1].FusionSolarEnergyBalanceMixin()
     api._is_isitepower_m = True
     api.refresh_csrf = Mock()
@@ -823,7 +848,8 @@ def test_isitepower_partial_energy_balance_keeps_unverified_periods_unknown(modu
     assert output["grid_consumption_year"] == 2.5
     assert output["grid_consumption_lifetime"] == 1376.860
     assert output["grid_consumption_today"] == 0.3
-    assert output["grid_consumption_week"] == 0.5
+    # Two daily readings do not establish the whole Monday–Thursday total.
+    assert output["grid_consumption_week"] is None
     assert output["panel_production_month"] == 0.5
     assert output["grid_injection_lifetime"] is None
     assert output["panel_production_year"] is None
@@ -1080,3 +1106,154 @@ def test_unknown_station_capacity_does_not_invent_missing_battery(modules, capac
         "batteryCapacity": capacity,
     }]}})
     assert station_api.battery_capacity is None
+
+
+def test_isitepower_verified_mains_import(modules):
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    output = api._build_base_output()
+    nodes = [
+        {"id": "42", "mocId": 60001,
+         "name": "neteco.pvms.pcs.station.energyflow.mains",
+         "display": "CONNECTED", "description": {"value": "0.260kW"}},
+        {"id": "77", "mocId": 60014,
+         "display": "CONNECTED", "name": "neteco.pvms.devTypeLangKey.power_cube"},
+    ]
+    links = [{"fromNode": "42", "toNode": "77",
+              "flowing": "FORWARD", "visible": True, "direction": None}]
+    api._parse_isitepower_grid_import(nodes, links, output)
+    assert output["grid_consumption_power"] == 0.260
+    assert output["grid_injection_power"] is None
+
+
+@pytest.mark.parametrize("node_value,flowing,visible,expected", [
+    ("0.260kW", "REVERSE", True, None),
+    ("0.260kW", None, True, None),
+    ("0.260kW", "FORWARD", False, None),
+    ("--", "FORWARD", True, None),
+    ("NaNkW", "FORWARD", True, None),
+    ("260W", "FORWARD", True, None),
+    ("0kW", "FORWARD", True, None),
+    ("0.260kW", "FORWARD", True, 0.260),
+])
+def test_isitepower_grid_import_requires_proven_graph(
+    modules, node_value, flowing, visible, expected
+):
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    output = api._build_base_output()
+    nodes = [
+        {"id": "8", "mocId": 60001,
+         "name": "neteco.pvms.pcs.station.energyflow.mains",
+         "display": "CONNECTED", "description": {"value": node_value}},
+        {"id": "6", "mocId": 60014,
+         "display": "CONNECTED", "name": "neteco.pvms.devTypeLangKey.power_cube"},
+    ]
+    links = [{"fromNode": "8", "toNode": "6",
+              "flowing": flowing, "visible": visible}]
+    api._parse_isitepower_grid_import(nodes, links, output)
+    assert output["grid_consumption_power"] == expected
+    assert output["grid_injection_power"] is None
+
+
+def test_isitepower_grid_import_rejects_ambiguous_and_disconnected_nodes(modules):
+    api = make_installation(modules)
+    api._is_isitepower_m = True
+    output = api._build_base_output()
+    mains = {"id": "8", "mocId": 60001,
+             "name": "neteco.pvms.pcs.station.energyflow.mains",
+             "display": "CONNECTED", "description": {"value": "0.26kW"}}
+    cube = {"id": "6", "mocId": 60014,
+            "display": "CONNECTED", "name": "neteco.pvms.devTypeLangKey.power_cube"}
+    link = {"fromNode": "8", "toNode": "6",
+            "flowing": "FORWARD", "visible": True}
+    for nodes, links in [
+        ([dict(mains, display="DISCONNECTED"), cube], [link]),
+        ([mains, cube, dict(mains)], [link]),
+        ([mains, cube], [link, dict(link)]),
+        ([mains, cube], []),
+        ([mains, cube], [dict(link, fromNode="6", toNode="8")]),
+        ([mains, cube], [dict(link, toNode="other")]),
+    ]:
+        output["grid_consumption_power"] = None
+        api._parse_isitepower_grid_import(nodes, links, output)
+        assert output["grid_consumption_power"] is None
+
+
+def test_isitepower_grid_import_does_not_change_regular_installation(modules):
+    api = make_installation(modules)
+    api._is_isitepower_m = False
+    output = api._build_base_output()
+    api._parse_isitepower_grid_import(
+        [{"id": "8", "mocId": 60001,
+          "name": "neteco.pvms.pcs.station.energyflow.mains",
+          "display": "CONNECTED", "description": {"value": "0.26kW"}},
+         {"id": "6", "mocId": 60014,
+          "display": "CONNECTED", "name": "neteco.pvms.devTypeLangKey.power_cube"}],
+        [{"fromNode": "8", "toNode": "6", "flowing": "FORWARD", "visible": True}],
+        output,
+    )
+    assert output["grid_consumption_power"] is None
+
+
+
+def test_isitepower_get_devices_uses_only_verified_mains_import(modules):
+    """Full installation orchestration must ignore conventional grid guesses."""
+    api = make_installation(modules)
+    api._station_is_isitepower_m = True
+    nodes = [
+        {"id": "42", "mocId": 60001,
+         "name": "neteco.pvms.pcs.station.energyflow.mains",
+         "display": "CONNECTED", "description": {"value": "0.260kW"}},
+        {"id": "77", "mocId": 60014,
+         "display": "CONNECTED", "name": "neteco.pvms.devTypeLangKey.power_cube"},
+    ]
+    links = [
+        {"fromNode": "42", "toNode": "77", "flowing": "FORWARD",
+         "visible": True},
+        {"description": {"label": "neteco.pvms.energy.flow.buy.power",
+                         "value": "9.0 kW"}},
+    ]
+    api._get_installation_flow_data = Mock(return_value=(nodes, links))
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(side_effect=lambda output: [output.copy()])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    output = api.get_devices()[0]
+    assert output["grid_consumption_power"] == 0.260
+    assert output["grid_injection_power"] is None
+    assert output["grid_consumption_lifetime"] is None
+
+
+def test_isitepower_get_devices_leaves_unverified_grid_unknown(modules):
+    api = make_installation(modules)
+    api._station_is_isitepower_m = True
+    nodes = [
+        {"id": "42", "mocId": 60001,
+         "name": "neteco.pvms.pcs.station.energyflow.mains",
+         "display": "CONNECTED", "description": {"value": "0.260kW"}},
+        {"id": "77", "mocId": 60014,
+         "display": "CONNECTED", "name": "neteco.pvms.devTypeLangKey.power_cube"},
+    ]
+    links = [
+        {"fromNode": "42", "toNode": "77", "flowing": "REVERSE",
+         "visible": True},
+        {"description": {"label": "neteco.pvms.energy.flow.buy.power",
+                         "value": "9.0 kW"}},
+    ]
+    api._get_installation_flow_data = Mock(return_value=(nodes, links))
+    api._discover_inverter_dns_from_flow_nodes = Mock()
+    api._ensure_inverter_metadata_loaded = Mock()
+    api._enrich_installation_output = Mock()
+    api._build_installation_devices = Mock(side_effect=lambda output: [output.copy()])
+    api._build_inverter_devices = Mock(return_value=[])
+    api._build_battery_devices = Mock(return_value=[])
+    api._build_power_sensor_devices = Mock(return_value=[])
+    api.get_optimizer_devices = Mock(return_value=[])
+    output = api.get_devices()[0]
+    assert output["grid_consumption_power"] is None
+    assert output["grid_injection_power"] is None

@@ -1,6 +1,7 @@
 """Constants for the Integration Fusion Solar App."""
 
 DOMAIN = "fusion_solar_app"
+CONF_MOCK_PROFILE = "mock_profile"
 
 DEFAULT_SCAN_INTERVAL = 60
 MIN_SCAN_INTERVAL = 10

@@ -166,7 +166,8 @@ class FusionSolarPowerSensorMixin:
             return None
 
         if signal_id in POWER_SENSOR_WATT_SIGNAL_IDS:
-            return round(float(extract_numeric(raw_value)) / 1000, 4)
+            value = extract_numeric(raw_value, "kW", default_unit="W")
+            return round(value, 4) if value is not None else None
 
         return raw_value
 
@@ -426,9 +427,11 @@ class FusionSolarPowerSensorMixin:
 
         return self.power_sensor_model
 
-    def _get_power_sensor_direction(self, active_power: Any) -> str:
-        """Return the power sensor direction from signed active power."""
-        power_value = extract_numeric(active_power)
+    def _get_power_sensor_direction(self, active_power: Any) -> str | None:
+        """Return direction from normalized kW; invalid is unavailable, not idle."""
+        power_value = extract_numeric(active_power, "kW")
+        if power_value is None:
+            return None
 
         if power_value > 0:
             return "exporting"

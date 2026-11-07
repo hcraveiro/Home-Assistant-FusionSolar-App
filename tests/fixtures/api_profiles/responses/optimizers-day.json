@@ -1,0 +1,46 @@
+{
+  "success": true,
+  "failCode": 0,
+  "data": [
+    {
+      "runningStatusVal": 1,
+      "outputPower": "157.7",
+      "totalEnergy": "109.449",
+      "inputVoltage": "41.7",
+      "powerPercent": "35.044",
+      "mocId": 20814,
+      "moStatus": "Connected",
+      "runningStatus": "Operating",
+      "temperature": "15.1",
+      "outputVoltage": "40.3",
+      "inputCurrent": "3.84",
+      "connectStatus": "connected",
+      "dn": "MOCK_OPT_1",
+      "parentDn": "MOCK_INV_A",
+      "sn": "MOCK_SERIAL_OPT_1",
+      "optName": "Mock optimizer 1",
+      "optNumber": "1",
+      "dnId": "MOCK_OPT_1"
+    },
+    {
+      "runningStatusVal": 1,
+      "outputPower": "28.2",
+      "totalEnergy": "95.865",
+      "inputVoltage": "41.8",
+      "powerPercent": "6.267",
+      "mocId": 20814,
+      "moStatus": "Connected",
+      "runningStatus": "Operating",
+      "temperature": "16.8",
+      "outputVoltage": "6.9",
+      "inputCurrent": "0.82",
+      "connectStatus": "connected",
+      "dn": "MOCK_OPT_2",
+      "parentDn": "MOCK_INV_A",
+      "sn": "MOCK_SERIAL_OPT_2",
+      "optName": "Mock optimizer 2",
+      "optNumber": "2",
+      "dnId": "MOCK_OPT_2"
+    }
+  ]
+}

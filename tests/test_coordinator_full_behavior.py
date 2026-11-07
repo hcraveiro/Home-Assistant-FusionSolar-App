@@ -43,6 +43,7 @@ def coordinator_module():
     module("homeassistant.exceptions", ConfigEntryAuthFailed=ConfigEntryAuthFailed)
     package("homeassistant.helpers")
     module("homeassistant.helpers.device_registry", async_get=lambda hass: Mock())
+    module("homeassistant.helpers.entity_registry", async_get=lambda hass: Mock())
     class DataUpdateCoordinator:
         pass
     class UpdateFailed(Exception):
@@ -63,6 +64,8 @@ def coordinator_module():
         pass
     class APIAuthError(Exception):
         pass
+    class APIAuthRejectedError(APIAuthError):
+        pass
     class APIConnectionError(Exception):
         pass
     class APIDataStructureError(Exception):
@@ -77,6 +80,7 @@ def coordinator_module():
     module(f"{PREFIX}.api",
            APIAuthCaptchaError=APIAuthCaptchaError,
            APIAuthError=APIAuthError,
+           APIAuthRejectedError=APIAuthRejectedError,
            APIConnectionError=APIConnectionError,
            APIDataStructureError=APIDataStructureError,
            Device=FakeDevice, DeviceType=DeviceType, FusionSolarAPI=Mock)

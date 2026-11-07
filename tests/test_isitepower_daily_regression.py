@@ -30,11 +30,14 @@ class ISitePowerEnergyRegressions(unittest.TestCase):
             decorator_list=[], returns=None, type_comment=None,
             type_params=[],
         )
-        module = ast.fix_missing_locations(ast.Module(body=[standalone], type_ignores=[]))
+        helpers = [node for node in cls.body if isinstance(node, ast.FunctionDef)
+                   and node.name in ("_energy_sum", "_period_energy_sum", "_period_grid_energy")]
+        module = ast.fix_missing_locations(ast.Module(body=[standalone, *helpers], type_ignores=[]))
         kinds = SimpleNamespace(MONTH="month", YEAR="year", LIFETIME="lifetime")
         namespace = {
             "datetime": datetime,
             "ENERGY_BALANCE_CALL_TYPE": kinds,
+            "PERIODIC_ENERGY_PERIODS": frozenset({"today", "week", "month", "year"}),
             "_LOGGER": SimpleNamespace(warning=lambda *args: None),
             "APIConnectionError": RuntimeError,
             "APIDataStructureError": ValueError,
@@ -47,6 +50,10 @@ class ISitePowerEnergyRegressions(unittest.TestCase):
             return samples
         calls = []
         class Fake:
+            _energy_sum = namespace["_energy_sum"]
+            _period_energy_sum = namespace["_period_energy_sum"]
+            _period_grid_energy = namespace["_period_grid_energy"]
+
             def call_energy_balance(self, kind):
                 calls.append(kind)
                 if kind == "month":

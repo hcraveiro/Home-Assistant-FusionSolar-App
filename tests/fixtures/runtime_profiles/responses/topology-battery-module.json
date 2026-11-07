@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "name": "[Module 1] [DC/DC] Internal temperature",
+      "realValue": "24.5 C"
+    },
+    {
+      "name": "[Module 1] Battery pack quantity",
+      "realValue": "1"
+    },
+    {
+      "name": "[Module 1] [Battery pack 1] Operating status",
+      "realValue": "Running"
+    },
+    {
+      "name": "[Module 1] [Battery pack 1] SOH",
+      "realValue": "97 %"
+    }
+  ]
+}

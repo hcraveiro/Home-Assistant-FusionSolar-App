@@ -12,7 +12,7 @@ def test_optimizer_uses_compatible_parent_link():
     tree = ast.parse(source)
     builder = next(
         node for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_build_device_info"
+        if isinstance(node, ast.FunctionDef) and node.name == "_build_legacy_device_info"
     )
     optimizer = next(
         node for node in ast.walk(builder)

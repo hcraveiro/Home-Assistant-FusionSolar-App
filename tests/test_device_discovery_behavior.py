@@ -51,7 +51,7 @@ def test_meter_usage(modules, raw, expected):
 
 @pytest.mark.parametrize(("power", "expected"), [
     ("2500 W", "exporting"), ("-500 W", "importing"),
-    ("0", "idle"), ("--", "idle"),
+    ("0", "idle"), ("--", None),  # Missing telemetry is not measured idle.
 ])
 def test_meter_direction(modules, power, expected):
     api = modules[0].FusionSolarPowerSensorMixin()

@@ -8,10 +8,10 @@
   "dependencies": [],
   "documentation": "https://github.com/hcraveiro/Home-Assistant-FusionSolar-App",
   "homekit": {},
-  "iot_class": "local_polling",
+  "iot_class": "cloud_polling",
   "requirements": [],
   "single_config_entry": false,
   "ssdp": [],
-  "version": "1.6.7",
+  "version": "1.6.8b21",
   "zeroconf": []
 }

@@ -1,0 +1,354 @@
+{
+  "schema_version": 1,
+  "origin": "synthetic",
+  "source_url": "https://github.com/hcraveiro/Home-Assistant-FusionSolar-App",
+  "description": "Offline synthetic topology and transitions; no login or live device control. Referenced observed-safe bodies retain their separate provenance.",
+  "frames": [
+    {
+      "name": "independent-batteries",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/station/v2/overview/energy-flow",
+          "params": {
+            "stationDn": "MOCK_STATION"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": {
+              "flow": {
+                "nodes": [
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.inverter",
+                    "devIds": [
+                      "MOCK_INV_A",
+                      "MOCK_INV_B"
+                    ]
+                  },
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.energy_store",
+                    "devIds": [
+                      "MOCK_BAT_A",
+                      "MOCK_BAT_B"
+                    ]
+                  }
+                ],
+                "links": []
+              }
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/station/v3/overview/energy-flow",
+          "params": {
+            "stationDn": "MOCK_STATION",
+            "featureId": "aifc"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": {
+              "flow": {
+                "nodes": [
+                  {
+                    "name": "neteco.pvms.devTypeLangKey.energy_store",
+                    "devIds": [
+                      "MOCK_BAT_A",
+                      "MOCK_BAT_B"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/neteco/web/config/device/v1/children-list",
+          "params": {
+            "conditionParams.parentDn": "MOCK_INV_A",
+            "conditionParams.curPage": 0,
+            "conditionParams.recordperpage": 100,
+            "conditionParams.mocTypes": 20815
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "data": [
+              {
+                "dn": "MOCK_BAT_A",
+                "parentDn": "MOCK_INV_A"
+              }
+            ]
+          },
+          "ignore_params": [
+            "_"
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/rest/neteco/web/config/device/v1/children-list",
+          "params": {
+            "conditionParams.parentDn": "MOCK_INV_B",
+            "conditionParams.curPage": 0,
+            "conditionParams.recordperpage": 100,
+            "conditionParams.mocTypes": 20815
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "data": [
+              {
+                "dn": "MOCK_BAT_B",
+                "parentDn": "MOCK_INV_B"
+              }
+            ]
+          },
+          "ignore_params": [
+            "_"
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/get-battery-type",
+          "params": {
+            "deviceDn": "MOCK_BAT_A"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "data": {
+              "module1DevType": "LUNA2000-MOCK"
+            }
+          },
+          "ignore_params": [
+            "_"
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/device-realtime-data",
+          "params": {
+            "deviceDn": "MOCK_BAT_A",
+            "displayAccessModel": "true"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "signals": [
+                  {
+                    "id": 10006,
+                    "value": "81"
+                  },
+                  {
+                    "id": 10013,
+                    "value": "10.0 kWh"
+                  },
+                  {
+                    "id": 10004,
+                    "value": "2.125 kW"
+                  },
+                  {
+                    "id": 10003,
+                    "value": "Running"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/device-real-kpi",
+          "params": {
+            "deviceDn": "MOCK_BAT_A",
+            "signalIds": "10007"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "data": {
+              "signals": {
+                "10007": {
+                  "value": "98.2"
+                }
+              }
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/deviceExt/get-config-signals",
+          "params": {
+            "dn": "MOCK_BAT_A"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "code": 0,
+            "data": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/query-battery-dc",
+          "params": {
+            "dn": "MOCK_BAT_A",
+            "sigids": "230320252,230320459,230320275,230320146,230320463,230320473,230320462,230320469,230320470,230320108,230320107,230320460,230320461,230320514,230320265,230320266,230320267,230320148,230320165,230320181,230320147,230320164,230320180,230320151,230320168,230320184,230320159,230320174,230320190,230320158,230320173,230320189,230320446,230320448,230320450,230320447,230320449,230320451,230320152,230320169,230320185,230320163,230320179,230320194,230320492,230320493,230320494,230320498,230320499,230320500,230320154,230320170,230320186,230320663,230320664,230320665",
+            "moduleId": 1
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "data": [
+              {
+                "name": "[Module 1] [DC/DC] Internal temperature",
+                "realValue": "24.5 C"
+              },
+              {
+                "name": "[Module 1] Battery pack quantity",
+                "realValue": "1"
+              },
+              {
+                "name": "[Module 1] [Battery pack 1] Operating status",
+                "realValue": "Running"
+              },
+              {
+                "name": "[Module 1] [Battery pack 1] SOH",
+                "realValue": "97 %"
+              }
+            ]
+          },
+          "ignore_params": [
+            "_"
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/get-battery-type",
+          "params": {
+            "deviceDn": "MOCK_BAT_B"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "data": {
+              "module1DevType": "LUNA2000-MOCK"
+            }
+          },
+          "ignore_params": [
+            "_"
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/device-realtime-data",
+          "params": {
+            "deviceDn": "MOCK_BAT_B",
+            "displayAccessModel": "true"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "signals": [
+                  {
+                    "id": 10006,
+                    "value": "39"
+                  },
+                  {
+                    "id": 10013,
+                    "value": "10.0 kWh"
+                  },
+                  {
+                    "id": 10004,
+                    "value": "2.125 kW"
+                  },
+                  {
+                    "id": 10003,
+                    "value": "Running"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/device-real-kpi",
+          "params": {
+            "deviceDn": "MOCK_BAT_B",
+            "signalIds": "10007"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "data": {
+              "signals": {
+                "10007": {
+                  "value": "98.2"
+                }
+              }
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/deviceExt/get-config-signals",
+          "params": {
+            "dn": "MOCK_BAT_B"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "code": 0,
+            "data": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/device/v1/query-battery-dc",
+          "params": {
+            "dn": "MOCK_BAT_B",
+            "sigids": "230320252,230320459,230320275,230320146,230320463,230320473,230320462,230320469,230320470,230320108,230320107,230320460,230320461,230320514,230320265,230320266,230320267,230320148,230320165,230320181,230320147,230320164,230320180,230320151,230320168,230320184,230320159,230320174,230320190,230320158,230320173,230320189,230320446,230320448,230320450,230320447,230320449,230320451,230320152,230320169,230320185,230320163,230320179,230320194,230320492,230320493,230320494,230320498,230320499,230320500,230320154,230320170,230320186,230320663,230320664,230320665",
+            "moduleId": 1
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "data": [
+              {
+                "name": "[Module 1] [DC/DC] Internal temperature",
+                "realValue": "24.5 C"
+              },
+              {
+                "name": "[Module 1] Battery pack quantity",
+                "realValue": "1"
+              },
+              {
+                "name": "[Module 1] [Battery pack 1] Operating status",
+                "realValue": "Running"
+              },
+              {
+                "name": "[Module 1] [Battery pack 1] SOH",
+                "realValue": "97 %"
+              }
+            ]
+          },
+          "ignore_params": [
+            "_"
+          ]
+        }
+      ]
+    }
+  ]
+}

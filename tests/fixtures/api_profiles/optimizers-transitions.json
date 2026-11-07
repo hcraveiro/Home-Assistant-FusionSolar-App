@@ -1,0 +1,322 @@
+{
+  "schema_version": 1,
+  "origin": "synthetic",
+  "source_url": "https://github.com/hcraveiro/Home-Assistant-FusionSolar-App",
+  "description": "Offline synthetic topology and transitions; no login or live device control. Referenced observed-safe bodies retain their separate provenance.",
+  "frames": [
+    {
+      "name": "day",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/station/v1/layout/station-simple-devicedata",
+          "params": {
+            "stationDn": "MOCK_STATION"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": {
+              "optimizerNum": 2
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/station/v1/layout",
+          "params": {
+            "stationDn": "MOCK_STATION",
+            "sheetNO": 0,
+            "callerType": 0,
+            "queryType": 0
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": {
+              "schemaData": "{\"datas\": [{\"c\": {\"nodetype\": \"inverter\", \"devId\": \"MOCK_INV_A\", \"devTypeId\": \"20822\"}}, {\"c\": {\"nodetype\": \"assembly\", \"devId\": \"MOCK_OPT_1\", \"parentDevId\": \"MOCK_INV_A\", \"devTypeId\": \"20814\", \"assemblyText1\": \"1\", \"modelVersion\": \"MOCK_OPTIMIZER\"}}, {\"c\": {\"nodetype\": \"assembly\", \"devId\": \"MOCK_OPT_2\", \"parentDevId\": \"MOCK_INV_A\", \"devTypeId\": \"20814\", \"assemblyText1\": \"2\", \"modelVersion\": \"MOCK_OPTIMIZER\"}}]}"
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/rest/pvms/web/station/v1/layout/device-sampling-data",
+          "params": {},
+          "json": [
+            "MOCK_OPT_1",
+            "MOCK_OPT_2"
+          ],
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "dn": "MOCK_OPT_1",
+                "mocId": 20814,
+                "parentDn": "MOCK_INV_A",
+                "connectStatus": "connected",
+                "dailyEnergy": 1.25,
+                "powerPercent": 80,
+                "optInfo": {
+                  "outputPower": 350,
+                  "inputVoltage": 40.5,
+                  "outputVoltage": 39.5,
+                  "inputCurrent": 8.5,
+                  "runningStatusVal": 1
+                }
+              },
+              {
+                "dn": "MOCK_OPT_2",
+                "mocId": 20814,
+                "parentDn": "MOCK_INV_A",
+                "connectStatus": "connected",
+                "dailyEnergy": 1.25,
+                "powerPercent": 80,
+                "optInfo": {
+                  "outputPower": 350,
+                  "inputVoltage": 40.5,
+                  "outputVoltage": 39.5,
+                  "inputCurrent": 8.5,
+                  "runningStatusVal": 1
+                }
+              }
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/station/v1/layout/optimizer-info",
+          "params": {
+            "inverterDn": "MOCK_INV_A"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "dn": "MOCK_OPT_1",
+                "inverterDn": "MOCK_INV_A",
+                "optName": "Mock panel 1",
+                "optNumber": "1",
+                "temperature": 34.5
+              },
+              {
+                "dn": "MOCK_OPT_2",
+                "inverterDn": "MOCK_INV_A",
+                "optName": "Mock panel 2",
+                "optNumber": "2",
+                "temperature": 34.5
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "offline",
+      "routes": [
+        {
+          "method": "POST",
+          "path": "/rest/pvms/web/station/v1/layout/device-sampling-data",
+          "params": {},
+          "json": [
+            "MOCK_OPT_1",
+            "MOCK_OPT_2"
+          ],
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "dn": "MOCK_OPT_1",
+                "mocId": 20814,
+                "parentDn": "MOCK_INV_A",
+                "connectStatus": "disconnected",
+                "dailyEnergy": 1.25,
+                "powerPercent": 80,
+                "optInfo": {
+                  "outputPower": 350,
+                  "inputVoltage": 40.5,
+                  "outputVoltage": 39.5,
+                  "inputCurrent": 8.5,
+                  "runningStatusVal": 1
+                }
+              },
+              {
+                "dn": "MOCK_OPT_2",
+                "mocId": 20814,
+                "parentDn": "MOCK_INV_A",
+                "connectStatus": "disconnected",
+                "dailyEnergy": 1.25,
+                "powerPercent": 80,
+                "optInfo": {
+                  "outputPower": 350,
+                  "inputVoltage": 40.5,
+                  "outputVoltage": 39.5,
+                  "inputCurrent": 8.5,
+                  "runningStatusVal": 1
+                }
+              }
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/station/v1/layout/optimizer-info",
+          "params": {
+            "inverterDn": "MOCK_INV_A"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "dn": "MOCK_OPT_1",
+                "inverterDn": "MOCK_INV_A",
+                "optName": "Mock panel 1",
+                "optNumber": "1",
+                "temperature": 34.5
+              },
+              {
+                "dn": "MOCK_OPT_2",
+                "inverterDn": "MOCK_INV_A",
+                "optName": "Mock panel 2",
+                "optNumber": "2",
+                "temperature": 34.5
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "missing",
+      "routes": [
+        {
+          "method": "POST",
+          "path": "/rest/pvms/web/station/v1/layout/device-sampling-data",
+          "params": {},
+          "json": [
+            "MOCK_OPT_1",
+            "MOCK_OPT_2"
+          ],
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/station/v1/layout/optimizer-info",
+          "params": {
+            "inverterDn": "MOCK_INV_A"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "dn": "MOCK_OPT_1",
+                "inverterDn": "MOCK_INV_A",
+                "optName": "Mock panel 1",
+                "optNumber": "1",
+                "temperature": 34.5
+              },
+              {
+                "dn": "MOCK_OPT_2",
+                "inverterDn": "MOCK_INV_A",
+                "optName": "Mock panel 2",
+                "optNumber": "2",
+                "temperature": 34.5
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "recovery",
+      "routes": [
+        {
+          "method": "POST",
+          "path": "/rest/pvms/web/station/v1/layout/device-sampling-data",
+          "params": {},
+          "json": [
+            "MOCK_OPT_1",
+            "MOCK_OPT_2"
+          ],
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "dn": "MOCK_OPT_1",
+                "mocId": 20814,
+                "parentDn": "MOCK_INV_A",
+                "connectStatus": "connected",
+                "dailyEnergy": 1.25,
+                "powerPercent": 80,
+                "optInfo": {
+                  "outputPower": 350,
+                  "inputVoltage": 40.5,
+                  "outputVoltage": 39.5,
+                  "inputCurrent": 8.5,
+                  "runningStatusVal": 1
+                }
+              },
+              {
+                "dn": "MOCK_OPT_2",
+                "mocId": 20814,
+                "parentDn": "MOCK_INV_A",
+                "connectStatus": "connected",
+                "dailyEnergy": 1.25,
+                "powerPercent": 80,
+                "optInfo": {
+                  "outputPower": 350,
+                  "inputVoltage": 40.5,
+                  "outputVoltage": 39.5,
+                  "inputCurrent": 8.5,
+                  "runningStatusVal": 1
+                }
+              }
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/rest/pvms/web/station/v1/layout/optimizer-info",
+          "params": {
+            "inverterDn": "MOCK_INV_A"
+          },
+          "json": null,
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": [
+              {
+                "dn": "MOCK_OPT_1",
+                "inverterDn": "MOCK_INV_A",
+                "optName": "Mock panel 1",
+                "optNumber": "1",
+                "temperature": 34.5
+              },
+              {
+                "dn": "MOCK_OPT_2",
+                "inverterDn": "MOCK_INV_A",
+                "optName": "Mock panel 2",
+                "optNumber": "2",
+                "temperature": 34.5
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

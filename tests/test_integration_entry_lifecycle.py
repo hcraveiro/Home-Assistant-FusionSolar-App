@@ -39,6 +39,7 @@ def integration():
 
     class Platform(StrEnum):
         SENSOR = "sensor"
+        BINARY_SENSOR = "binary_sensor"
 
     register("homeassistant.const", Platform=Platform)
     register("homeassistant.core", HomeAssistant=object, callback=lambda function: function)
@@ -53,7 +54,7 @@ def integration():
     register("homeassistant.helpers.update_coordinator", DataUpdateCoordinator=object)
 
     package(PREFIX, ROOT)
-    register(f"{PREFIX}.const", DOMAIN="fusion_solar_app")
+    register(f"{PREFIX}.const", DOMAIN="fusion_solar_app", CONF_MOCK_PROFILE="mock_profile")
     mock_coordinator_class = Mock()
     register(f"{PREFIX}.coordinator", FusionSolarCoordinator=mock_coordinator_class)
 
@@ -79,6 +80,9 @@ def environment(integration):
     _, coordinator_class, _ = integration
     hass = Mock()
     hass.data = {}
+    async def executor(method, *args):
+        return method(*args)
+    hass.async_add_executor_job = AsyncMock(side_effect=executor)
     hass.config_entries.async_forward_entry_setups = AsyncMock()
     hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
     hass.config_entries.async_reload = AsyncMock()
@@ -86,11 +90,14 @@ def environment(integration):
     entry = Mock()
     entry.entry_id = "entry-1"
     entry.data = {"username": "fake"}
+    entry.options = {}
     entry.add_update_listener.return_value = Mock()
+    hass.config_entries.async_entries.return_value = [entry]
 
     coordinator = Mock()
     coordinator.api.connected = True
     coordinator.async_config_entry_first_refresh = AsyncMock()
+    coordinator.async_shutdown = AsyncMock()
     coordinator_class.reset_mock()
     coordinator_class.return_value = coordinator
     return hass, entry, coordinator
@@ -108,8 +115,21 @@ async def test_entry_setup_registers_runtime_and_platforms(integration, environm
     assert hass.data[module.DOMAIN][entry.entry_id].coordinator is coordinator
     entry.add_update_listener.assert_called_once()
     hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(
-        entry, [module.PLATFORMS[0]]
+        entry, [module.Platform.SENSOR, module.Platform.BINARY_SENSOR]
     )
+
+
+@pytest.mark.asyncio
+async def test_identity_only_entry_update_does_not_recursively_reload(integration, environment):
+    module, _, _ = integration
+    hass, entry, _ = environment
+    assert await module.async_setup_entry(hass, entry)
+    entry.data = {**entry.data, "ha_identity": {"namespace": "", "entities": {}}}
+    await module._async_update_listener(hass, entry)
+    hass.config_entries.async_reload.assert_not_awaited()
+    entry.options = {"scan_interval": 180}
+    await module._async_update_listener(hass, entry)
+    hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
 
 
 @pytest.mark.asyncio
@@ -138,6 +158,9 @@ async def test_setup_rejects_disconnected_session_without_platform_forward(integ
 
     hass.config_entries.async_forward_entry_setups.assert_not_awaited()
     hass.config_entries.async_update_entry.assert_not_called()
+    coordinator.async_shutdown.assert_awaited_once()
+    coordinator.api.close.assert_called_once_with()
+    hass.async_add_executor_job.assert_awaited_once_with(coordinator.api.close)
 
 
 @pytest.mark.asyncio
@@ -151,6 +174,8 @@ async def test_auth_failure_propagates_without_partial_setup(integration, enviro
         await module.async_setup_entry(hass, entry)
     assert entry.entry_id not in hass.data[module.DOMAIN]
     entry.add_update_listener.assert_not_called()
+    coordinator.async_shutdown.assert_awaited_once()
+    coordinator.api.close.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -172,12 +197,15 @@ async def test_unload_success_removes_runtime(integration, environment):
 @pytest.mark.asyncio
 async def test_unload_failure_preserves_runtime(integration, environment):
     module, _, _ = integration
-    hass, entry, _ = environment
+    hass, entry, coordinator = environment
     await module.async_setup_entry(hass, entry)
     hass.config_entries.async_unload_platforms.return_value = False
 
     assert await module.async_unload_entry(hass, entry) is False
     assert entry.entry_id in hass.data[module.DOMAIN]
+    entry.add_update_listener.return_value.assert_not_called()
+    coordinator.async_shutdown.assert_not_awaited()
+    coordinator.api.close.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -193,3 +221,33 @@ async def test_device_removal_hook_returns_true(integration, environment):
     module, _, _ = integration
     hass, entry, _ = environment
     assert await module.async_remove_config_entry_device(hass, entry, Mock()) is True
+
+
+@pytest.mark.asyncio
+async def test_mock_entry_loads_profile_off_loop_and_injects_only_that_backend(
+    integration, environment, monkeypatch,
+):
+    module, coordinator_class, _ = integration
+    hass, entry, _ = environment
+    entry.data = {"mock_profile": "demo"}
+    profile = {"id": "demo", "station": {"dn": "MOCK_RUNTIME_DEMO"}}
+    load = Mock(return_value=profile)
+    monkeypatch.setitem(sys.modules, f"{PREFIX}.mock_profile", types.SimpleNamespace(load_profile=load))
+    assert await module.async_setup_entry(hass, entry)
+    hass.async_add_executor_job.assert_any_await(load, "demo")
+    coordinator_class.assert_called_once_with(hass, entry, mock_profile_data=profile)
+
+
+@pytest.mark.asyncio
+async def test_mock_entry_missing_optin_never_falls_back_to_real_coordinator(
+    integration, environment, monkeypatch,
+):
+    module, coordinator_class, not_ready = integration
+    hass, entry, _ = environment
+    entry.data = {"mock_profile": "demo"}
+    monkeypatch.setitem(sys.modules, f"{PREFIX}.mock_profile", types.SimpleNamespace(
+        load_profile=Mock(side_effect=ValueError("developer replay disabled"))
+    ))
+    with pytest.raises(not_ready, match="Mock profile unavailable"):
+        await module.async_setup_entry(hass, entry)
+    coordinator_class.assert_not_called()
