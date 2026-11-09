@@ -355,7 +355,8 @@ async def cancellation(candidate, hass, samples, target):
 
 async def polling_policy(hass, clock):
     """Real API readers, fictional offline HTTP, virtual (not removed) sleeps."""
-    from custom_components.fusion_solar_app.api import energy_balance, social
+    from custom_components.fusion_solar_app.api import auth, social
+    from types import SimpleNamespace
     from custom_components.fusion_solar_app.mock_api import MockFusionSolarAPI
     from custom_components.fusion_solar_app.mock_profile import load_profile
 
@@ -374,9 +375,12 @@ async def polling_policy(hass, clock):
         trace.append([method, parsed.path, stable_params, kwargs.get("json"), kwargs.get("data")])
         return original_request(method, url, **kwargs)
 
+    virtual_time = [0.0]
+
     def sleep(seconds):
         sleeps.append(seconds)
         trace.append(["sleep", seconds])
+        virtual_time[0] += seconds
 
     class SocialClock(datetime):
         @classmethod
@@ -385,23 +389,23 @@ async def polling_policy(hass, clock):
 
     api.session.request = request
     try:
-        with patch.object(energy_balance.time, "sleep", sleep), patch.object(social, "datetime", SocialClock):
+        with patch.object(auth, "time", SimpleNamespace(monotonic=lambda: virtual_time[0], sleep=sleep)), patch.object(social, "datetime", SocialClock):
             for _ in range(2):
                 start, sleep_start = len(trace), len(sleeps)
                 devices = await hass.async_add_executor_job(api.get_devices)
                 require(devices, "offline API returned no devices")
                 per_poll.append({"calls": len(trace) - start - len(sleeps) + sleep_start,
-                                 "daily_spacing_seconds": sleeps[sleep_start:],
+                                 "energy_spacing_seconds": sleeps[sleep_start:],
                                  "devices": len(devices)})
         require(not api.unexpected_requests, "unexpected fictional request was swallowed")
-        require(all(item["daily_spacing_seconds"] and
-                    all(seconds == 1 for seconds in item["daily_spacing_seconds"])
-                    for item in per_poll), "established daily spacing changed")
+        require(all(item["energy_spacing_seconds"] and
+                    all(seconds == 2 for seconds in item["energy_spacing_seconds"])
+                    for item in per_poll), "universal energy spacing changed")
         paths = Counter(item[1] for item in trace if item[0] != "sleep")
         return {"origin": "synthetic", "polls": per_poll,
                 "paths": dict(paths), "trace_sha256": digest(trace), "trace": trace,
-                "daily_spacing_calls": len(sleeps), "network_requests": 0,
-                "note": "API/coordinator/energy code unchanged; virtualized waits are test-only"}
+                "energy_spacing_calls": len(sleeps), "network_requests": 0,
+                "note": "Two-second energy transport pacing; virtualized monotonic waits are test-only"}
     finally:
         api.close()
 

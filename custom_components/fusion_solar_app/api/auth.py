@@ -11,6 +11,7 @@ import requests
 from ..const import (
     CAPTCHA_URL,
     DATA_REFERER_URL,
+    ENERGY_BALANCE_URL,
     FINAL_AUTH_URL_LA5,
     KEEP_ALIVE_URL,
     LOGIN_FORM_URL,
@@ -681,6 +682,20 @@ class FusionSolarAuthMixin:
     ) -> tuple[requests.Response, dict]:
         """Handle a response while the HTTP session lock is held."""
         effective_timeout = timeout or self.request_timeout
+
+        # The existing per-instance session RLock serializes this boundary,
+        # including concurrent direct calls. Keep state across session renewals.
+        # Start-to-start spacing: a slow response already consumes the interval.
+        if urlparse(url).path == ENERGY_BALANCE_URL:
+            previous_start = getattr(self, "_last_energy_request_start", None)
+            if previous_start is not None:
+                remaining = 2.0 - (time.monotonic() - previous_start)
+                while remaining > 0:
+                    time.sleep(remaining)
+                    remaining = 2.0 - (time.monotonic() - previous_start)
+            # Record before transport: failed attempts count too. None (not 0)
+            # distinguishes the first request; no initial or trailing sleep.
+            self._last_energy_request_start = time.monotonic()
 
         try:
             response = self.session.request(

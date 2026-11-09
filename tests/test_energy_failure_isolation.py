@@ -27,8 +27,12 @@ def history_api(api_module, monkeypatch):
             return cls(2026, 11, 5, 12)
 
     monkeypatch.setattr(energy, "datetime", Thursday)
-    sleep = Mock()
-    monkeypatch.setattr(energy.time, "sleep", sleep)
+    auth = importlib.import_module(f"{PREFIX}.api.auth")
+    clock = [0.0]
+    sleep = Mock(side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    from types import SimpleNamespace
+    monkeypatch.setattr(auth, "time", SimpleNamespace(
+        monotonic=lambda: clock[0], sleep=sleep))
     profile = json.loads((Path(__file__).parent / "fixtures/runtime_profiles/single-battery-config-denied.json").read_text())
     api = api_module.FusionSolarAPI("unused", "unused", "eu5", None)
     api.station = profile["station"]["dn"]
@@ -110,7 +114,7 @@ def test_real_get_devices_survives_history_and_recovers_next_poll(history_api, p
     assert failed[retained] == baseline[retained]
     assert sum(label == "energy-flow" for label, _ in control["calls"]) == 1
     assert sum(label == period for label, _ in control["calls"]) == (4 if period == "2" else 1)
-    assert sleep.call_args.args == (1,)
+    assert sleep.call_args.args == (2.0,)
     control.update(failure=None, calls=[])
     recovered = states(api)
     for key in unavailable:
@@ -134,7 +138,7 @@ def test_day_response_slots_preserve_date_association(history_api):
     assert len(days) == 4
     assert all(day["data"]["totalBuyPower"] == "20 kWh" for day in days[:3])
     assert days[3] is None
-    assert sleep.call_count == 4
+    assert sleep.call_count == 3
 
 
 @pytest.mark.parametrize("period", ["4", "2", "5", "6"])
@@ -165,7 +169,7 @@ def test_live_values_and_true_zero_downward_correction_unchanged(history_api):
 
 
 @pytest.mark.parametrize("cross_month", [False, True])
-def test_request_order_and_only_existing_daily_spacing(history_api, monkeypatch, cross_month):
+def test_request_order_and_universal_energy_spacing(history_api, monkeypatch, cross_month):
     api, control, energy, sleep = history_api
     if cross_month:
         class Sunday(datetime):
@@ -182,13 +186,21 @@ def test_request_order_and_only_existing_daily_spacing(history_api, monkeypatch,
         return original(method, url, **kwargs)
 
     api.session.request.side_effect = request
-    sleep.side_effect = lambda seconds: events.append(("sleep", seconds))
+    advance = sleep.side_effect
+    def spaced(seconds):
+        events.append(("sleep", seconds))
+        advance(seconds)
+    sleep.side_effect = spaced
     api.get_devices()
     count = 7 if cross_month else 4
-    expected = ["4"] + [item for _ in range(count) for item in ("2", ("sleep", 1))]
+    periods = ["4"] + ["2"] * count
     if cross_month:
-        expected.append("4")  # Previous month stays in the weekly stage.
-    assert events == expected + ["5", "6"]
+        periods.append("4")  # Previous month stays in the weekly stage.
+    periods += ["5", "6"]
+    expected = [periods[0]]
+    for period in periods[1:]:
+        expected.extend([("sleep", 2.0), period])
+    assert events == expected
 
 
 def test_previous_month_failure_only_invalidates_dependent_week(history_api, monkeypatch):
