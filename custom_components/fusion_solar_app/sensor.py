@@ -552,11 +552,17 @@ async def async_setup_entry(
     coordinator._plant_device_registry_id = plant.id
 
     known_sensor_ids: set[str] = set()
+    mains_power_added = False
 
     @callback
     def add_discovered_sensors() -> None:
         """Add sensors that become available after the initial setup."""
+        nonlocal mains_power_added
         new_sensors: list[SensorEntity] = []
+        if (not mains_power_added and getattr(coordinator.api, "_mains_verified", False)
+                and getattr(coordinator.api, "_mains_active_power", None) is not None):
+            mains_power_added = True
+            new_sensors.append(FusionSolarMainsActivePower(coordinator))
         for device in coordinator.data.devices:
             if device.device_type not in SUPPORTED_SENSOR_DEVICE_TYPES:
                 continue
@@ -579,6 +585,39 @@ async def async_setup_entry(
         ]
     )
     config_entry.async_on_unload(coordinator.async_add_listener(add_discovered_sensors))
+
+
+class FusionSolarMainsActivePower(CoordinatorEntity, SensorEntity):
+    """Measured mains power, not an import/export or connectivity inference."""
+
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_has_entity_name = True
+    _attr_name = "Mains Active Power"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        api = coordinator.api
+        entry = coordinator.config_entry
+        base = f"{api.controller_name}_{api.station}"
+        self._attr_unique_id = entity_unique_id(entry, f"{base}_mains_active_power")
+        self._attr_device_info = {
+            "name": "iSitePower-M Mains", "manufacturer": "Huawei", "model": "iSitePower-M Mains",
+            "identifiers": {(DOMAIN, device_identifier(entry, f"{base}_mains"))},
+            **_parent_device_link(getattr(coordinator, "_plant_device_registry_id", None),
+                                  (DOMAIN, device_identifier(entry, base))),
+        }
+
+    @property
+    def available(self):
+        api = self.coordinator.api
+        return (super().available and getattr(api, "_mains_verified", False)
+                and getattr(api, "_mains_active_power", None) is not None)
+
+    @property
+    def native_value(self):
+        return getattr(self.coordinator.api, "_mains_active_power", None)
 
 
 class FusionSolarSensor(CoordinatorEntity, SensorEntity):

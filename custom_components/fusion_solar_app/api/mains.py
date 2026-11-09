@@ -53,6 +53,33 @@ def parse_mains_state(response: Any, dn: str) -> bool | None:
     return None
 
 
+def parse_mains_power(response: Any, dn: str) -> float | None:
+    """Read signal 10010 independently of connectivity; only kW is evidenced.
+
+    Preserve finite negative readings unchanged, without assigning direction.
+    """
+    from ..utils import extract_numeric
+
+    if not isinstance(response, dict) or type(response.get("code")) is not int or response["code"] != 0:
+        return None
+    data = response.get("data")
+    if not isinstance(data, dict) or str(data.get("rootDevTypeId")) != "36892":
+        return None
+    rows = data.get("displayList")
+    if not isinstance(rows, list):
+        return None
+    matches = [row for row in rows if isinstance(row, dict) and str(row.get("id")) == "10010"]
+    if len(matches) != 1:
+        return None
+    row = matches[0]
+    if (row.get("dn") != dn or str(row.get("typeId")) != "36892"
+            or str(row.get("mocId")) != "10010" or row.get("dataType") != "FLOAT"
+            or row.get("unit") != "kW"):
+        return None
+    # Reject embedded alternate units too: the row's unit is authoritative.
+    return extract_numeric(row.get("value"))
+
+
 def fetch_mains_state(api: Any, dn: str) -> bool | None:
     """One optional form POST per normal poll; transport errors reach isolation."""
     api.refresh_csrf()
@@ -67,6 +94,7 @@ def fetch_mains_state(api: Any, dn: str) -> bool | None:
               "filterParams.name": "", "filterParams.displayGroup": "",
               "filterParams.signalType": "AI;DI;AO;DO;OTHER"},
     )
+    api._mains_active_power = parse_mains_power(response, dn)
     return parse_mains_state(response, dn)
 
 
@@ -78,6 +106,7 @@ def refresh_mains(api: Any, nodes: list[dict]) -> None:
     Clear state before every attempt so failures cannot retain an On/Off value.
     """
     api._mains_state = None
+    api._mains_active_power = None
     api._mains_verified = bool(getattr(api, "_is_isitepower_m", False))
     if not api._mains_verified:
         api._mains_dn = None
@@ -115,3 +144,4 @@ def refresh_mains(api: Any, nodes: list[dict]) -> None:
         # Optional telemetry must not take down measurements or authentication.
         # No state is synthesized, including on an API/HTTP error.
         api._mains_state = None
+        api._mains_active_power = None

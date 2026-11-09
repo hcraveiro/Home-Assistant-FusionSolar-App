@@ -8,7 +8,17 @@ from types import SimpleNamespace
 import pytest
 
 PATH = Path(__file__).resolve().parents[1] / 'custom_components/fusion_solar_app/api/mains.py'
-spec = importlib.util.spec_from_file_location('mains_test', PATH)
+import sys
+import types
+from test_utils_behavior import utils
+package = types.ModuleType('_mains_test')
+package.__path__ = [str(PATH.parents[1])]
+sys.modules['_mains_test'] = package
+sys.modules['_mains_test.utils'] = utils
+api_package = types.ModuleType('_mains_test.api')
+api_package.__path__ = [str(PATH.parent)]
+sys.modules['_mains_test.api'] = api_package
+spec = importlib.util.spec_from_file_location('_mains_test.api.mains', PATH)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
