@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from ..api import Device, DeviceType
 from ..const import DOMAIN, FORECAST_PROVIDER_NATIVE
+from ..identity import entity_unique_id
 from .models import FusionSolarForecastData
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,6 +42,9 @@ FORECAST_LOOKBACKS = (
     timedelta(hours=6),
 )
 FORECAST_MAX_LOOKBACK = FORECAST_LOOKBACKS[-1]
+# Small histories are cheaper to index inline; dense Recorder histories and daily
+# profile generation must not monopolize the event loop.
+FORECAST_EXECUTOR_MIN_SAMPLES = 1000
 FORECAST_WEIGHTS = [0.40, 0.25, 0.15, 0.10, 0.05, 0.03, 0.02]
 
 
@@ -56,6 +60,7 @@ class NativeForecastBuilder:
     ) -> None:
         """Initialize the native forecast builder."""
         self.hass = hass
+        self.entry_id = entry_id
         self.step_minutes = step_minutes
         self.days = days
 
@@ -123,12 +128,38 @@ class NativeForecastBuilder:
             - FORECAST_MAX_LOOKBACK
         )
 
-        history_states = await self._get_history_states(
-            entity_id,
-            history_start,
-            now,
+        # The persisted daily delta profile is already frozen for this date,
+        # source, configuration and algorithm. Actual samples are NOT cached:
+        # refresh today's curve on every poll, including the midnight lookback.
+        await self._async_load_forecast_cache()
+        use_daily_cache = (
+            not FORECAST_DEBUG_ENABLED
+            and self._is_forecast_cache_valid(
+                self._forecast_cache,
+                now.date().isoformat(),
+                entity_id,
+            )
         )
-        timestamps, values = self._build_history_index(history_states)
+        query_start = (
+            start_of_day - FORECAST_MAX_LOOKBACK
+            if use_daily_cache
+            else history_start
+        )
+        history_states = await self._get_history_states(entity_id, query_start, now)
+        if history_states is None:
+            return forecast
+        timestamps, values = await self._async_build_history_index(history_states)
+
+        if use_daily_cache and not timestamps:
+            # A source with only older numeric samples still used the daily
+            # profile before this optimization. Preserve that sparse-history
+            # behavior (and the genuinely empty-history fallback) exactly.
+            history_states = await self._get_history_states(
+                entity_id, history_start, now
+            )
+            if history_states is None:
+                return forecast
+            timestamps, values = await self._async_build_history_index(history_states)
 
         if not timestamps or not values:
             _LOGGER.debug(
@@ -341,21 +372,37 @@ class NativeForecastBuilder:
     def _resolve_sensor_entity_id(self, device: Device) -> str | None:
         """Resolve the entity_id for a device sensor using the entity registry."""
         entity_registry = er.async_get(self.hass)
-        entity_unique_id = f"{DOMAIN}-{device.device_unique_id}"
-
-        return entity_registry.async_get_entity_id(
-            "sensor",
-            DOMAIN,
-            entity_unique_id,
-        )
+        entry = self.hass.config_entries.async_get_entry(self.entry_id)
+        if entry is None:
+            return None
+        unique_id = entity_unique_id(entry, f"{DOMAIN}-{device.device_unique_id}")
+        entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+        registered = entity_registry.async_get(entity_id) if entity_id else None
+        # Never read another account's Recorder history, even during migration.
+        if registered is None or registered.config_entry_id != self.entry_id:
+            return None
+        return entity_id
 
     async def _get_history_states(
         self,
         entity_id: str,
         start_dt: datetime,
         end_dt: datetime,
-    ) -> list[Any]:
-        """Fetch recorder history states for the given entity."""
+    ) -> list[Any] | None:
+        """Fetch history, or return unavailable when Recorder is not set up."""
+        try:
+            recorder = get_instance(self.hass)
+        except KeyError as err:
+            # Minimal offline fixtures and installations without Recorder have
+            # no instance. Do not turn that into a forecast of zero or repeated
+            # coordinator warnings. A missing instance AFTER successful setup
+            # is an unexpected outage and must still be reported.
+            from homeassistant.components.recorder import DATA_INSTANCE
+
+            if err.args != (DATA_INSTANCE,) or "recorder" in self.hass.config.components:
+                raise
+            _LOGGER.debug("Recorder is not set up; native forecast is unavailable")
+            return None
 
         def _query() -> dict[str, list[Any]]:
             return get_significant_states(
@@ -367,8 +414,19 @@ class NativeForecastBuilder:
                 significant_changes_only=False,
             )
 
-        states = await get_instance(self.hass).async_add_executor_job(_query)
+        states = await recorder.async_add_executor_job(_query)
         return states.get(entity_id, [])
+
+    async def _async_build_history_index(
+        self,
+        history_states: list[Any],
+    ) -> tuple[list[datetime], list[float]]:
+        """Index large histories off-loop without accessing HA state or registries."""
+        if len(history_states) >= FORECAST_EXECUTOR_MIN_SAMPLES:
+            return await self.hass.async_add_executor_job(
+                self._build_history_index, history_states
+            )
+        return self._build_history_index(history_states)
 
     def _build_history_index(
         self,
@@ -511,12 +569,25 @@ class NativeForecastBuilder:
             self.days,
         )
 
-        delta_curve = self._build_forecast_delta_cache(
-            timestamps,
-            values,
-            start_of_day,
-            end_of_day,
-        )
+        if len(timestamps) >= FORECAST_EXECUTOR_MIN_SAMPLES:
+            # This calculation only reads the supplied numeric history and the
+            # builder's configuration. It returns local data; cache mutation and
+            # persistence stay on-loop, so cancellation cannot publish a late
+            # executor result after the awaiting build has been cancelled.
+            delta_curve = await self.hass.async_add_executor_job(
+                self._build_forecast_delta_cache,
+                timestamps,
+                values,
+                start_of_day,
+                end_of_day,
+            )
+        else:
+            delta_curve = self._build_forecast_delta_cache(
+                timestamps,
+                values,
+                start_of_day,
+                end_of_day,
+            )
 
         has_forecast_data = any(
             float(item.get("delta_kwh", 0) or 0) > 0

@@ -21,6 +21,26 @@ class DeviceType(StrEnum):
     SENSOR_TEXT = "sensor_text"
     SENSOR_KG = "sensor_kg"
     SENSOR_COUNT = "sensor_count"
+    SENSOR_MINUTES = "sensor_minutes"
+
+
+# Parsing contract matching sensor.UNIT_MAP, without importing the HA platform.
+NUMERIC_DEVICE_UNITS = {
+    DeviceType.SENSOR_KW: "kW",
+    DeviceType.SENSOR_KWH: "kWh",
+    DeviceType.SENSOR_PERCENTAGE: "%",
+    DeviceType.SENSOR_RATIO: "%",
+    DeviceType.SENSOR_VOLTAGE: "V",
+    DeviceType.SENSOR_CURRENT: "A",
+    DeviceType.SENSOR_FREQUENCY: "Hz",
+    DeviceType.SENSOR_TEMPERATURE: "°C",
+    DeviceType.SENSOR_RESISTANCE: "MΩ",
+    DeviceType.SENSOR_POWER_FACTOR: "",
+    DeviceType.SENSOR_VAR: "var",
+    DeviceType.SENSOR_KG: "kg",
+    DeviceType.SENSOR_COUNT: "",
+    DeviceType.SENSOR_MINUTES: "min",
+}
 
 
 class ENERGY_BALANCE_CALL_TYPE(StrEnum):

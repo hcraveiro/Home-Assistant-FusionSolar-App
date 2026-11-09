@@ -11,9 +11,24 @@ permissions:
   contents: read
 
 jobs:
-  issue-51-regression:
+  regression-gate:
     name: PV discovery regression tests
+    needs: issue-51-regression
+    if: always()
     runs-on: ubuntu-latest
+    steps:
+      - name: Require both JSON backend suites
+        env:
+          MATRIX_RESULT: ${{ needs.issue-51-regression.result }}
+        run: test "$MATRIX_RESULT" = "success"
+
+  issue-51-regression:
+    name: PV discovery regression tests (${{ matrix.json-backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        json-backend: [json, simplejson]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -26,6 +41,17 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -r requirements-test.txt
 
+      - name: Select and verify Requests JSON decoder
+        env:
+          JSON_BACKEND: ${{ matrix.json-backend }}
+        run: |
+          if [ "$JSON_BACKEND" = "simplejson" ]; then
+            python -m pip install 'simplejson>=3,<5'
+          else
+            python -m pip uninstall --yes simplejson
+          fi
+          python -c 'import os, requests; assert requests.compat.json.__name__ == os.environ["JSON_BACKEND"], requests.compat.json.__name__'
+
       - name: Compile integration and tests
         run: python -m compileall -q custom_components/fusion_solar_app tests
 
@@ -33,8 +59,10 @@ jobs:
         run: >-
           python -m pytest tests -v
           --cov=custom_components/fusion_solar_app
+          --cov-branch
           --cov-fail-under=78
           --cov-report=term-missing
+          --cov-report=json:coverage.json
           --cov-report=xml:coverage.xml
           --junitxml=test-results.xml
 
@@ -42,8 +70,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-and-coverage-results
+          name: test-and-coverage-results-${{ matrix.json-backend }}
           path: |
             coverage.xml
+            coverage.json
             test-results.xml
           if-no-files-found: ignore

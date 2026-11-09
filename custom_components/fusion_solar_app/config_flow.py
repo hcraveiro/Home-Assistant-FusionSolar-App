@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import voluptuous as vol
@@ -28,10 +29,17 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .api import FusionSolarAPI, APIAuthError, APIConnectionError, APIAuthCaptchaError
+from .api import (
+    FusionSolarAPI,
+    APIAuthError,
+    APIConnectionError,
+    APIAuthCaptchaError,
+    normalize_fusionsolar_host,
+)
 from .const import (
     CAPTCHA_INPUT,
     CONF_FORECAST_PROVIDER,
+    CONF_MOCK_PROFILE,
     CONF_SOLCAST_FORECAST_TODAY_ENTITY,
     CONF_STATION_DN,
     DEFAULT_FORECAST_PROVIDER,
@@ -107,7 +115,7 @@ async def validate_input(
     else:
         api.user = data[CONF_USERNAME]
         api.pwd = data[CONF_PASSWORD]
-        api.login_host = data[FUSION_SOLAR_HOST]
+        api.login_host = normalize_fusionsolar_host(data[FUSION_SOLAR_HOST])
         api.captcha_input = captcha_input
 
     if station_dn:
@@ -118,9 +126,14 @@ async def validate_input(
     except APIAuthCaptchaError as err:
         raise InvalidCaptcha(api) from err
     except APIAuthError as err:
+        await hass.async_add_executor_job(api.close)
         raise InvalidAuth from err
     except APIConnectionError as err:
+        await hass.async_add_executor_job(api.close)
         raise CannotConnect from err
+    except BaseException:
+        await hass.async_add_executor_job(api.close)
+        raise
 
     return {
         "title": _build_entry_title(
@@ -140,6 +153,36 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
     _captcha_credentials: dict[str, Any] | None = None
     _target_entry: ConfigEntry | None = None
 
+    async def _async_validate_input(
+        self, data: dict[str, Any]
+    ) -> tuple[dict[str, Any], FusionSolarAPI]:
+        """Own the temporary API before awaiting login so abort can release it."""
+        await self._async_close_api()
+        self._api = FusionSolarAPI(
+            data[CONF_USERNAME],
+            data[CONF_PASSWORD],
+            data[FUSION_SOLAR_HOST],
+            data.get(CAPTCHA_INPUT),
+        )
+        return await validate_input(self.hass, data, self._api)
+
+    async def _async_close_api(self) -> None:
+        """Release a temporary API without invalidating a transferred token."""
+        api, self._api = self._api, None
+        if api is not None:
+            await self.hass.async_add_executor_job(api.close)
+
+    @callback
+    def async_remove(self) -> None:
+        """Clean up when HA removes a completed or externally aborted flow."""
+        if self._api is not None:
+            self.hass.async_create_task(self._async_close_api())
+
+    async def _async_abort(self, reason: str) -> ConfigFlowResult:
+        """Release resources before returning an abort result."""
+        await self._async_close_api()
+        return self.async_abort(reason=reason)
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
@@ -149,12 +192,77 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step."""
+        """Handle a normal account, or an explicitly enabled developer replay."""
+        if user_input is not None and CONF_MOCK_PROFILE in user_input:
+            return await self.async_step_mock(user_input)
+        if user_input is None and os.environ.get("FUSIONSOLAR_DEV_PROFILE_DIR"):
+            from .mock_profile import list_profiles
+
+            try:
+                profiles = await self.hass.async_add_executor_job(list_profiles)
+            except (ValueError, OSError):
+                profiles = {}
+            if profiles:
+                return self.async_show_menu(
+                    step_id="user", menu_options=["account", "mock"]
+                )
+        return await self._async_step_account(user_input)
+
+    async def async_step_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose the ordinary account form from the developer menu."""
+        return await self._async_step_account(user_input)
+
+    async def async_step_mock(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Create an isolated mock entry, never run account validation/login."""
+        from .mock_profile import list_profiles, load_profile
+
+        try:
+            profiles = await self.hass.async_add_executor_job(list_profiles)
+        except (ValueError, OSError):
+            profiles = {}
+        if not profiles:
+            return await self._async_abort("mock_disabled")
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            profile_id = user_input.get(CONF_MOCK_PROFILE)
+            try:
+                if profile_id not in profiles:
+                    raise ValueError("Unknown mock profile")
+                profile = await self.hass.async_add_executor_job(load_profile, profile_id)
+            except (ValueError, OSError):
+                errors["base"] = "mock_profile_invalid"
+            else:
+                await self.async_set_unique_id(f"mock:{profile_id}")
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=f"MOCK — {profile['title']}",
+                    data={
+                        CONF_MOCK_PROFILE: profile_id,
+                        CONF_USERNAME: f"mock-{profile_id}",
+                        CONF_PASSWORD: "unused",
+                        FUSION_SOLAR_HOST: "example.invalid",
+                        CONF_STATION_DN: profile["station"]["dn"],
+                    },
+                )
+        return self.async_show_form(
+            step_id="mock",
+            data_schema=vol.Schema({vol.Required(CONF_MOCK_PROFILE): vol.In(profiles)}),
+            errors=errors,
+        )
+
+    async def _async_step_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Keep the normal credentials flow unchanged when replay is disabled."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             try:
-                info, api = await validate_input(self.hass, user_input)
+                info, api = await self._async_validate_input(user_input)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -176,6 +284,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._stations = station_data["data"]["list"]
                 except Exception:  # pylint: disable=broad-except
                     _LOGGER.exception("Unexpected exception while fetching station list")
+                    await self._async_close_api()
                     errors["base"] = "cannot_connect"
                 else:
                     return await self.async_step_select_station()
@@ -219,6 +328,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
                 station_dn,
             )
     
+            await self._async_close_api()
             return self.async_create_entry(title=title, data=data)
     
         # Build station selection form.
@@ -273,11 +383,17 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             station_dn,
         )
     
-        self.hass.config_entries.async_update_entry(
-            entry,
-            data=update_data,
-            title=title,
-        )
+        # Copy the token first, then close only the local transport before reload.
+        # The coordinator restores the copied token into its own requests.Session.
+        self._api = api
+        try:
+            self.hass.config_entries.async_update_entry(
+                entry,
+                data=update_data,
+                title=title,
+            )
+        finally:
+            await self._async_close_api()
         await self.hass.config_entries.async_reload(entry.entry_id)
         return self.async_abort(reason=abort_reason)
 
@@ -365,6 +481,8 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
         self, entry_data: dict[str, Any]
     ) -> ConfigFlowResult:
         """Handle reauth when login fails at runtime."""
+        if CONF_MOCK_PROFILE in entry_data:
+            return await self._async_abort("mock_account_action_forbidden")
         self._target_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
@@ -374,6 +492,8 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle reauth confirmation step."""
+        if self._target_entry is not None and CONF_MOCK_PROFILE in self._target_entry.data:
+            return await self._async_abort("mock_account_action_forbidden")
         errors: dict[str, str] = {}
     
         if user_input is not None:
@@ -384,7 +504,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             }
     
             try:
-                info, api = await validate_input(self.hass, validation_data)
+                info, api = await self._async_validate_input(validation_data)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -427,11 +547,13 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
     
         entry_id = self.context.get("entry_id")
         if not entry_id:
-            return self.async_abort(reason="missing_entry_id")
+            return await self._async_abort(reason="missing_entry_id")
     
         config_entry = self.hass.config_entries.async_get_entry(entry_id)
         if config_entry is None:
-            return self.async_abort(reason="config_entry_not_found")
+            return await self._async_abort(reason="config_entry_not_found")
+        if CONF_MOCK_PROFILE in config_entry.data:
+            return await self._async_abort("mock_account_action_forbidden")
     
         if user_input is not None:
             validation_data = {
@@ -440,7 +562,7 @@ class FusionSolarConfigFlow(ConfigFlow, domain=DOMAIN):
             }
     
             try:
-                info, api = await validate_input(self.hass, validation_data)
+                info, api = await self._async_validate_input(validation_data)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:

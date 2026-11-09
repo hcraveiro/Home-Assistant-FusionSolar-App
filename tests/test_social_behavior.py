@@ -73,6 +73,50 @@ def test_bad_json_returns_auth_error(modules):
         api.call_social_contribution()
 
 
+@pytest.mark.parametrize("decoder_error", [json.JSONDecodeError, requests.exceptions.JSONDecodeError])
+def test_json_decoder_errors_return_auth_error_without_logging_body(modules, caplog, decoder_error):
+    api = make_api(modules, raw="private-response-marker")
+    response = api.session.get.return_value
+    error = decoder_error("private-decoder-marker", response.text, 0)
+    response.json = Mock(side_effect=error)
+    response.headers["Set-Cookie"] = "dp-session=private-cookie-marker"
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(modules[1].APIAuthError) as caught:
+            api.call_social_contribution()
+
+    assert caught.value.__cause__ is error
+    for marker in ("private-response-marker", "private-decoder-marker", "private-cookie-marker"):
+        assert marker not in caplog.text
+
+
+@pytest.mark.parametrize("error_type", [ValueError, TypeError, RuntimeError])
+def test_json_programming_errors_are_not_misclassified(modules, error_type):
+    api = make_api(modules)
+    api.session.get.return_value.json = Mock(side_effect=error_type("programming error"))
+    with pytest.raises(error_type, match="programming error"):
+        api.call_social_contribution()
+
+
+@pytest.mark.parametrize("status,payload,raw,expected_error", [
+    (503, None, "private-response-marker", "APIConnectionError"),
+    (200, {"session": "private-response-marker"}, None, "APIDataStructureError"),
+])
+def test_social_failures_never_log_response_or_session(modules, caplog, status, payload, raw, expected_error):
+    api = make_api(modules, status=status, payload=payload, raw=raw)
+    api.csrf = "private-csrf-marker"
+    api.station = "private-station-marker"
+    api.session.get.return_value.headers["Set-Cookie"] = "dp-session=private-cookie-marker"
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(getattr(modules[1], expected_error)):
+            api.call_social_contribution()
+
+    assert caplog.records
+    for marker in ("private-response-marker", "private-csrf-marker", "private-cookie-marker", "private-station-marker"):
+        assert marker not in caplog.text
+
+
 def test_missing_data_returns_structure_error(modules):
     api = make_api(modules, payload={"success": True})
     with pytest.raises(modules[1].APIDataStructureError):
@@ -100,9 +144,9 @@ def test_social_metric_mapping_and_rounding(modules):
     }
 
 
-def test_social_missing_metrics_default_to_zero(modules):
+def test_social_missing_metrics_are_unavailable(modules):
     api = make_api(modules)
     output = {}
     api.update_output_with_social_contribution(output)
     assert len(output) == 6
-    assert all(value == 0 for value in output.values())
+    assert all(value is None for value in output.values())

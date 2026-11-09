@@ -46,11 +46,8 @@ def make_pv_signals(active_inputs: int, total_inputs: int = 20, timestamp: int =
 class PVDetectionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        def extract_numeric(value):
-            try:
-                return float(str(value).split()[0])
-            except (ValueError, TypeError, IndexError, AttributeError):
-                return 0.0
+        from test_utils_behavior import utils
+        extract_numeric = utils.extract_numeric
 
         cls.detect = staticmethod(load_function(
             COMPONENT / "api" / "inverter.py",
@@ -106,7 +103,10 @@ class DynamicSensorTests(unittest.TestCase):
             entry_id="entry",
             async_on_unload=self.unload_callbacks.append,
         )
+        from identity_test_support import identity_module
+
         namespace = {
+            **vars(identity_module()),
             "HomeAssistant": object,
             "ConfigEntry": object,
             "AddEntitiesCallback": object,

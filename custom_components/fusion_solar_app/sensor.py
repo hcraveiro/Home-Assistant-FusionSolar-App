@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import inspect
+import math
 from datetime import datetime
 from typing import Any
 
@@ -34,6 +35,7 @@ from homeassistant.util import dt as dt_util
 from .api import Device, DeviceType
 from .const import DOMAIN
 from .coordinator import FusionSolarCoordinator
+from .identity import device_identifier, entity_unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +55,7 @@ SUPPORTED_SENSOR_DEVICE_TYPES = {
     DeviceType.SENSOR_TEXT,
     DeviceType.SENSOR_KG,
     DeviceType.SENSOR_COUNT,
+    DeviceType.SENSOR_MINUTES,
 }
 
 INVERTER_DEVICE_SENSOR_PREFIX = "Inverter "
@@ -67,8 +70,6 @@ BATTERY_DEVICE_SENSOR_IDS = {
     "Battery Charge/Discharge Power",
     "Battery Bus Voltage",
     "Battery SOH",
-    "Battery Percentage",
-    "Battery Capacity",
 }
 
 def _get_station_suffix(coordinator: FusionSolarCoordinator) -> str:
@@ -100,7 +101,24 @@ def _build_device_info(
     coordinator: FusionSolarCoordinator,
     device: Device | None = None,
 ) -> DeviceInfo:
-    """Build device info shared by Fusion Solar entities."""
+    """Apply the same persistent scope to every physical device and parent."""
+    info = _build_legacy_device_info(coordinator, device)
+    entry = getattr(coordinator, "config_entry", None)
+    info["identifiers"] = {
+        (domain, device_identifier(entry, identifier))
+        for domain, identifier in info["identifiers"]
+    }
+    if "via_device" in info:
+        domain, identifier = info["via_device"]
+        info["via_device"] = (domain, device_identifier(entry, identifier))
+    return info
+
+
+def _build_legacy_device_info(
+    coordinator: FusionSolarCoordinator,
+    device: Device | None = None,
+) -> DeviceInfo:
+    """Build device metadata independently of the HA identity scope."""
     station_dn = getattr(coordinator.api, "station", None) or "unknown_station"
     station_name = getattr(coordinator.api, "station_name", None) or "FusionSolar Plant"
     controller_name = getattr(
@@ -132,10 +150,12 @@ def _build_device_info(
             if parent_dn:
                 inverter_info = getattr(coordinator.api, "inverters", {}).get(parent_dn)
                 identifier_dn = getattr(inverter_info, "canonical_dn", None) or parent_dn
-                inverter_device = dr.async_get(coordinator.hass).async_get_device(
-                    identifiers={
-                        (DOMAIN, f"{controller_name}_{station_dn}_inverter_{identifier_dn}")
-                    }
+                inverter_device = dr.async_get(coordinator.hass).async_get_device_by_identifier(
+                    (DOMAIN, device_identifier(
+                        coordinator.config_entry,
+                        f"{controller_name}_{station_dn}_inverter_{identifier_dn}",
+                    )),
+                    coordinator.config_entry.entry_id,
                 )
                 if inverter_device is not None:
                     optimizer_parent_id = inverter_device.id
@@ -214,26 +234,65 @@ def _build_device_info(
 
         if (
             device.device_id in BATTERY_DEVICE_SENSOR_IDS
+            or device.device_id in {"Battery SOC", "Battery Rated Capacity"}
+            or device.device_id.startswith(("Battery Maximum ", "Battery End of ", "Battery AC Charge ", "Battery Forced ", "Battery Charge From AC", "Battery Charged Energy", "Battery Discharged Energy"))
             or device.device_id.startswith("Battery Module ")
         ):
-            battery_dn = getattr(coordinator.api, "battery_dn", None) or "unknown_battery"
-            battery_model = getattr(coordinator.api, "battery_model", None) or "FusionSolar Battery"
-            battery_software_version = getattr(coordinator.api, "battery_software_version", None) or "1.0"
-            battery_serial_number = getattr(coordinator.api, "battery_serial_number", None)
+            # Primary battery retains its exact legacy registry identifier.
+            # Secondary telemetry is scoped by its own DN and never inherits
+            # the primary battery's model, serial number or firmware.
+            is_secondary = device.dn is not None
+            battery_dn = (
+                device.dn if is_secondary
+                else getattr(coordinator.api, "battery_dn", None)
+            ) or "unknown_battery"
+            battery_model = (
+                "FusionSolar Battery" if is_secondary
+                else getattr(coordinator.api, "battery_model", None) or "FusionSolar Battery"
+            )
+            battery_software_version = (
+                None if is_secondary
+                else getattr(coordinator.api, "battery_software_version", None) or "1.0"
+            )
+            battery_serial_number = (
+                None if is_secondary
+                else getattr(coordinator.api, "battery_serial_number", None)
+            )
+
+            battery_parent_id = parent_device_id
+            parent_dn = getattr(coordinator.api, "_battery_parent_dns", {}).get(battery_dn)
+            inverter_device = None
+            if parent_dn:
+                inverter_info = getattr(coordinator.api, "inverters", {}).get(parent_dn)
+                identifier_dn = getattr(inverter_info, "canonical_dn", None) or parent_dn
+                inverter_device = dr.async_get(coordinator.hass).async_get_device_by_identifier(
+                    (DOMAIN, device_identifier(
+                        coordinator.config_entry,
+                        f"{controller_name}_{station_dn}_inverter_{identifier_dn}",
+                    )),
+                    coordinator.config_entry.entry_id,
+                )
+                if inverter_device is not None:
+                    battery_parent_id = inverter_device.id
 
             return DeviceInfo(
-                name="Fusion Solar Battery",
+                name="Fusion Solar Battery" if not is_secondary else f"Fusion Solar Battery ({battery_dn})",
                 manufacturer="Huawei",
                 model=battery_model,
-                sw_version=battery_software_version,
-                serial_number=battery_serial_number,
+                **({"sw_version": battery_software_version} if battery_software_version else {}),
+                **({"serial_number": battery_serial_number} if battery_serial_number else {}),
                 identifiers={
                     (
                         DOMAIN,
                         f"{controller_name}_{station_dn}_battery_{battery_dn}",
                     )
                 },
-                **_parent_device_link(parent_device_id, plant_identifier),
+                **_parent_device_link(
+                    battery_parent_id,
+                    (DOMAIN, f"{controller_name}_{station_dn}_inverter_{identifier_dn}")
+                    if inverter_device is not None
+                    else plant_identifier,
+                ),
             )
 
     return DeviceInfo(
@@ -484,7 +543,7 @@ async def async_setup_entry(
     )
     plant = dr.async_get(hass).async_get_or_create(
         config_entry_id=config_entry.entry_id,
-        identifiers={(DOMAIN, f"{controller_name}_{station_dn}")},
+        identifiers={(DOMAIN, device_identifier(config_entry, f"{controller_name}_{station_dn}"))},
         name=f"Fusion Solar Installation ({station_dn})",
         manufacturer="Fusion Solar",
         model=str(station_name),
@@ -548,6 +607,7 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         DeviceType.SENSOR_RESISTANCE: "MΩ",
         DeviceType.SENSOR_VAR: "var",
         DeviceType.SENSOR_KG: "kg",
+        DeviceType.SENSOR_MINUTES: "min",
     }
 
     DIAGNOSTIC_SENSOR_IDS = {
@@ -567,10 +627,32 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         "Battery SOH",
     }
 
+    # These are nonnegative counters, including counters reset by the API at
+    # calendar boundaries. Capacity and configuration energy setpoints are not
+    # accumulated energy and deliberately have no state class.
+    ENERGY_COUNTER_SENSOR_IDS = {
+        f"{metric} {period}"
+        for metric in (
+            "House Load", "Panel Production", "Panel Production Consumption",
+            "Battery Consumption", "Battery Injection",
+            "Grid Consumption", "Grid Injection",
+        )
+        for period in ("Today", "Week", "Month", "Year", "Lifetime")
+    } | {
+        "Battery Energy Charged Today",
+        "Battery Energy Discharged Today",
+        "Power Sensor Grid Injection Total",
+        "Power Sensor Grid Consumption Total",
+        "Optimizer Energy Today",
+    }
+
     def __init__(self, coordinator: FusionSolarCoordinator, device: Device) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.device = device
+        # Keep registry routing metadata when a reading disappears, but never
+        # use that last-seen Device as a fallback for its state.
+        self._device_info_device = device
         self.device_id = device.device_id
         self._device_name = device.name
         self._device_type = device.device_type
@@ -584,23 +666,19 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
             self._device_unique_id,
         )
 
+        self.device = updated_device
         if updated_device is not None:
-            self.device = updated_device
+            self._device_info_device = updated_device
+            self._device_name = updated_device.name
+            self._device_icon = updated_device.icon
 
         _LOGGER.debug("Device: %s", self.device)
         self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
-        """Return availability."""
-        if self.device_id.startswith("Optimizer ") and self.device is not None:
-            if self.device_id in {
-                "Optimizer Output Power", "Optimizer Input Voltage",
-                "Optimizer Output Voltage", "Optimizer Input Current",
-                "Optimizer Power Percent",
-            } and self.device.state is None:
-                return False
-        return super().available and self.device is not None
+        """Require a valid reading in this snapshot, not just a successful poll."""
+        return super().available and self.native_value is not None
 
     @property
     def device_class(self) -> str | None:
@@ -613,7 +691,12 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        return _build_device_info(self.coordinator, self.device)
+        info = _build_device_info(self.coordinator, self._device_info_device)
+        profile = getattr(self.coordinator.api, "mock_profile", None)
+        if isinstance(profile, dict):
+            # Make fictitious devices unmistakable beside a real account.
+            info["name"] = f"MOCK [{profile['id']}] {info['name']}"
+        return info
 
     @property
     def entity_category(self) -> EntityCategory | None:
@@ -648,14 +731,21 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
             return self.device.state
         if dtype == DeviceType.SENSOR_TEXT:
             return str(self.device.state)
-        if dtype == DeviceType.SENSOR_PERCENTAGE:
-            return int(self.device.state)
-        if dtype == DeviceType.SENSOR_COUNT:
-            return int(self.device.state)
-        if dtype == DeviceType.SENSOR_RATIO:
-            return round(float(self.device.state), 2)
-
-        return float(self.device.state)
+        try:
+            if isinstance(self.device.state, bool):
+                return None
+            value = float(self.device.state)
+            if not math.isfinite(value):
+                return None
+            if dtype in {DeviceType.SENSOR_PERCENTAGE, DeviceType.SENSOR_COUNT}:
+                return int(self.device.state)
+            if dtype == DeviceType.SENSOR_RATIO:
+                return round(value, 2)
+            return value
+        except (TypeError, ValueError, OverflowError):
+            # Invalid telemetry must not become a false zero or keep an old
+            # reading alive when the rest of the plant refresh succeeded.
+            return None
 
     @property
     def native_unit_of_measurement(self) -> str | None:
@@ -668,13 +758,23 @@ class FusionSolarSensor(CoordinatorEntity, SensorEntity):
         if self._device_type in {DeviceType.SENSOR_TIME, DeviceType.SENSOR_TEXT}:
             return None
         if self._device_type == DeviceType.SENSOR_KWH:
-            return SensorStateClass.TOTAL
+            if self.device_id in self.ENERGY_COUNTER_SENSOR_IDS or (
+                self.device_id.startswith("Battery Module ")
+                and self.device_id.lower().endswith(
+                    (" total charge energy", " total discharge energy")
+                )
+            ):
+                return SensorStateClass.TOTAL_INCREASING
+            return None
         return SensorStateClass.MEASUREMENT
 
     @property
     def unique_id(self) -> str:
         """Return unique ID."""
-        return f"{DOMAIN}-{self._device_unique_id}"
+        return entity_unique_id(
+            getattr(self.coordinator, "config_entry", None),
+            f"{DOMAIN}-{self._device_unique_id}",
+        )
 
     @property
     def icon(self) -> str:
@@ -740,7 +840,10 @@ class FusionSolarForecastSensor(CoordinatorEntity, SensorEntity):
     def unique_id(self) -> str:
         """Return unique ID."""
         station_suffix = _get_station_suffix(self.coordinator)
-        return f"{DOMAIN}-{station_suffix}-{self._forecast_key}"
+        return entity_unique_id(
+            getattr(self.coordinator, "config_entry", None),
+            f"{DOMAIN}-{station_suffix}-{self._forecast_key}",
+        )
 
     @property
     def native_value(self) -> float | None:

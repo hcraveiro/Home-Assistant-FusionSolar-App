@@ -69,16 +69,70 @@ def test_full_energy_output_aggregation(module,monkeypatch):
     api=make_api(module)
     data=complete_data()
     api.call_energy_balance=Mock(return_value=data)
-    api.get_week_data=Mock(return_value=[data])
+    # One slot per elapsed day, as returned by production get_week_data.
+    api.get_week_data=Mock(return_value=[data] * (module[0].datetime.now().weekday() + 1))
     output={}
     api.update_output_with_energy_balance(output)
     assert output["panel_production_month"]==120
     assert output["panel_production_lifetime"]==120
-    assert output["battery_injection_month"]==31
-    assert output["battery_consumption_month"]==62
+    assert output["battery_injection_month"]==module[0].datetime.now().day
+    assert output["battery_consumption_month"]==2 * module[0].datetime.now().day
     assert output["grid_consumption_today"]==20
     assert output["grid_injection_today"]==30
     assert output["panel_production_year"]==120
     assert output["grid_consumption_lifetime"]==20
     assert output["battery_injection_lifetime"]==31
     assert api.call_energy_balance.call_count>=3
+
+
+@pytest.mark.parametrize(("today", "expected_current_days", "expected_previous_days"), [
+    (datetime(2026, 11, 30, 12), [30], []),
+    (datetime(2026, 12, 1, 12), [1], [30]),
+    (datetime(2027, 1, 1, 12), [1], [28, 29, 30, 31]),
+    (datetime(2026, 11, 1, 12), [1], [26, 27, 28, 29, 30, 31]),
+    (datetime(2026, 11, 4, 12), [2, 3, 4], []),
+    (datetime(2028, 3, 1, 12), [1], [28, 29]),
+])
+def test_week_totals_use_only_elapsed_dates_across_calendar_boundaries(
+    module, monkeypatch, today, expected_current_days, expected_previous_days
+):
+    """Future next-month days must not alias readings in the current month."""
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return today
+
+    energy = module[0]
+    monkeypatch.setattr(energy, "datetime", FrozenDatetime)
+    api = make_api(module)
+    current = complete_data()
+    previous = complete_data()
+    # Distinct day values expose both an incorrect source month and any
+    # accidental inclusion of future days.
+    fields = ("productPower", "selfUsePower", "usePower", "chargePower", "dischargePower")
+    for field in fields:
+        current["data"][field] = [str(day) for day in range(1, 32)]
+        previous["data"][field] = [str(day * 10) for day in range(1, 32)]
+
+    def balance(call_type):
+        if call_type == energy.ENERGY_BALANCE_CALL_TYPE.PREVIOUS_MONTH:
+            return previous
+        return current
+
+    api.call_energy_balance = Mock(side_effect=balance)
+    api.get_week_data = Mock(return_value=[current] * (today.weekday() + 1))
+    output = {}
+
+    api.update_output_with_energy_balance(output)
+
+    expected = sum(expected_current_days) + sum(day * 10 for day in expected_previous_days)
+    for category in (
+        "panel_production", "panel_production_consumption", "house_load",
+        "battery_injection", "battery_consumption",
+    ):
+        assert output[f"{category}_week"] == expected
+    previous_calls = [
+        call for call in api.call_energy_balance.call_args_list
+        if call.args[0] == energy.ENERGY_BALANCE_CALL_TYPE.PREVIOUS_MONTH
+    ]
+    assert len(previous_calls) == int(bool(expected_previous_days))

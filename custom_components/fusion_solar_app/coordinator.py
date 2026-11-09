@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from contextlib import nullcontext
 import logging
@@ -14,12 +15,14 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import (
     APIAuthCaptchaError,
     APIAuthError,
+    APIAuthRejectedError,
     APIConnectionError,
     APIDataStructureError,
     Device,
@@ -29,6 +32,7 @@ from .api import (
 from .const import (
     CAPTCHA_INPUT,
     CONF_FORECAST_PROVIDER,
+    CONF_MOCK_PROFILE,
     CONF_SOLCAST_FORECAST_TODAY_ENTITY,
     CONF_STATION_DN,
     DEFAULT_FORECAST_PROVIDER,
@@ -38,6 +42,7 @@ from .const import (
     FORECAST_PROVIDER_SOLCAST,
     FUSION_SOLAR_HOST,
 )
+from .identity import legacy_device_identifier, legacy_entity_unique_id
 from .forecast import (
     ForecastProvider,
     FusionSolarForecastData,
@@ -63,7 +68,10 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
 
     data: FusionSolarAPIData
 
-    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+    def __init__(
+        self, hass: HomeAssistant, config_entry: ConfigEntry,
+        *, mock_profile_data: dict | None = None,
+    ) -> None:
         """Initialize coordinator."""
         self.config_entry = config_entry
         self.user = config_entry.data[CONF_USERNAME]
@@ -77,6 +85,9 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
         )
     
         self.lastAuthentication = None
+        # The session's thread lock protects individual executor calls, not the
+        # async gaps between fetch/retry/login. Drain a whole refresh on unload.
+        self._update_lock = asyncio.Lock()
     
         self.native_forecast_builder = NativeForecastBuilder(
             hass=hass,
@@ -94,10 +105,25 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name=f"{DOMAIN} ({config_entry.unique_id})",
-            update_method=self.async_update_data,
+            update_method=self._async_update_data_locked,
             update_interval=timedelta(seconds=self.poll_interval),
         )
     
+        if CONF_MOCK_PROFILE in config_entry.data:
+            if (
+                mock_profile_data is None
+                or mock_profile_data["id"] != config_entry.data[CONF_MOCK_PROFILE]
+                or mock_profile_data["station"]["dn"] != config_entry.data.get(CONF_STATION_DN)
+            ):
+                raise ValueError("Mock entry/profile identity mismatch; real API fallback forbidden")
+            from .mock_api import MockFusionSolarAPI
+
+            self.api = MockFusionSolarAPI(mock_profile_data)
+            # Never restore persisted account/session fields into a mock API.
+            return
+
+        if mock_profile_data is not None:
+            raise ValueError("A mock backend requires an explicitly marked mock entry")
         self.api = FusionSolarAPI(
             user=self.user,
             pwd=self.pwd,
@@ -155,6 +181,19 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             "Auto-selected FusionSolar station DN and stored it in the config entry"
         )
         
+    async def _async_update_data_locked(self) -> FusionSolarAPIData:
+        """Serialize complete refreshes, including executor retry/login gaps."""
+        async with self._update_lock:
+            if self._shutdown_requested:
+                raise UpdateFailed("FusionSolar coordinator is shutting down")
+            return await self.async_update_data()
+
+    async def async_shutdown(self) -> None:
+        """Stop new HA refreshes, then drain an active refresh before API close."""
+        await super().async_shutdown()
+        async with self._update_lock:
+            pass
+
     def _call_api_serialized(self, method):
         """Prevent session renewal from replacing HTTP state during a request."""
         lock = getattr(self.api, "_session_lock", None)
@@ -174,23 +213,108 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             return await self.hass.async_add_executor_job(self._call_api_serialized, self.api.get_devices)
 
     def _restore_known_battery_dn(self) -> None:
-        """Recover a prior battery identity from this entry's HA device registry."""
+        """Restore the battery owning legacy unscoped IDs, never registry order.
+
+        Secondary batteries can register before the primary when its first poll
+        fails. Device registration order (or even a lone registered secondary)
+        therefore does not establish which battery owns the legacy entities.
+        """
         if self.api.battery_dn or not self.api.station:
             return
+        self.api._battery_primary_ambiguous = False
+        stored_dn = self.config_entry.data.get("primary_battery_dn")
+        if (
+            isinstance(stored_dn, str)
+            and stored_dn.strip()
+            and stored_dn != "unknown_battery"
+            and self.config_entry.data.get("primary_battery_station_dn") == self.api.station
+        ):
+            self.api.battery_dn = stored_dn
+            return
+
         prefix = f"{DOMAIN}_{self.api.station}_battery_"
         registry = dr.async_get(self.hass)
+        device_dns: dict[str, set[str]] = {}
         for device in dr.async_entries_for_config_entry(
             registry, self.config_entry.entry_id
         ):
-            for identifier_domain, identifier in device.identifiers:
-                if identifier_domain != DOMAIN or not identifier.startswith(prefix):
+            dns = {
+                identifier[len(prefix):]
+                for identifier_domain, scoped_identifier in device.identifiers
+                for identifier in (legacy_device_identifier(self.config_entry, scoped_identifier),)
+                if identifier_domain == DOMAIN and identifier.startswith(prefix)
+                and identifier[len(prefix):] not in {"", "unknown_battery"}
+            }
+            if dns:
+                device_dns[device.id] = dns
+
+        station_suffix = self.api.sanitize_id_segment(self.api.station)
+        legacy_prefixes = (
+            f"{DOMAIN}-{DOMAIN}_{station_suffix}_battery_",
+            f"{DOMAIN}-{DOMAIN}_battery_",  # Before station-scoped unique IDs.
+        )
+        station_scope = f"{DOMAIN}-{DOMAIN}_{station_suffix}_inv_"
+        legacy_dns: set[str] = set()
+        secondary_dns: set[str] = set()
+        has_legacy_entities = False
+        for entity in er.async_entries_for_config_entry(
+            er.async_get(self.hass), self.config_entry.entry_id
+        ):
+            if entity.platform != DOMAIN:
+                continue
+            unique_id = legacy_entity_unique_id(self.config_entry, entity.unique_id)
+            if unique_id.startswith(legacy_prefixes):
+                # These installation totals exist even on stations without a
+                # battery. Only per-device telemetry can identify a primary.
+                suffix = next(
+                    unique_id[len(prefix):] for prefix in legacy_prefixes
+                    if unique_id.startswith(prefix)
+                )
+                if suffix in {"percentage", "capacity"} or suffix.startswith(
+                    ("consumption_", "injection_")
+                ):
                     continue
-                battery_dn = identifier[len(prefix):]
-                if not battery_dn or battery_dn == "unknown_battery":
-                    continue
-                self.api.battery_dn = battery_dn
-                _LOGGER.debug("Restored known battery DN from device registry")
-                return
+                has_legacy_entities = True
+                legacy_dns.update(device_dns.get(entity.device_id, set()))
+            elif unique_id.startswith(station_scope):
+                secondary_dns.update(device_dns.get(entity.device_id, set()))
+
+        candidates = set().union(*device_dns.values()) if device_dns else set()
+        if len(legacy_dns) == 1:
+            self.api.battery_dn = next(iter(legacy_dns))
+        elif (
+            not has_legacy_entities and len(candidates) == 1
+            and not secondary_dns
+        ):
+            # Safe migration for old single-battery entries without entities.
+            self.api.battery_dn = next(iter(candidates))
+        elif candidates or has_legacy_entities:
+            # Do not let the next flow response silently assign legacy IDs to
+            # whichever battery happens to appear first. Scoped telemetry can
+            # still be polled while legacy entities remain unavailable.
+            self.api._battery_primary_ambiguous = True
+            _LOGGER.warning(
+                "Cannot safely restore the primary FusionSolar battery; "
+                "preserving legacy entity identities and using DN-scoped telemetry"
+            )
+
+    def _persist_primary_battery_dn(self) -> None:
+        """Save the primary before entities register, even if its telemetry failed."""
+        battery_dn = self.api.battery_dn
+        if (
+            not isinstance(battery_dn, str) or not battery_dn.strip()
+            or battery_dn == "unknown_battery" or not self.api.station
+        ):
+            return
+        identity = {
+            "primary_battery_dn": battery_dn,
+            "primary_battery_station_dn": self.api.station,
+        }
+        if all(self.config_entry.data.get(key) == value for key, value in identity.items()):
+            return
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, data={**self.config_entry.data, **identity}
+        )
 
     async def async_update_data(self) -> FusionSolarAPIData:
         """Fetch data from API endpoint."""
@@ -217,7 +341,7 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 err,
             )
             try:
-                self.api.reset_session()
+                await self.hass.async_add_executor_job(self._call_api_serialized, self.api.reset_session)
                 await self.hass.async_add_executor_job(self._call_api_serialized, self.api.login)
     
                 await self._ensure_station_dn()
@@ -226,6 +350,13 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed(
                     "Login requires CAPTCHA. Please reconfigure the integration."
                 ) from captcha_err
+            except APIAuthRejectedError as auth_err:
+                # Only affirmative rejection is permanent after one renewal.
+                # APIAuthError also represents regional login outages/protocol
+                # failures; those must remain UpdateFailed and retry later.
+                raise ConfigEntryAuthFailed(
+                    "Authentication failed after session renewal. Please reauthenticate."
+                ) from auth_err
             except Exception as retry_err:
                 raise UpdateFailed(f"Re-login failed: {retry_err}") from retry_err
     
@@ -237,6 +368,8 @@ class FusionSolarCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Error communicating with FusionSolar API", exc_info=True)
             raise UpdateFailed(f"Error communicating with API: {err}") from err
     
+        self._persist_primary_battery_dn()
+
         forecast: FusionSolarForecastData | None = None
         try:
             forecast = await self._build_panel_production_forecast(devices)

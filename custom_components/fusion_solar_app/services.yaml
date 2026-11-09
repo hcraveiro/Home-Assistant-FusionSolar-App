@@ -1,0 +1,23 @@
+mock_scenario:
+  name: Advance/reset developer mock scenario
+  description: >-
+    Offline development only. Registered only while an explicitly opted-in
+    transition mock entry is loaded. Never targets real accounts or hardware.
+    Applies the next/first frame before a real coordinator poll; declared faults
+    persist until the next advance/reset. Requires administrator access.
+  fields:
+    config_entry_id:
+      name: Mock config entry ID
+      description: Exact config entry ID of the loaded transition mock (not an entity ID).
+      required: true
+      example: "01MOCKENTRYID"
+      selector:
+        text:
+    operation:
+      name: Operation
+      required: true
+      selector:
+        select:
+          options:
+            - advance
+            - reset

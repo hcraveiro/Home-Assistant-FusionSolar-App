@@ -46,7 +46,10 @@ def run_sensor_setup(devices):
     registry = SimpleNamespace(
         async_get_or_create=lambda **kwargs: SimpleNamespace(id="plant-registry-id")
     )
+    from identity_test_support import identity_module
+
     module = {
+        **vars(identity_module()),
         "HomeAssistant": object,
         "ConfigEntry": object,
         "AddEntitiesCallback": object,

@@ -56,7 +56,14 @@ def native(monkeypatch_module=None):
 
 def builder(native):
     mod,_=native
-    hass=types.SimpleNamespace(registry=types.SimpleNamespace(async_get_entity_id=lambda *args:"sensor.production"))
+    entry = types.SimpleNamespace(entry_id="test", data={})
+    hass=types.SimpleNamespace(
+        config_entries=types.SimpleNamespace(async_get_entry=lambda _: entry),
+        registry=types.SimpleNamespace(
+            async_get_entity_id=lambda *args: "sensor.production",
+            async_get=lambda _: types.SimpleNamespace(config_entry_id="test"),
+        ),
+    )
     return mod.NativeForecastBuilder(hass,"test",step_minutes=60,days=2)
 
 

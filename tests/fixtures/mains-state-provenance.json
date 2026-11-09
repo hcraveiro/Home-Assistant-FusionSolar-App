@@ -1,0 +1,21 @@
+{
+  "source_url": "https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101#issuecomment-6705774990",
+  "extraction_date": "2026-11-07",
+  "capture_date": "2026-10-27",
+  "origin": "sanitized selected historical fields, not a live query",
+  "flow": {
+    "path": "/rest/pvms/web/station/v3/overview/energy-flow",
+    "params": {"stationDn": "STATION_A", "featureId": "aifc"},
+    "success": true,
+    "failCode": 0,
+    "node": {"mocId": 60001, "id": "8", "name": "neteco.pvms.pcs.station.energyflow.mains", "display": "CONNECTED", "description": {"value": "0.00kW"}, "devIds": ["MAINS_DEVICE_A"]}
+  },
+  "sampling": {
+    "path": "/rest/neteco/monitor/v1/signal/common/sampling-signal",
+    "dn": "MAINS_DEVICE_A",
+    "code": 0,
+    "rootDevTypeId": 36892,
+    "row": {"id": 10001, "mocId": 10001, "dataType": "ENUM", "signalType": "DI", "value": "1", "enumList": {"0": "Mains Off", "1": "Mains On"}, "typeId": 36892, "dn": "MAINS_DEVICE_A"}
+  },
+  "limitations": ["Only On physically observed; Off tests are synthetic.", "Graph id 8 is not the device DN.", "Presence of devIds in v2 is unknown.", "Timestamps differ by about six minutes; this does not reconstruct request ordering.", "Runtime replay wraps these fields in fictional MOCK_RUNTIME identities and synthetic unrelated routes.", "Existing import profile v3 empty-nodes response is synthetic missing-DN retry coverage, not a captured response."]
+}

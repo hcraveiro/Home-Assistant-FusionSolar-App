@@ -11,12 +11,14 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from test_api_lifecycle_behavior import api_module
+
 ROOT = Path(__file__).resolve().parents[1] / "custom_components/fusion_solar_app"
 PREFIX = "_fusion_solar_config_behavior"
 
 
 @pytest.fixture(scope="module")
-def config():
+def config(api_module):
     originals = {}
 
     def mod(name, **attrs):
@@ -80,7 +82,8 @@ def config():
     fake_api = Mock()
     mod(f"{PREFIX}.api", FusionSolarAPI=fake_api,
         APIAuthError=APIAuthError, APIConnectionError=APIConnectionError,
-        APIAuthCaptchaError=APIAuthCaptchaError)
+        APIAuthCaptchaError=APIAuthCaptchaError,
+        normalize_fusionsolar_host=api_module.normalize_fusionsolar_host)
     spec = importlib.util.spec_from_file_location(
         f"{PREFIX}.config_flow", ROOT / "config_flow.py")
     target = importlib.util.module_from_spec(spec)
