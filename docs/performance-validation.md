@@ -160,8 +160,12 @@ Remaining costs are deliberately retained:
 - Sparse numeric-history fallback may use two queries; avoiding that would change
   existing predictions in edge cases.
 - Debug mode still queries/scans full history to preserve its diagnostics.
-- The cloud API still performs its established serial per-day reads and one-second
-  spacing. There is no global historical-period cache or cloud cadence change.
+- **Historical b18 evidence (not current cadence):** the cloud API performed
+  serial per-day reads with one-second trailing spacing. In the 1.6.9b2 controlled
+  experiment every energy endpoint attempt instead has a minimum two-second
+  start-to-start interval per API instance, with no trailing daily pause. Scan
+  configuration, request order, and energy semantics remain unchanged. There is
+  no historical-period cache and no claim that this resolves HTTP 418.
 - Executor jobs cannot be forcibly stopped once running. Their results are local;
   cancellation prevents subsequent cache publication/persistence, but a worker
   can consume CPU until completion. Python's GIL still applies.

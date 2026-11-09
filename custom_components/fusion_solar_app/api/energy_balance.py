@@ -436,7 +436,6 @@ class FusionSolarEnergyBalanceMixin:
                 # would incorrectly label yesterday's successful response today.
                 day_data = None
             week_data.append(day_data)
-            time.sleep(1)
 
         return week_data
 

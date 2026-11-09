@@ -130,7 +130,18 @@ Removing one account does not rename the other's entities. See the
 [identity and migration contract](docs/lifecycle-validation.md#same-station-two-accounts-supported-identity-contract)
 for compatibility details and offline validation boundaries.
 
-The default sensor update interval is **60 seconds**.  
+The default sensor update interval is **60 seconds**.
+
+**1.6.9b2 controlled experiment:** energy-balance HTTP attempts are spaced at least
+**2 seconds start-to-start**, per API instance, for every period (including daily,
+previous month, year and lifetime). The first attempt has no artificial delay;
+a response taking at least 2 seconds needs no additional wait. Failed attempts
+also count. The previous daily-only one-second trailing pause is removed. The
+configured scan interval remains unchanged, as do request order and measurements.
+Ten energy requests on Sunday take at least 18 seconds from first to last start;
+a required previous-month request adds another interval. Other HTTP endpoints
+are not paced. This may lengthen refreshes; Huawei's rate-limit rules are unknown,
+and this experiment does **not** promise to resolve HTTP 418.
 FusionSolar App data is usually refreshed only every few minutes (commonly around 5 minutes depending on region / account / backend behaviour), but the shorter Home Assistant polling interval ensures the sensors update as soon as new data becomes available.
 
 After configuring the integration, you can open the config entry and press **Configure** to change:
