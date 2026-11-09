@@ -11,6 +11,17 @@ permissions:
   contents: read
 
 jobs:
+  regression-gate:
+    name: PV discovery regression tests
+    needs: issue-51-regression
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both JSON backend suites
+        env:
+          MATRIX_RESULT: ${{ needs.issue-51-regression.result }}
+        run: test "$MATRIX_RESULT" = "success"
+
   issue-51-regression:
     name: PV discovery regression tests (${{ matrix.json-backend }})
     runs-on: ubuntu-latest
