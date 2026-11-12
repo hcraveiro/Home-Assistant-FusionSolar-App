@@ -34,6 +34,9 @@ def mains_profile(load_profile):
                 'body': {'code': 0, 'data': {'rootDevTypeId': 36892, 'displayList': [{
                     'id': 10001, 'mocId': 10001, 'typeId': 36892, 'dn': dn,
                     'dataType': 'ENUM', 'signalType': 'DI', 'value': '1'}]}}}
+    sampling['body']['data']['displayList'].append({
+        'id': 10010, 'mocId': 10010, 'typeId': 36892, 'dn': dn,
+        'dataType': 'FLOAT', 'value': '0.000', 'unit': 'kW'})
     # Mock router matches exact form bodies, just like the production reader.
     sampling['data'] = {'samplingSigQueryCon.dn': dn, 'samplingSigQueryCon.pageSize': '10',
         'samplingSigQueryCon.pageIndex': '1', 'queryScene.businessDevice': '0',
@@ -43,9 +46,12 @@ def mains_profile(load_profile):
     profile['routes'].append(sampling)
     profile['frames'] = []
     for name, value in [('on-zero-power', '1'), ('off-synthetic', '0'), ('garbage', None),
-                        ('permission-error', '1'), ('recovery', '1')]:
+                        ('permission-error', '1'), ('recovery', '1'),
+                        ('positive', '1'), ('invalid-power', '1'), ('power-recovery', None) ]:
         body = deepcopy(sampling['body'])
         body['data']['displayList'][0]['value'] = value
+        body['data']['displayList'][1]['value'] = (
+            '2.345' if name == 'positive' else None if name == 'invalid-power' else '0.000')
         profile['frames'].append({'id': name, 'responses': [{'route': index, 'body': body,
             'status': 403 if name == 'permission-error' else 200}]})
     return profile
@@ -63,6 +69,11 @@ async def run():
     initial = deepcopy(profile['frames'][0])
     initial['id'] = 'initial-invalid'
     initial['responses'][0]['body']['data']['displayList'][0]['value'] = None
+    initial['responses'][0]['body']['data']['displayList'][1]['value'] = None
+    power_only = deepcopy(profile['frames'][0])
+    power_only['id'] = 'power-only-state-invalid'
+    power_only['responses'][0]['body']['data']['displayList'][0]['value'] = None
+    profile['frames'].insert(0, power_only)
     profile['frames'].insert(0, initial)
     with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
         root = Path(tmp)
@@ -90,13 +101,34 @@ async def run():
                 api = coordinator.api
                 report = []
                 entity_id = None
-                for i, expected in enumerate([None, 'on', 'off', 'unavailable', 'unavailable', 'on']):
+                power_entity_id = None
+                for i, expected in enumerate([None, None, 'on', 'off', 'unavailable', 'unavailable', 'on',
+                                              'on', 'on', 'unavailable']):
                     if i:
                         api.queue_frame('advance')
                         await coordinator.async_refresh()
                         await hass.async_block_till_done()
                     entities = [e for e in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
                                 if e.domain == 'binary_sensor']
+                    powers = [e for e in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+                              if e.unique_id.endswith('_mains_active_power')]
+                    if i == 0:
+                        require(not powers, 'Invalid power created entity')
+                    else:
+                        require(len(powers) == 1, 'Missing or duplicate power sensor')
+                        require(power_entity_id is None or power_entity_id == powers[0].entity_id,
+                                'Power identity changed')
+                        power_entity_id = powers[0].entity_id
+                        power_state = hass.states.get(power_entity_id)
+                        expected_power = ['0', '0', '0', '0', 'unavailable', '0', '2.345', 'unavailable', '0'][i-1]
+                        require((power_state.state == 'unavailable' if expected_power == 'unavailable'
+                                 else float(power_state.state) == float(expected_power)),
+                                f'{api.frame_id}: power {power_state.state} != {expected_power}')
+                        require(power_state.attributes.get('unit_of_measurement') == 'kW', 'Power unit')
+                        require(power_state.attributes.get('device_class') == 'power', 'Power class')
+                        require(power_state.attributes.get('state_class') == 'measurement', 'Power state class')
+                        if entities:
+                            require(powers[0].device_id == entities[0].device_id, 'Mains device not shared')
                     if expected is None:
                         require(not entities, 'Invalid initial sampling created an unverified binary entity')
                         require(api._mains_state is None and coordinator.last_update_success,
@@ -129,6 +161,9 @@ async def run():
                 other_coordinator.api.queue_frame('advance')
                 await other_coordinator.async_refresh()
                 await hass.async_block_till_done()
+                other_coordinator.api.queue_frame('advance')
+                await other_coordinator.async_refresh()
+                await hass.async_block_till_done()
                 second = [e for e in er.async_entries_for_config_entry(er.async_get(hass), other.entry_id)
                           if e.domain == 'binary_sensor']
                 require(len(second) == 1, 'Second account binary sensor missing')
@@ -141,11 +176,22 @@ async def run():
                 require(first_device.via_device_id != second_device.via_device_id,
                         'Same-station parent device collision')
                 require(await hass.config_entries.async_unload(other.entry_id), 'Second unload failed')
-                require(hass.states.get(entity_id).state == 'on', 'Second unload affected first account')
+                from custom_components.fusion_solar_app.identity import legacy_entity_unique_id
+                second_power = [e for e in er.async_entries_for_config_entry(er.async_get(hass), other.entry_id)
+                                if legacy_entity_unique_id(other, e.unique_id).endswith('_mains_active_power')]
+                first_power = er.async_get(hass).async_get(power_entity_id)
+                require(len(second_power) == 1 and second_power[0].device_id == second[0].device_id,
+                        'Second account power device mismatch')
+                require(first_power.unique_id != second_power[0].unique_id
+                        and first_power.device_id != second_power[0].device_id, 'Power account collision')
+                require(hass.states.get(entity_id).state == 'unavailable', 'Second unload affected first account')
+                require(float(hass.states.get(power_entity_id).state) == 0, 'Second unload affected power')
                 require(await hass.config_entries.async_unload(entry.entry_id), 'Unload failed')
                 await hass.async_block_till_done()
                 remaining = hass.states.get(entity_id)
                 require(remaining is None or remaining.state == 'unavailable', 'Binary platform retained active state after unload')
+                remaining_power = hass.states.get(power_entity_id)
+                require(remaining_power is None or remaining_power.state == 'unavailable', 'Power retained after unload')
                 require(entry.entry_id not in hass.data.get(DOMAIN, {}), 'Runtime retained after unload')
                 require(api._closed, 'API not closed after platform unload')
                 print(json.dumps({'status': 'passed', 'frames': report, 'platform_unloaded': True}))

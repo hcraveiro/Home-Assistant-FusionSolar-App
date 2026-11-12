@@ -1,0 +1,18 @@
+{
+  "source": "https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101#issuecomment-6733284286",
+  "provenance": "Sanitized signal fields from retained 27 October 2026 response. User portal recheck on 9 November confirmed Mains On and Active Power 0.000 kW; not a fresh API capture.",
+  "rootDevTypeId": 36892,
+  "row": {
+    "id": 10010,
+    "mocId": 10010,
+    "name": "Active Power",
+    "dataType": "FLOAT",
+    "value": "0.000",
+    "unit": "kW",
+    "precision": 3,
+    "typeId": 36892,
+    "versionId": 25325,
+    "dn": "MAINS_DEVICE_A"
+  },
+  "limitations": "No export-direction semantics established. Positive/negative power, Off, failure and recovery are synthetic tests only. No hardware interruption or control. DN replaced with placeholder."
+}

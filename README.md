@@ -33,6 +33,28 @@ are synthetic; v2 presence of `devIds` remains unknown. No outage was induced.
 See `tests/fixtures/mains-state-provenance.json` and the offline actual-HA checker
 `tests/api_profiles/check_mains_homeassistant.py`.
 
+### Mains Active Power (1.6.9b1 beta candidate)
+
+A separate native `Mains Active Power` measurement sensor reads signal `10010`
+from the **same sampling response**, without additional HTTP requests. Its unit
+is kW; measured `0.000` is valid zero, not unavailable. Only the evidenced `kW`
+row unit is accepted. Missing, malformed, boolean, non-finite, duplicate or
+wrong-device/type readings fail closed. Power and Mains State are independent:
+either can remain valid when the other's row is invalid. Each entity is created
+only after its own first valid identity-verified reading, including late discovery.
+They share the existing entry-scoped Mains device and installation parent.
+
+This is an unclassified mains power reading, **not an import/export inference**.
+Finite negative values are preserved without taking absolute values, clamping,
+or assigning a direction. It is not an energy counter and does not change
+`Grid Consumption Power`, existing energy-counter policy or state classes.
+
+[User feedback](https://github.com/hcraveiro/Home-Assistant-FusionSolar-App/issues/101#issuecomment-6733284286)
+confirms Mains On and 0.000 kW on the portal on 9 November 2026. The sanitized
+API fields originate from 27 October, not a new API capture. Positive/negative
+power and Off/failure/recovery test cases are synthetic; no export semantics or
+additional hardware validation are claimed.
+
 ## Contents
 
 - [Installation](#installation)
