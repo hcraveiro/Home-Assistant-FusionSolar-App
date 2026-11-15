@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from urllib.parse import parse_qs, quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 
 import requests
 
@@ -49,6 +49,19 @@ def normalize_fusionsolar_host(host: str) -> str:
         normalized = "eu5"
 
     return f"{normalized}{domain_suffix}"
+
+
+def encode_eu5_username(username: str) -> str:
+    """Percent-encode the EU5 account identifier the way the web UI does.
+
+    The browser posts an email as ``user%40example.com``. ``unquote`` first
+    keeps an already encoded identifier untouched, so retries and stored
+    values are not double encoded.
+    """
+    if not isinstance(username, str):
+        return username
+
+    return quote(unquote(username), safe="")
 
 
 class FusionSolarAuthMixin:
@@ -155,13 +168,13 @@ class FusionSolarAuthMixin:
 
         payload = {
             "organizationName": "",
-            "username": self.user,
+            "username": encode_eu5_username(self.user),
             "password": encrypted_password,
             "multiRegionName": "",
+            "verifycode": captcha_input,
         }
 
         if captcha_input:
-            payload["verifycode"] = captcha_input
             _LOGGER.debug("Submitting login with captcha input.")
         else:
             _LOGGER.debug("Submitting login without captcha input.")

@@ -394,6 +394,83 @@ def test_eu5_accepted_prevalidation_then_login_411_is_logged_separately(
         assert secret not in caplog.text
 
 
+def eu5_validate_user_payloads(api):
+    """Return the JSON payloads posted to validateUser.action."""
+    return [
+        call.kwargs["json"]
+        for call in api.session.post.call_args_list
+        if "/unisso/v3/validateUser.action" in call.args[0]
+    ]
+
+
+def test_eu5_login_payload_percent_encodes_email_username(auth_module, monkeypatch):
+    # Observed in a sanitized successful browser HAR: the web frontend sends
+    # the account identifier percent-encoded (an email's @ becomes %40).
+    api = make_eu5_login_api(auth_module, monkeypatch)
+    api.user = "user.name+tag@example.com"
+    api.session.post.return_value = make_response(payload={"errorCode": 406})
+
+    with pytest.raises(auth_module.APIAuthRejectedError):
+        api._login_eu5()
+
+    payloads = eu5_validate_user_payloads(api)
+    assert len(payloads) == 2
+    for payload in payloads:
+        assert payload["username"] == "user.name%2Btag%40example.com"
+
+
+def test_eu5_login_payload_does_not_double_encode_username(auth_module, monkeypatch):
+    api = make_eu5_login_api(auth_module, monkeypatch)
+    api.user = "user.name%40example.com"
+    api.session.post.return_value = make_response(payload={"errorCode": 406})
+
+    with pytest.raises(auth_module.APIAuthRejectedError):
+        api._login_eu5()
+
+    for payload in eu5_validate_user_payloads(api):
+        assert payload["username"] == "user.name%40example.com"
+
+
+def test_eu5_login_payload_preserves_plain_username(auth_module, monkeypatch):
+    api = make_eu5_login_api(auth_module, monkeypatch)
+    api.user = "plain-username"
+    api.session.post.return_value = make_response(payload={"errorCode": 406})
+
+    with pytest.raises(auth_module.APIAuthRejectedError):
+        api._login_eu5()
+
+    for payload in eu5_validate_user_payloads(api):
+        assert payload["username"] == "plain-username"
+
+
+def test_eu5_login_payload_always_sends_verifycode(auth_module, monkeypatch):
+    # The browser sends "verifycode": "" even when no challenge is shown.
+    api = make_eu5_login_api(auth_module, monkeypatch)
+    api.session.post.return_value = make_response(payload={"errorCode": 406})
+
+    with pytest.raises(auth_module.APIAuthRejectedError):
+        api._login_eu5()
+
+    for payload in eu5_validate_user_payloads(api):
+        assert payload["verifycode"] == ""
+
+
+def test_eu5_login_payload_keeps_captcha_answer(auth_module, monkeypatch):
+    api = make_eu5_login_api(auth_module, monkeypatch, "private-captcha-marker")
+    api.session.post.side_effect = [
+        make_response(text="true"),
+        make_response(payload={"errorCode": 411, "verifyCodeCreate": True}),
+    ]
+
+    with pytest.raises(auth_module.APIAuthCaptchaError):
+        api._login_eu5()
+
+    payloads = eu5_validate_user_payloads(api)
+    assert payloads and all(
+        payload["verifycode"] == "private-captcha-marker" for payload in payloads
+    )
+
+
 def test_eu5_406_preserves_legacy_fallback_without_exposing_error_message(
     auth_module, monkeypatch, caplog
 ):
